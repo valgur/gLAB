@@ -1,0 +1,1075 @@
+gLAB version v5.5.1, built on Dec 11 2020 12:27:40
+GNSS LABORATORY. Tool to analyse GNSS data
+Write 'gLAB -help' for help on the options
+Usage:
+    gLAB [options]
+
+  MESSAGES FORMAT
+    INFO
+        INFO messages are shown at several points in the program and provide information on the
+          program configuration, events and problems it may encounter, which are:
+
+             At the start of the file, showing information about gLAB configuration.
+             An inconsistent clock update on the receiver.
+             A data gap in the RINEX observation file.
+             A change in the a priori receiver coordinates (only when receiver coordinates are computed by gLAB).
+             The new position to be used from the reference position file (only when a reference file is provided).
+             No solution was computed, along with the reason for not being able to compute the
+                solution (not enough satellites available, singular geometry matrix or DOP too high).
+             In SBAS processing, the elevation of each GEO and the one selected (if GEO selection with highest
+                elevation is enabled).
+             In SBAS processing, a GEO or mode switch.
+             In SBAS processing, if option '-mode:selectbestgeo' is enabled, in each epoch, for each GEO which a
+               solution can be computed, the GEO PRN, its protection levels and a message if the GEO was selected is
+               printed. The selected GEO will be always the last one.
+             In DGNSS processing, a switch from DGNSS to SPP solution mode.
+             In DGNSS processing, a data gap in the reference station RINEX observation file.
+
+    USERADDEDERROR [when user-defined error file is given]
+        User-defined error added to measurements before cycle-slip detection and smoothing.
+        All time tags are in GPS time.
+        Field 1:  'USERADDEDERROR'
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5:  GPS week
+        Field 6:  Time of week
+        Field 7:  GNSS System (GPS, GAL, GLO or GEO)
+        Field 8:  PRN satellite identifier
+        Field 9:  Measurement identifier (as string)
+        Field 10: Raw measurement (phase measurements are prealigned) [m]
+        Field 11: Raw measurement plus total user-defined error (phase measurements are prealigned) [m]
+        Field 12: Total number of active user-defined error functions
+        Field 13: Total user-defined error [m]
+        Field 14: Number of active Step function error
+        Field 15: Step function error value [m]
+        Field 16: Number of active Ramp function error
+        Field 17: Ramp function error value [m]
+        Field 18: Number of active Sinusoidal function error
+        Field 19: Sinusoidal function error value [m]
+        Field 20: Number of active AWGN (Additive White Gaussian Noise) function error
+        Field 21: AWGN function error value [m]
+        Sample:
+            USERADDEDERROR   2015 161     0.00 1848 259200.00 GPS   4 C1C  23140309.8200  23140314.8200  1         5.0000  1         5.0000  0         0.0000  0         0.0000  0         0.0000
+
+    CS
+        Cycle-slip message information. It is shown when a cycle-slip is found by any detector.
+        A line will be printed for each CS detector that has found a CS.
+        The first 6 fields are common, afterwards, there are five possible different CS messages depending on
+        the cycle-slip detector activated.
+        All time tags are in GPS time.
+        Field 1:  'CS' or 'CS_USER' for Rover Station (user)
+        Field 1:  'CS_REF' for Reference Station
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5:  GNSS System (GPS, GAL, GLO or GEO)
+        Field 6:  PRN satellite identifier
+        If cycle-slip detector is Data gap:
+            Field 7:  'DATA_GAP'
+            Field 8:  '='
+            Field 9:  Delta time between usable epochs
+            Field 10: 'THRESHOLD'
+            Field 11: '='
+            Field 12: Data gap threshold
+            Sample:
+                CS       2014 288 44997.00 GPS 32  DATA_GAP = 45.000000 THRESHOLD = 40.000000
+        If cycle-slip detector is Loss of Lock Indicator:
+            Field 7:  'LLI'
+            Sample:
+                CS       2014 288 44942.00 GPS 32  LLI
+        If cycle-slip detector is Geometry-free carrier phase:
+            Field 7:  'LI'
+            Field 8:  '='
+            Field 9:  LI value
+            Field 10: 'THRESHOLD'
+            Field 11: '='
+            Field 12: LI threshold
+            Sample:
+                CS       2014 288 42092.00 GPS  7  LI = 0.119386 THRESHOLD = 0.052861
+        If cycle-slip detector is Melbourne-Wubbena:
+            Field 7:  'LI'
+            Field 8:  '='
+            Field 9:  Bw value
+            Field 10: 'THRESHOLD'
+            Field 11: '='
+            Field 12: Bw threshold
+            Sample:
+                CS       2014 288 42092.00 GPS  7  Bw = 1.992188 THRESHOLD = 1.839927
+        If cycle-slip detector is L1-C1 difference:
+            Field 7:  'LI'
+            Field 8:  '='
+            Field 9:  L1C1 value
+            Field 10: 'THRESHOLD'
+            Field 11: '='
+            Field 12: L1C1 threshold
+            Sample:
+                CS       2014 365 55344.00 GPS  7  L1C1 = 747.078356 THRESHOLD = 0.876845
+
+    INPUT
+        Input data message. It is shown after an epoch is read, decimated and added user-defined error
+        It contains the measurements for each satellite for this epoch
+        All time tags are in GPS time.
+        Field 1:  'INPUT'
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5:  GNSS System (GPS, GAL, GLO or GEO)
+        Field 6:  PRN satellite identifier
+        Field 7:  Arc length (number of undecimated epochs after the last cycle-slip)
+        For GPS:
+            Field 8:  C1 [C1C]
+            Field 9:  P1 [C1P]
+            Field 10: P2 [C2P]
+            Field 11: L1 [L1P] (prealigned, in metres)
+            Field 12: L2 [L2P] (prealigned, in metres)
+        For Galileo (GAL):
+            Field 8:  C1A
+            Field 9:  C1B
+            Field 10: C1C
+            Field 11: C7Q
+            Field 12: C8Q
+            Field 13: L1A (prealigned, in metres)
+            Field 14: L1B (prealigned, in metres)
+            Field 15: L1C (prealigned, in metres)
+            Field 16: L7Q (prealigned, in metres)
+            Field 17: L8Q (prealigned, in metres)
+        For GLONASS (GLO):
+            Field 8:  C1 [C1C]
+            Field 9:  C2 [C2C]
+            Field 10: L1 [L1P](prealigned, in metres)
+            Field 11: L2 [L2P](prealigned, in metres)
+        For GEO:
+            Field 8:  C1 [C1C]
+        Sample:
+            INPUT     2006 200     0.00 GPS 19      1  23119003.9020  23119002.6110  23119004.0750  23119002.7507  23119004.0925
+
+    MEAS
+        Information of the input measurements in a variable format, and azimuth/elevation of the satellite.
+        It is written after modelling the message.
+        All time tags are in GPS time.
+        Field 1:   'MEAS'
+        Field 2:   Year
+        Field 3:   Doy
+        Field 4:   Seconds of day
+        Field 5:   GNSS System (GPS, GAL, GLO or GEO)
+        Field 6:   PRN satellite identifier
+        Field 7:   Elevation of the satellite [degrees]
+        Field 8:   Azimuth of the satellite [degrees]
+        Field 9:   Number of measurements
+        Field 10:  List of measurements included
+        Field 11-: Each following column is the value of the measurement specified in Field 10
+
+        If there is no data available on azimuth and elevation, the fields 7 and 8 will be fixed to zero.
+        Sample:
+            MEAS      2006 200     0.00 GPS 19   26.66  -79.62  6  C1C:L1C:C1P:L1P:C2P:L2P  23119003.9020         0.0000  23119002.6110  23119002.7507  23119004.0750  23119004.0925
+
+    MODEL
+        Model break down message. It is shown when a model can be fully computed for each measurement.
+        Satellite coordinates are in WGS84 system. All time tags are in GPS time.
+        Field 1:  'MODEL' (if the satellite is used in the computation) or 'MODEL*' (if it is not)
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5:  GNSS System (GPS, GAL, GLO or GEO)
+        Field 6:  PRN satellite identifier
+        Field 7:  Measurement identifier (as string)
+        Field 8:  Signal flight time [sec]
+        Field 9:  Measured value [m]
+        Field 10: Full model value [m]
+        Field 11: Satellite X position [m]
+        Field 12: Satellite Y position [m]
+        Field 13: Satellite Z position [m]
+        Field 14: Satellite X velocity [m]
+        Field 15: Satellite Y velocity [m]
+        Field 16: Satellite Z velocity [m]
+        Field 17: Satellite-receiver geometric distance [m]
+        Field 18: Satellite clock correction [m]
+        Field 19: Satellite phase centre projection [m]
+        Field 20: Receiver phase centre projection [m]
+        Field 21: Receiver Antenna Reference Point (ARP) projection [m]
+        Field 22: Relativity correction [m]
+        Field 23: Wind-up correction [m] (for carrier phase measurements)
+        Field 24: Troposphere nominal correction [m]
+        Field 25: Ionosphere correction [m]
+        Field 26: Gravitational delay correction [m]
+        Field 27: Total Group Delay (TGD) correction [m]
+        Field 28: Solid tides correction [m]
+        Field 29: Satellite elevation [degrees]
+        Field 30: Satellite azimuth [degrees]
+        Field 31: Satellite SNR (Signal to Noise Ratio) [dbHz]
+
+        The satellite coordinates (fields 11-16) are given in the transmission epoch if the model of the
+          signal transmission time is enabled (if it is disabled, they are given in the reception
+          time). The coordinates are relative to the antenna phase centre or satellite mass centre,
+          depending on the products input:
+            * Broadcast: Antenna Phase Centre
+            * Precise: Satellite Mass Centre
+        Field 9 is the direct measurement (as in the RINEX file), but scaled to metres for carrier phase
+          measurements. Field 10 is the model computed for this measurement. Field 10 is the direct sum
+          of fields 17 to 28.
+        When the '*' appears in field 1, it is due to smoothed code of the satellite has not reached steady-state, a SBAS processing mode switch
+          or SBAS GEO switch. When a mode or GEO switch occurs, the SBAS corrections have to be computed again.
+        The SNR value in field 31 may be any of these values (in this order): the "S" measurement in the
+          observation file, or if it is not present, it will be the SNR flag in the current measurement.
+          If no SNR is available, 999 will be printed in this field.
+        Sample:
+            MODEL     2006 200     0.00 GPS 19 L1P     0.07712  23119002.7507  23119008.7501   8811456.7780 -21033910.1687  13675922.8867      1828.7339      2353.7679      2467.3576  23119457.7652     -456.31787   0.00000  -0.04936  -0.01140   2.32333   0.10671   4.85412  -0.00000   0.01544   0.00000   0.06394   9.164  79.274
+
+    SATSEL
+        Message with debug information of the reason why a satellite has been discarded (or selected) for processing.
+        If multiple discard conditions are met in a single satellite, then a SATSEL message for each condition will be printed.
+        All time tags are in GPS time.
+        Field 1:  'SATSEL' (if navigation solution will be computed), 'SATSEL*' (if model parameters will be recomputed before the navigation solution, only in SBAS mode)
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5:  GNSS System (GPS, GAL, GLO or GEO)
+        Field 6:  PRN satellite identifier
+        Field 7:  'selected' if satellite is used or 'discarded:' if satellite is not used
+        Field 8:  Discard reason if satellite is not used
+        Sample:
+            SATSEL    2006 200     0.00 GPS 7 discarded: Elevation too low ( 3.04 )
+
+        The possible values for field 8 are:
+            - Arc too short (<arclength>)
+            - Pre-Check; measurements missing for CS detection
+            - Not enough consecutive samples (current <value>, minimum <value>)
+            - Unconsistency of measurements
+            - Outlier in LI detector
+            - Outlier in Bw detector
+            - Cycle-slip
+            - Measurement unavailable (<meas>)
+            - Deselection forced
+            - SNR too low (<value>)
+            - Steady-state operation not reached. <value> epochs passed, still <value> epochs to achieve <value>
+            - No code measurement available
+            - C1C measurement unavailable
+            - Ephemerides unavailable
+            - Satellite phase center corrections unavailable
+            - DCBs unavailable (strict TGD treatment)
+            - SBAS corrections unavailable (GEO <PRN>)
+            - Elevation too low (<value>)
+            - Satellite under eclipse
+            - Satellite was under eclipse <value> seconds ago
+            - URA value (<value>) is equal or greater than the threshold (<threshold>)
+            - Missing IONEX data
+            - Missing FPPP data
+            - SBAS iono unavailable (GEO <GEOPRN>)
+            - STEP detected (jump of <value> greater than <threshold>)
+            - Prefit too high in comparation with other satellites
+            - Prefit too high in comparation with other satellites (threshold <threshold> metres)
+            - Prefit too different (<value>) with respect to the prefit median (<median>), threshold <threshold> metres
+            - No DGNSS corrections
+            - No DGNSS corrections: Time out
+            - No DGNSS corrections: Excluded during the smoother conversion in the Reference Station
+            - No DGNSS corrections: IODE from BRDC and RTCM do not match
+            - No DGNSS corrections: Excluded due to differential correction is too large
+            - Invalid GNSS System: <system>
+
+    PREFIT
+        Prefilter values message. It provides the measurement-model values. It is shown in each filter execution.
+        All time tags are in GPS time.
+        Field 1:  'PREFIT' (if the satellite is used in the computation) or 'PREFIT*' (if it is not)
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5:  GNSS System (GPS, GAL, GLO or GEO)
+        Field 6:  PRN satellite identifier
+        Field 7:  Measurement identifier (as string)
+        Field 8:  Measurement-model value (prefit) [m]
+        Field 9:  Measurement value [m]
+        Field 10: Model value [m]
+        Field 11: X-partial derivative (-X component of the satellite line-of-sight vector)
+        Field 12: Y-partial derivative (-Y component of the satellite line-of-sight vector)
+        Field 13: Z-partial derivative (-Z component of the satellite line-of-sight vector)
+        Field 14: T-partial derivative 
+        Field 15: Elevation of the satellite [degrees]
+        Field 16: Azimuth of the satellite [degrees]
+        Field 17: Standard deviation of the measurement  (for the filter) [m]
+        Field 18: Troposphere wet mapping
+        Field 19: Arc number
+
+        In general Field 8 = Field 9 - Field 10, but this is no longer true when using smoothing, as the
+          Field 9 is the raw measurement without smoothing, but the Field 8 computation takes smoothing into
+          account.
+        Sample:
+            PREFIT    2006 200   300.00 GPS 19  LC        -7.3029  22982271.7155  22982279.0184   28.28   0.3931  -0.4834   0.7822   1.0000   77.912   130.010    17.883     2
+
+    EPOCHSAT
+        Message with the satellites used to compute the solution. It is shown when the filter is run,
+        and is given for each measurement
+        All time tags are in GPS time.
+        Field 1:  'EPOCHSAT'
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5:  Measurement identifier (as string)
+        Field 6:  Number of satellites used in solution computation
+        Field 7-: Each following column is the identifier of a satellite
+        Sample:
+            EPOCHSAT  2006 200   300.00  PC  7 15  3 19 16 18 21 22
+
+    POSTFIT
+        Postfilter values message. It provides the corrected prefits with the filter estimation. It is
+        shown in each filter execution.
+        All time tags are in GPS time.
+        Field 1:  'POSTFIT'
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5:  GNSS System (GPS, GAL, GLO or GEO)
+        Field 6:  PRN satellite identifier
+        Field 7:  Measurement identifier (as string)
+        Field 8:  Measurement-corrected model value (postfit) [m]
+        Field 9:  Measurement value [m]
+        Field 10: Corrected model value with the filter estimations[m]
+        Field 11: Elevation of the satellite [degrees]
+        Field 12: Azimuth of the satellite [degrees]
+        Field 13: Only given for carrier phase measurements. It is the estimated carrier phase ambiguity. [m]
+
+        As with PREFIT messages, Field 8 is not necessary Field 9 - Field 10 when using smoothing.
+        Sample:
+            POSTFIT   2006 200   300.00 GPS 19  LC         0.0000  22982271.7155  22982271.7155   77.912   130.010   0.3029
+
+    FILTER
+        Filter solution message. This message provides direct information on the filter estimates. It is shown
+        in each filter execution.
+        All time tags are in GPS time.
+        Field 1:  'FILTER'
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5-: Filter estimates. The order is: 3D estimated position, clock, troposphere and ambiguities
+        The number of fields is variable in this message. With a full filter (troposphere and ambiguities
+        estimation), the fields are as follows:
+            Field 5:  Receiver X position [m]
+            Field 6:  Receiver Y position [m]
+            Field 7:  Receiver Z position [m]
+            Field 8:  Receiver clock [m]
+            Field 9:  Zenith Tropospheric Delay [m]
+            Field 10: Carrierphase ambiguities [m]
+        Sample:
+            FILTER    2006 200   300.00   4849203.0770   -360328.5730   4114913.9184        -7.4867         2.1946        -0.0001         1.1079        -1.1073         0.3029         0.4555         0.0897         0.0001         0.3845         0.2136
+
+    OUTPUT
+        Receiver solution message. This message provides the estimated receiver position in WGS84 system.
+        It is shown in each filter execution.
+        All time tags are in GPS time.
+        Field 1:  'OUTPUT'
+        Field 2:  Year
+        Field 3:  Doy
+        Field 4:  Seconds of day
+        Field 5:  Square root of the sum of the covariance matrix. This is a measure of the convergence of the filter
+        Field 6:  Receiver X position [m]
+        Field 7:  Receiver Y position [m]
+        Field 8:  Receiver Z position [m]
+        Field 9:  Receiver X position - Nominal a priori X position [m]
+        Field 10: Receiver Y position - Nominal a priori Y position [m]
+        Field 11: Receiver Z position - Nominal a priori Z position [m]
+        Field 12: Receiver X formal error [m]
+        Field 13: Receiver Y formal error [m]
+        Field 14: Receiver Z formal error [m]
+        Field 15: Receiver latitude [degrees]
+        Field 16: Receiver longitude [degrees]
+        Field 17: Receiver height [m]
+        Field 18: Receiver North difference in relation to nominal a priori position [m]
+        Field 19: Receiver East difference in relation to nominal a priori position [m]
+        Field 20: Receiver Up difference in relation to nominal a priori position [m]
+        Field 21: Receiver formal error in North direction [m]
+        Field 22: Receiver formal error in East direction [m]
+        Field 23: Receiver formal error in Up direction [m]
+        Field 24: Geometric Dilution of Precision (GDOP)
+        Field 25: Positioning Dilution of Precision (PDOP)
+        Field 26: Time Dilution of Precision (TDOP)
+        Field 27: Horizontal Dilution of Precision (HDOP)
+        Field 28: Vertical Dilution of Precision (VDOP)
+        Field 29: Zenith Tropospheric Delay (including nominal value) [m]
+        Field 30: Zenith Tropospheric Delay (excluding nominal value) [m]
+        Field 31: Zenith Tropospheric Delay formal error [m]
+        Field 32: Number of satellites used in the navigation solution
+        Field 33: Processing mode indicator
+
+        The fields 29, 30 and 31 will be zero if troposphere is not estimated (only estimated in PPP mode)
+        Processing mode indicator in field 33 may have the following values:
+           0 -> SPP
+           1 -> PPP
+           2 -> SBAS
+           3 -> DGNSS
+        The nominal a priori position is a prerequisite of the processing, and can be specified or read from the RINEX
+        input file. See the option '-pre:setrecpos' in the help ('-help') for more details.
+        Sample:
+            OUTPUT    2006 200   300.00    2.6219   4849203.1236   -360328.5229   4114913.9535     0.7693     0.4145     0.7580     1.9353     0.6998     1.6246   40.429162956   -4.249653155  830.480629026     0.0993     0.4704     1.0522     1.1365     0.6772     2.2637     0.9572     12.2743     5.0975     7.2205     3.5866     3.0880     0.0097     0.4995 6 1
+
+    SBASCORR [SBAS processing mode]
+        SBAS corrections breakdown. It is shown when a model can be fully computed using SBAS corrections for GPS C1C measurement.
+        All time tags are in GPS time.
+        Field 1:   'SBASCORR' (if it is used in computation) or 'SBASCORR*' (if it is not)
+        Field 2:   Receiver id
+        Field 3:   SBAS processing mode (PA or NPA)
+        Field 4:   GNSS System (GPS, GAL, GLO or GEO)
+        Field 5:   PRN satellite identifier
+        Field 6:   Year
+        Field 7:   Doy
+        Field 8:   Seconds of day
+        Field 9:   GPS week
+        Field 10:  Time of week
+        Field 11:  GEO PRN from which SBAS corrections are used ('0' means all GEOs)
+        Field 12:  Measurement-model value (prefit) [m]
+        Field 13:  Measurement value without smoothing [m]
+        Field 14:  Measurement value with smoothing [m]
+        Field 15:  Satellite-receiver geometric distance (with SBAS corrections) [m]
+        Field 16:  Relativity correction (with SBAS corrections) [m]
+        Field 17:  Satellite clock correction (with SBAS corrections) [m]
+        Field 18:  Total Group Delay (TGD) correction [m]
+        Field 19:  Ionosphere pierce point latitude [-90..90 degrees]
+        Field 20:  Ionosphere pierce point longitude [0..360 degrees]
+        Field 21:  Ionosphere correction [m]
+        Field 22:  Troposphere nominal correction [m]
+        Field 23:  PRC (fast correction) applied to the satellite [m]
+        Field 24:  RRC (range-rate correction) applied to the satellite [m]
+        Field 25:  Fast correction degradation factor [m/s^2]
+        Field 26:  PRC time out [s]
+        Field 27:  RRC time out (smallest PRC time out for all satellites) [s]
+        Field 28:  Time (seconds of day) used for computing PRC timeout
+        Field 29:  Time (seconds of day) used for computing sigma UDRE (User Differential Range Error) timeout
+        Field 30:  Time (seconds of day) used for computing fast correction degradation
+        Field 31:  X component of the satellite position in WGS84 system at emission time with SBAS corrections [m]
+        Field 32:  Y component of the satellite position in WGS84 system at emission time with SBAS corrections [m]
+        Field 33:  Z component of the satellite position in WGS84 system at emission time with SBAS corrections [m]
+        Field 34:  Long term correction to be applied to the X component of the satellite [m]
+        Field 35:  Long term correction to be applied to the Y component of the satellite [m]
+        Field 36:  Long term correction to be applied to the Z component of the satellite [m]
+        Field 37:  Long term correction to be applied to the satellite clock [m]
+        Field 38:  IODP (Issue of Data PRN mask) used for fast corrections
+        Field 39:  IODF (Issue of Data Fast Correction) in messages type 2-5,24 for fast corrections
+        Field 40:  Satellite slot in the fast correction mask [1..51]
+        Field 41:  IODP used for long term corrections
+        Field 42:  Satellite slot in the long term correction mask [1..51]
+        Field 43:  IODE (Issue of Data Ephemeris) used for broadcast ephemeris
+        Field 44:  IODS (Service Issue of Data) used for service message
+        Field 45:  IODP used for covariance matrix
+        Field 46:  Satellite slot in the covariance mask [1..51]
+        Field 47:  Ionosphere model flag
+        Field 48:  Satellite elevation [degrees]
+        Field 49:  Satellite azimuth [degrees]
+
+        When the '*' appears in field 1, it is due to smoothed code of the satellite has not reached steady-state, a SBAS processing mode switch
+         or SBAS GEO switch. When a mode or GEO switch occurs, the SBAS corrections have to be computed again.
+        Field 43 is the IODE value from the broadcast message matched with the SBAS long term corrections. If the field value is negative,
+        it means that the IODE used does not match any SBAS long term correction messagea available (only in NPA mode). A value of 999 means
+        that no valid broadcast message was found for the current epoch.
+        Field 47 is a flag to indicate which ionosphere model is used. Its possible values are '-1' for no ionosphere model,
+         '0' for SBAS ionosphere model, '1' for Klobuchar ionosphere model and '2' for any other ionosphere model
+        Sample:
+            SBASCORR    vigo  PA GPS  23 2015 165  5088.00 1849   5088.00 120     60577.5787  20948474.4600  20948474.4600  20853522.4567        -4.3086     34379.4657        -6.0029        42.7112        -7.1281         2.3087         2.7117        -0.2500         0.0000 0.00580        12.0000        12.0000  5084.1  5084.1  5084.1  17496575.5944 5306168.63534 19563205.09708  -1.00000   0.62500   0.12500   0.69801  0  1 22  0 22  99  0 -1 -1  0   65.512   66.455
+
+    SBASVAR [SBAS processing mode]
+        SBAS variance contributions breakdown. It is shown when a model can be fully computed using SBAS corrections for GPS C1C measurement.
+        All time tags are in GPS time.
+        Field 1:   'SBASVAR' (if it is used in computation) or 'SBASVAR*' (if it is not)
+        Field 2:   Receiver id
+        Field 3:   SBAS processing mode (PA or NPA)
+        Field 4:   GNSS System (GPS, GAL, GLO or GEO)
+        Field 5:   PRN satellite identifier
+        Field 6:   Year
+        Field 7:   Doy
+        Field 8:   Seconds of day
+        Field 9:   GPS week
+        Field 10:  Time of week
+        Field 11:  GEO PRN from which SBAS corrections are used ('0' means all GEOs)
+        Field 12:  Sigma of the total residual error associated to the satellite [m]
+        Field 13:  Sigma of the residual error associated to the fast and long-term corrections [m]
+        Field 14:  Sigma of the UDRE [m]
+        Field 15:  Delta UDRE (User Differential Range Error) factor
+        Field 16:  Data source (SBAS message type number) for Delta UDRE
+        Field 17:  Degradation parameter for fast correction data [m]
+        Field 18:  Degradation parameter for range rate correction data [m]
+        Field 19:  Degradation parameter for long term correction data or GEO navigation message data [m]
+        Field 20:  Degradation parameter for en route through NPA applications [m]
+        Field 21:  RSS (Root-Sum-Square) flag in message type 10
+        Field 22:  Sigma of the residual error associated to the ionosheric corrections [m]
+        Field 23:  Sigma of the residual error associated to the tropospheric corrections [m]
+        Field 24:  Sigma of the total receiver error [m]
+        Field 25:  Sigma of the receiver noise [m]
+        Field 26:  Sigma of the receiver multipath [m]
+        Field 27:  Sigma of the receiver divergence [m]
+        Field 28:  Satellite elevation [degrees]
+        Field 29:  Satellite azimuth [degrees]
+
+        The data source indicator for Delta UDRE in field 16 may have the following values:
+          27 or 28 for their respective message type,
+          -27 or -28 if received any of these message types but there was missing data for current satellite or was timed out,
+          0 if no message type received or both received.
+        When the '*' appears in field 1, it is due to smoothed code of the satellite has not reached steady-state, a SBAS processing mode switch
+         or SBAS GEO switch. When a mode or GEO switch occurs, the SBAS corrections have to be computed again.
+        Sample:
+            SBASVAR     vigo  PA GPS  23 2015 165  5088.00 1849   5088.00 120         1.4270         1.0975         0.9119    1.000  27         0.1856         0.0000         0.0000         0.0000 0         0.8173         0.1318         0.3830    0.360    0.131    0.000   65.512   66.455
+
+    SBASIONO [SBAS processing mode]
+        SBAS ionosphere breakdown. It is shown when SBAS ionosphere can be computed.
+        All time tags are in GPS time.
+        Field 1:   'SBASIONO' (if it is used in computation) or 'SBASIONO*' (if it is not)
+        Field 2:   Receiver id
+        Field 3:   SBAS processing mode (PA or NPA)
+        Field 4:   GNSS System (GPS, GAL, GLO or GEO)
+        Field 5:   PRN satellite identifier
+        Field 6:   Year
+        Field 7:   Doy
+        Field 8:   Seconds of day
+        Field 9:   GPS week
+        Field 10:  Time of week
+        Field 11:  GEO PRN from which SBAS corrections are used ('0' means all GEOs)
+        Field 12:  Ionosphere pierce point latitude [-90..90 degrees]
+        Field 13:  Ionosphere pierce point longitude [0..360 degrees]
+        Field 14:  Interpolation mode. 0 for square interpolation, [1-4] indicates the vertex not used in triangle interpolation
+        Field 15:  IODI (Issue of Data Ionospheric) for vertex 1
+        Field 16:  Band Number for vertex 1
+        Field 17:  IGP Number for vertex 1
+        Field 18:  Time of reception of last bit of vertex 1 IGP [seconds of day]
+        Field 19:  Latitude of the IGP for vertex 1 [-90..90 degrees]
+        Field 20:  Longitude of the IGP for vertex 1 [0..360 degrees]
+        Field 21:  Ionosphere delay (raw value from MT26) for vertex 1 [L1 m]
+        Field 22:  Ionosphere variance (raw value from MT26) for vertex 1 [L1 m^2]
+        Field 23:  Degradation term for vertex 1 [L1 m]
+        Field 24:  Ionosphere delay after interpolation (if required) for vertex 1 [L1 m]
+        Field 25:  Ionosphere variance after applying degradation and interpolation (if required) for vertex 1 [L1 m^2]
+        Field 26:  Interpolation weight for vertex 1
+        Field 27:  IODI for vertex 2
+        Field 28:  Band Number for vertex 2
+        Field 29:  IGP Number for vertex 2
+        Field 30:  Time of reception of last bit of vertex 2 IGP [seconds of day]
+        Field 31:  Latitude of the IGP for vertex 2 [-90..90 degrees]
+        Field 32:  Longitude of the IGP for vertex 2 [0..360 degrees]
+        Field 33:  Ionosphere delay (raw value from MT26) for vertex 2 [L1 m]
+        Field 34:  Ionosphere variance (raw value from MT26) for vertex 2 [L1 m^2]
+        Field 35:  Degradation term for vertex 2 [L1 m]
+        Field 36:  Ionosphere delay after interpolation (if required) for vertex 2 [L1 m]
+        Field 37:  Ionosphere variance after applying degradation and interpolation (if required) for vertex 2 [L1 m^2]
+        Field 38:  Interpolation weight for vertex 2
+        Field 39:  IODI for vertex 3
+        Field 40:  Band Number for vertex 3
+        Field 41:  IGP Number for vertex 3
+        Field 42:  Time of reception of last bit of vertex 3 IGP [seconds of day]
+        Field 43:  Latitude of the IGP for vertex 3 [-90..90 degrees]
+        Field 44:  Longitude of the IGP for vertex 3 [0..360 degrees]
+        Field 45:  Ionosphere delay (raw value from MT26) for vertex 3 [L1 m]
+        Field 46:  Ionosphere variance (raw value from MT26) for vertex 3 [L1 m^2]
+        Field 47:  Degradation term for vertex 3 [L1 m]
+        Field 48:  Ionosphere delay after interpolation (if required) for vertex 3 [L1 m]
+        Field 49:  Ionosphere variance after applying degradation and interpolation (if required) for vertex 3 [L1 m^2]
+        Field 50:  Interpolation weight for vertex 3
+        Field 51:  IODI for vertex 4
+        Field 52:  Band Number for vertex 4
+        Field 53:  IGP Number for vertex 4
+        Field 54:  Time of reception of last bit of vertex 4 IGP [seconds of day]
+        Field 55:  Latitude of the IGP for vertex 4 [-90..90 degrees]
+        Field 56:  Longitude of the IGP for vertex 4 [0..360 degrees]
+        Field 57:  Ionosphere delay (raw value from MT26) for vertex 4 [L1 m]
+        Field 58:  Ionosphere variance (raw value from MT26) for vertex 4 [L1 m^2]
+        Field 59:  Degradation term for vertex 4 [L1 m]
+        Field 60:  Ionosphere delay after interpolation (if required) for vertex 4 [L1 m]
+        Field 61:  Ionosphere variance after applying degradation and interpolation (if required) for vertex 4 [L1 m^2]
+        Field 62:  Interpolation weight for vertex 4
+        Field 63:  Mapping function
+        Field 64:  Slant delay [L1 m]
+        Field 65:  Slant Sigma [L1 m]
+        Field 66:  Satellite elevation [degrees]
+        Field 67:  Satellite azimuth [degrees]
+
+        Vertex 1 is the IGP north east to IPP, vertex 2 is the IGP north west to IPP, vertex 3 is the IGP south west to IPP,
+        vertex 4 is the IGP south east to IPP. This order is shown in the following figure:
+                            NORTH
+                      v2..............v1
+                      .               .
+                      .               .
+                      .               .
+           WEST       .    IPP        .       EAST
+                      .     *         .
+                      .               .
+                      .               .
+                      v3..............v4
+                            SOUTH
+        When the '*' appears in field 1, it is due to smoothed code of the satellite has not reached steady-state, a SBAS processing mode switch
+         or SBAS GEO switch. When a mode or GEO switch occurs, the SBAS corrections have to be computed again.
+        Sample:
+            SBASIONO    vigo  PA GPS  23 2015 165  5088.00 1849   5088.00 120   42.711  352.872 0 0  4  98  4899.1  45 355  2.000   0.5322  0.000   2.0000   0.5322 0.3114 0  4  73  4963.1  45 350  2.000   0.6735  0.000   2.0000   0.6735 0.2308 0  4  72  4963.1  40 350  2.125   0.5322  0.000   2.1250   0.5322 0.1948 0  4  97  4899.1  40 355  2.375   0.5322  0.000   2.3750   0.5322 0.2629   1.0875   2.3087   0.8173 65.51 66.46
+
+    SBASUNSEL [SBAS processing mode]
+        SBAS satellite unselection message. When a satellite is discarded due to MOPS criteria, this message details the reason.
+        All time tags are in GPS time.
+        Field 1:   'SBASUNSEL' (if it is the definitive reason for discarding) or 'SBASUNSEL*' (if there has been a GEO or mode switch or not reached smoothed code steady-state operation)
+        Field 2:   Receiver id
+        Field 3:   SBAS processing mode (PA or NPA)
+        Field 4:   GNSS System (GPS, GAL, GLO or GEO)
+        Field 5:   PRN satellite identifier
+        Field 6:   Year
+        Field 7:   Doy
+        Field 8:   Seconds of day
+        Field 9:   GPS week
+        Field 10:  Time of week
+        Field 11:  GEO PRN from which SBAS corrections are used ('0' means all GEOs)
+        Field 12:  Error code
+        Field 13:  "Discard reason"
+        The error code in field 12 is a number which identifies the discard reason with a range from 1 to 48. Useful for parsing purposes.
+        Field 13 will be always between quotes in order to ease parsing purposes.
+        Fields 12 and 13 may have the following values:
+          1    "No GEO satellites available"
+          2    "No data for user selected GEO"
+          3    "Not enough almanac or GEO navigation message to determine the GEO with highest elevation"
+          4    "Received alarm message for current GEO at epoch <YYYY DoY SoD>. Time remaining to finish alarm: <seconds> seconds"
+          5    "Received <value> consecutive messages with errors (UDREI data has been forced to timeout) [PA only]"
+          6    "Missed <value> consecutive messages"
+          7    "No PRN mask"
+          8    "PRN mask timed out"
+          9    "Satellite is not monitored in any of the PRN mask available"
+          10   "No message type 10 available [PA only]"
+          11   "Message type 10 timed out [PA only]"
+          12   "No fast correction data received for current PRN [PA only]"
+          13   "Sigma UDRE timed out [PA only]"
+          14   "Satellite flagged as 'Not monitored' (UDREI=14)"
+          15   "Satellite flagged as 'Do not use' (UDREI=15)"
+          16   "Satellite has an UDREI value of <value> [PA only]
+          17   "No fast correction degradation data [PA only]"
+          18   "Fast correction degradation data timed out [PA only]"
+          19   "Last PRC received timed out [PA only]"
+          20   "Only one PRC received. RRC calculation not possible [PA only]"
+          21   "RRC timed out (under alarm condition) due to time difference between PRC used [PA only]"
+          22   "RRC timed out (under alarm condition) due to excessive PRC propagation in time [PA only]"
+          23   "RRC timed out due to time difference between PRC used [PA only]"
+          24   "RRC timed out due to excessive PRC propagation in time [PA only]"
+          25   "Service message timed out [PA only]"
+          26   "Not received a full set of service messages with the same IODS [PA only]"
+          27   "No clock-ephemeris covariance matrix data for current satellite [PA only]"
+          28   "Clock-ephemeris covariance matrix data timed out [PA only]"
+          29   "No navigation data for ranging GEO"
+          30   "Ranging GEO navigation data timed out"
+          31   "URA index value of <value> for ranging GEO satellite"
+          32   "No long term correction data for current satellite [PA only]"
+          33   "Long term correction data timed out [PA only]"
+          34   "No broadcast block with IOD <value> [PA only]"
+          35   "No broadcast block available for current satellite (regardless of SBAS IOD) [NPA only]"
+          36   "Could not compute transmission time for current PRN measurement"
+          37   "No ionospheric grid mask [PA only]"
+          38   "Ionospheric grid mask timed out [PA only]"
+          39   "IGPs around ionospheric pierce point not found in MOPS grid [PA only]"
+          40   "Not enough IGPs available in ionospheric grid mask [PA only]"
+          41   "One IGP is set as don't use [PA only]"
+          42   "One or more IGPs is set as not monitored or has timed out [PA only]"
+          43   "Data not available for one or more IGPs [PA only]"
+          44   "Ionospheric pierce point is outside triangle [PA only]"
+          45   "External ionosphere model not available"
+          46   "Satellite is not in view (elevation <value> degrees)"
+          47   "Satellite elevation (<value> degrees) is too low"
+          48   "Satellite has an UDREI value of <value> (user threshold is <value>)"
+
+        Error code number 45 will only appear if user has selected another ionosphere model for SBAS processing
+        Error codes number 46 and 47 will only appear in SBAS plots mode
+        Sample:
+            SBASUNSEL   vigo  PA  31 2015 165   397.00 1849    397.00 120 16 "Satellite has an UDREI value of 12 [PA only]"
+
+    SBASOUT [SBAS processing mode]
+        Receiver solution message. This message provides the estimated receiver position, protection levels
+        and satellites used in solution computation.
+        All time tags are in GPS time.
+        Field 1:   'SBASOUT'
+        Field 2:   Receiver id
+        Field 3:   SBAS processing mode (PA or NPA)
+        Field 4:   Year
+        Field 5:   Doy
+        Field 6:   Seconds of day
+        Field 7:   GPS week
+        Field 8:   Time of week
+        Field 9:   GEO PRN from which SBAS corrections are used ('0' means all GEOs)
+        Field 10:  Receiver North difference in relation to nominal a priori position [m]
+        Field 11:  Receiver East difference in relation to nominal a priori position [m]
+        Field 12:  Receiver Up difference in relation to nominal a priori position [m]
+        Field 13:  Horizontal positioning error [m]
+        Field 14:  Horizontal protection level [m]
+        Field 15:  Vertical positioning error [m]
+        Field 16:  Vertical protection level [m]
+        Field 17:  Receiver clock offset [m]
+        Field 18:  Number of satellites in view suitable for SBAS
+        Field 19:  Number of satellites used in SBAS solution computation
+        Field 20-: Satellite list. Each following column is a '+' or '-' sign, the satellite system and the PRN identifier.
+                   The '+' sign indicates that the satellite has been used in the solution computation for SBAS.
+                   The '-' sign indicates that the satellite has not been used in the solution computation for SBAS.
+                   The satellite list will show first all the satellite with the '+' and after the ones with the '-' sign.
+        Sample:
+            SBASOUT     vigo  PA 2015 165   386.00 1849    386.00 120         0.3565         1.0723        -0.3439         1.1300        20.9835        21.8638    -94936.8124 11 10 +G23 +G17 +G01 +G04 +G10 +G11 +G03 +G06 +G31 +G32 -G09
+    DGNSS [DGNSS processing mode]
+        DGNSS corrections breakdown. It is shown when a model can be fully computed using DGNSS corrections for GPS C1C measurement.
+        All time tags are in GPS time.
+        Field 1:      'DGNSS' (if it is used in computation) or 'DGNSS*' (if it is not, switched to SPP)
+        Field 2:      Year
+        Field 3:      Doy
+        Field 4:      Seconds of day
+        Field 5:      GNSS System (GPS, GAL, GLO or GEO)
+        Field 6:      PRN Satellite identifier
+        Field 7:      Pseudorange correction to be applied to the satellite [m]
+        Field 8:      Range rate correction to be applied to the satellite [m]
+        Field 9:      Seconds elapsed since the reception of the RRC correction [s]
+        Field 10:     Delta of PRC to be applied in case of change in case of a change in ephemeris [m]
+        Field 11:     Delta of RRC to be applied in case of change in case of a change in ephemeris [m]
+        Field 12:     Seconds elapsed since the reception of the delta RRC correction [s]
+        Field 13:     Sigma of the total residual error associated to the satellite [m]
+                        Sigma of the total residual error = sigma of the UDRE + sigma degradation + sigma air
+        Field 14:     Sigma of the UDRE (User Differential Range Error) [m]
+        Field 15:     Sigma degradation consists of the URA (User Range Accuracy) degradation factor (we assume epsURA = 1 cm/s), and the satellite elevation. It only applies for RTCM v3.x [m]
+                        Sigma degradation = (epsURA * dt) / tan(satellite elevation)
+        Field 16:     Sigma air consists of the sigma multipath, the sigma to noise GPS (we assume 0.25 m) and the sigma inflation (equal to 1 if deactivated) [m]
+                        Sigma air = ( sigma multipath + sigma to noise GPS ) * sigma inflation
+        Field 17:     Sigma multipath = 0.0625 / tan(elev) / tan(elev)
+        Field 18:     Sigma inflation during the convergence of the smoothing
+        Sample:
+            DGNSS     2016 294  5407.000 GPS  6  -4.1800   0.0000   1.5999   0.0000   0.0000   0.0000   0.6053   0.3000   0.0000   0.5257   0.0264   1.0000
+
+    SUMMARY
+          The processing summary is printed at the end of the output file if the summary option is enabled.
+          The contents of the summary are:
+
+             Number of epochs processed, along with the number epochs that had a solution.
+             Number of epochs skipped (epochs without solution).
+             Number of epochs missing during the summary period (if decimation is enabled, the epochs missing
+               will be separated into the epochs which would have been decimated or not decimated.
+             Number of epochs missing in the whole file.
+             Number of data gaps during the summary period.
+             Number of data gaps in the whole file.
+             Maximum data gap size during the summary period and the epoch where it occurred.
+             Maximum data gap size in the whole file and the epoch where it occurred.
+             The 95 Percentile (or user defined percentile) of the PDOP,GDOP,TDOP,HDOP and VDOP.
+             The maximum value of PDOP,GDOP,TDOP,HDOP and VDOP and the epochs were it ocurred.
+             The 95 Percentile (or user defined percentile) of the errors.
+             The epoch with highest errors and the epoch were it ocurred.
+             A single line at the end with the previous info in columnar format. This is line is useful for doing plots.
+          Additionally, for SBAS processing, the following information is provided:
+             Number of epochs with solution under alarm limits.
+             Number of epochs with MIs.
+             The Worst Integrity Ratio (WIR) and the epoch were it ocurred.
+             The epoch with highest protection levels and the epoch were it ocurred.
+             The 95 Percentile (or user defined percentile) of the protection levels.
+          Additionally, for DGNSS processing, the following information is provided:
+             Number of epochs missing during the summary period in the reference station file (RINEX only).
+             Number of epochs missing in the whole file in the reference station file (RINEX only).
+             Number of data gaps during the summary period in the reference station file (RINEX only)..
+             Number of data gaps in the whole file in the reference station file (RINEX only)..
+             Maximum data gap size during the summary period and the epoch where it occurred in the reference station file (RINEX only).
+             Maximum data gap size in the whole file and the epoch where it occurred in the reference station file (RINEX only).
+
+    SPP/PPP SUMMARY [SPP or PPP processing modes]
+        SPP or PPP statiscal summary. It is printed at the end of the output file if summary is enabled.
+        All time tags are in GPS time.
+        Sample:
+          INFO --------------------- SPP/PPP Summary ---------------------
+          INFO HDOP Threshold:   4.00
+          INFO PDOP Threshold:   6.00
+          INFO GDOP Threshold:  30.00
+          INFO First epoch of summary: 27/10/2016 00:00:00.00 / 2016 301     0.00 / 1920 345600.00
+          INFO Last  epoch of summary: 27/10/2016 23:59:59.00 / 2016 301 86399.00 / 1920 431999.00
+          INFO Total epochs processed: 86293
+          INFO Total epochs processed with solution: 85932 ( 99.582% )
+          INFO Total epochs processed with solution and position from reference file: 85932 ( 99.582% )
+          INFO Total epochs omitted in summary due to no position from reference file: 0 ( 0.000% )
+          INFO Total epochs skipped due to no position from reference file for modelling: 0 ( 0.000% )
+          INFO Total epochs skipped due to less than 4 valid satellites available: 361 ( 0.418% )
+          INFO Total epochs skipped due to singular geometry matrix: 0 ( 0.000% )
+          INFO Total epochs skipped due to any DOP exceeding the threshold:       0 ( 0.000% )
+          INFO Total epochs skipped due to HDOP exceeding the threshold:          0 ( 0.000% )
+          INFO Total epochs skipped due to PDOP exceeding the threshold:          0 ( 0.000% )
+          INFO Total epochs skipped due to HDOP and PDOP exceeding the threshold: 0 ( 0.000% )
+          INFO Total epochs skipped due to GDOP exceeding the threshold:          0 ( 0.000% )
+          INFO Total epochs skipped (any reason): 361 ( 0.418% )
+          INFO Total epochs missing in observation file (during summary period and not decimated):   1
+          INFO Total epochs missing in observation file (during summary period and decimated):       4
+          INFO Total epochs missing in observation file (during summary period):                     5
+          INFO Total epochs missing in observation file (all the file):                             13
+          INFO Number of data gaps in observation file (during summary period):   4
+          INFO Number of data gaps in observation file (all the file):            7
+          INFO Maximum data gap size in observation file (during summary period):    2 at epoch 26/01/2018 23:50:04.00 / 2018 026 85804.00 / 1985 517804.00
+          INFO Maximum data gap size in observation file (all the file):             6 at epoch 25/01/2018 23:46:36.00 / 2018 025 85596.00 / 1985 431196.00
+          INFO PDOP  95 Percentile:   2.33
+          INFO GDOP  95 Percentile:   2.69
+          INFO TDOP  95 Percentile:   1.34
+          INFO HDOP  95 Percentile:   1.30
+          INFO VDOP  95 Percentile:   1.98
+          INFO Maximum PDOP   3.04 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Maximum GDOP   3.57 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Maximum TDOP   1.87 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Maximum HDOP   1.60 at epoch 26/01/2018 02:20:30.00 / 2018 026  8430.00 / 1985 440430.00
+          INFO Maximum VDOP   2.66 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO First epoch of summary for computing positioning error percentiles: 27/10/2016 00:00:00.00 / 2016 301     0.00 / 1920 345600.00
+          INFO Last  epoch of summary for computing positioning error percentiles: 27/10/2016 23:59:59.00 / 2016 301 86399.00 / 1920 431999.00
+          INFO Total samples in Stanford-ESA processed: 111056799
+          INFO Total samples in Stanford-ESA processed with solution: 111056798 ( 99.999% )
+          INFO Total samples in Stanford-ESA skipped due to singular geometry matrix: 1 ( 9.004E-07% )
+          INFO Horizontal  95 Positioning Error Percentile:   0.80 metres
+          INFO Vertical    95 Positioning Error Percentile:   1.73 metres
+          INFO Maximum Horizontal Positioning Error: 4.26 metres at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Maximum Vertical   Positioning Error: 7.53 metres at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Station: helg Lon:   7.89309376 Lat:   54.17448223 Height:   48.4689 HPE_Percentile:  95   0.80 VPE_Percentile:  95   1.73 MaxHPE:   0.00 MaxVPE:   0.00 Avail%:   0.000 PDOP_Percentile:   95   2.33 Max_PDOP:   3.04 GDOP_Percentile:   95   2.69 Max_GDOP:   3.57 TDOP_Percentile:   95   1.34 Max_TDOP:   1.87 HDOP_Percentile:   95   1.30 Max_HDOP:   1.60 VDOP_Percentile:   95   1.98 Max_VDOP:   2.66 Epochs_missing_Sum:   5 Epochs_missing_All_file:  13 Num_DataGaps_Sum:   4 Num_DataGaps_All_file:   7 MaxSize_DataGap_Sum:   2 MaxSize_DataGap_All_file:   6 Station_Network_Name: Other
+        NOTES:
+          If observation file starts at 22 hours or later, gLAB will automatically assume that all the epochs until the start of the next day (midnight)
+            are for convergence time. During this convergence time, all the epochs computed will not be taken into account for the summary and
+            the Stanford-ESA computation will be skipped. This behaviour can be disabled with the parameter '--summary:waitfordaystart'.
+          If backwards processing is active, epochs missing and data gaps will only be counted during the forward processing.
+          If receiver position is not fixed or provided by a reference file, the percentile lines will not appear.
+          If user provides a reference file for comparing the solution and if at a certain epoch the reference file position is not available,
+            the epoch will be skipped from the summary.
+          The last line of the summary contains all the values of the previous lines along with the station coordinates.
+          If receiver position is not fixed, the station coordinates will be the solution from the last computed epoch.
+          The last line is useful for plotting world maps with data from each station.
+          Stanford-ESA messages will not appear if Stanford-ESA computation has not been enabled.
+          HDOP, PDOP and GDOP threshold messages will not appear if HDOP, PDOP or GDOP thresholds have not been enabled respectively.
+          The lines referring to a reference file will only appear if a user sets a reference file. If user sets the reference file just for comparing
+            the solution, the line "Total epochs omitted in ..." will appear. Otherwise, if the reference file was set to be used as the a priori
+            position for the modelling computation, the line "Total epochs skipped due to no position from reference file ..." will appear.
+
+    SBAS SUMMARY [SBAS processing mode]
+        SBAS statiscal summary. It is printed at the end of the output file if summary is enabled.
+        All time tags are in GPS time.
+        Sample:
+          INFO --------------------- SBAS Summary ---------------------
+          INFO Horizontal Alarm limit:  40.00 metres
+          INFO Vertical   Alarm limit:  50.00 metres
+          INFO HDOP Threshold:   4.00
+          INFO PDOP Threshold:   6.00
+          INFO GDOP Threshold: 100.00
+          INFO First epoch of summary: 27/10/2016 00:00:00.00 / 2016 301     0.00 / 1920 345600.00
+          INFO Last  epoch of summary: 27/10/2016 23:59:59.00 / 2016 301 86399.00 / 1920 431999.00
+          INFO Total epochs processed: 86293
+          INFO Total epochs processed with PA solution: 85932 ( 99.582% )
+          INFO Total epochs processed with PA solution under alarm limits: 85932 ( 99.582% )
+          INFO Total epochs processed with PA solution and position from reference file: 0 ( 0.000% )
+          INFO Total epochs processed with NPA solution: 0 ( 0.000% )
+          INFO Total epochs omitted in summary due to no position from reference file: 0 ( 0.000% )
+          INFO Total epochs skipped due to no position from reference file for modelling: 0 ( 0.000% )
+          INFO Total epochs skipped due to less than 4 valid satellites available: 361 ( 0.418% )
+          INFO Total epochs skipped due to singular geometry matrix: 0 ( 0.000% )
+          INFO Total epochs skipped due to any DOP exceeding the threshold:       0 ( 0.000% )
+          INFO Total epochs skipped due to HDOP exceeding the threshold:          0 ( 0.000% )
+          INFO Total epochs skipped due to PDOP exceeding the threshold:          0 ( 0.000% )
+          INFO Total epochs skipped due to HDOP and PDOP exceeding the threshold: 0 ( 0.000% )
+          INFO Total epochs skipped due to GDOP exceeding the threshold:          0 ( 0.000% )
+          INFO Total epochs skipped (any reason): 361 ( 0.418% )
+          INFO Total epochs missing in observation file (during summary period):   5
+          INFO Total epochs missing in observation file (all the file):           13
+          INFO Number of data gaps  in observation file (during summary period):   4
+          INFO Number of data gaps  in observation file (all the file):            7
+          INFO Maximum data gap size in observation file (during summary period):    2 at epoch 26/01/2018 23:50:04.00 / 2018 026 85804.00 / 1985 517804.00
+          INFO Maximum data gap size in observation file (all the file):             6 at epoch 25/01/2018 23:46:36.00 / 2018 025 85596.00 / 1985 431196.00
+          INFO PDOP  95 Percentile:   2.33
+          INFO GDOP  95 Percentile:   2.69
+          INFO TDOP  95 Percentile:   1.34
+          INFO HDOP  95 Percentile:   1.30
+          INFO VDOP  95 Percentile:   1.98
+          INFO Maximum PDOP   3.04 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Maximum GDOP   3.57 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Maximum TDOP   1.87 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Maximum HDOP   1.60 at epoch 26/01/2018 02:20:30.00 / 2018 026  8430.00 / 1985 440430.00
+          INFO Maximum VDOP   2.66 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Continuity Risk Airborne (15 epochs sliding window): 1.7456E-04
+          INFO Continuity Risk Maritime (15 epochs fixed window):   1.8156E-03
+          INFO First epoch of summary for computing MIs, PE, PL and percentiles: 27/10/2016 00:00:00.00 / 2016 301     0.00 / 1920 345600.00
+          INFO Last  epoch of summary for computing MIs, PE, PL and percentiles: 27/10/2016 23:59:59.00 / 2016 301 86399.00 / 1920 431999.00
+          INFO Total epochs with MIs: 0 ( 0.000% )
+          INFO Total epochs with Horizontal MIs: 0 ( 0.000% )
+          INFO Total epochs with Vertical   MIs: 0 ( 0.000% )
+          INFO Total samples in Stanford-ESA processed: 111056799
+          INFO Total samples in Stanford-ESA processed with solution: 111056798 ( 99.999% )
+          INFO Total samples in Stanford-ESA skipped due to singular geometry matrix: 1 ( 9.004E-07% )
+          INFO Total samples in Stanford-ESA with MIs: 219 ( 1.972E-04% )
+          INFO Total samples in Stanford-ESA with Horizontal MIs: 157 ( 1.414E-04% )
+          INFO Total samples in Stanford-ESA with Vertical   MIs: 139 ( 1.252E-04% )
+          INFO Stanford-ESA Worst Horizontal Integrity Ratio: 1.6777
+          INFO Stanford-ESA Worst Vertical   Integrity Ratio: 1.9140
+          INFO Horizontal  95 Positioning Error Percentile:   0.80 metres
+          INFO Vertical    95 Positioning Error Percentile:   1.73 metres
+          INFO Horizontal  95 Protection  Level Percentile:  10.27 metres
+          INFO Vertical    95 Protection  Level Percentile:  16.50 metres
+          INFO Maximum Horizontal Positioning Error:   4.26 metres at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Maximum Vertical   Positioning Error:   7.53 metres at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Maximum Horizontal Protection  Level:  16.21 metres at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Maximum Vertical   Protection  Level:  23.92 metres at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Worst Horizontal Integrity Ratio: 0.5317 at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Worst Vertical   Integrity Ratio: 0.4763 at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Station: helg Lon:   7.89309376 Lat:   54.17448223 Height:   48.4689 HWIR:  0.5317 VWIR:  0.4763 MIs:   0 Hor_MIs:   0 Ver_MIs:   0 HPE_Percentile:  95   0.80 VPE_Percentile:  95   1.73 MaxHPE:   4.26 MaxVPE:   7.53 HPL_Percentile:  95  10.27 VPL_Percentile:  95  16.50 MaxHPL:  16.21 MaxVPL:  23.92 Avail%:  99.582 Cont_Risk: 1.7456E-04 HWIR_ESA:  1.6777 VWIR_ESA:  1.9140 MIs_ESA:  219 Hor_MIs_ESA:  157 Ver_MIs_ESA:  139 Cont_Risk_Mark: 0.0000E+00 PDOP_Percentile:   95   2.33 Max_PDOP:   3.04 GDOP_Percentile:   95   2.69 Max_GDOP:   3.57 TDOP_Percentile:   95   1.34 Max_TDOP:   1.87 HDOP_Percentile:   95   1.30 Max_HDOP:   1.60 VDOP_Percentile:   95   1.98 Max_VDOP:   2.66 Epochs_missing_Sum:   5 Epochs_missing_All_file:  13 Num_DataGaps_Sum:   4 Num_DataGaps_All_file:   7 MaxSize_DataGap_Sum:   2 MaxSize_DataGap_All_file:   6 Station_Network_Name: Other
+
+        NOTES:
+          If observation file starts at 22 hours or later, gLAB will automatically assume that all the epochs until the start of the next day (midnight
+          	are for convergence time. During this convergence time, all the epochs computed will not be taken into account for the SBAS summary and
+          	the Stanford-ESA computation will be skipped. This behaviour can be disabled with the parameter '--summary:waitfordaystart'.
+          If receiver position is not fixed or provided by a reference file, the percentile lines will not appear.
+          If user provides a reference file for comparing the solution and if at a certain epoch the reference file position is not available,
+            the epoch will be skipped from the summary.
+          The last line of the SBAS summary contains all the values of the previous lines along with the station coordinates.
+          If receiver position is not fixed, the station coordinates will be the solution from the last computed epoch.
+          The last line is useful for plotting world maps with data from each station.
+          The fields at the end of the last line 'HWIR_ESA', 'VWIR_ESA', 'MIs_ESA', 'Hor_MIs_ESA' and 'Ver_MIs_ESA' correspond to the values computed in Stanford-ESA.
+            These fields will appear even if Stanford-ESA has not been enabled, but with a value of 0 (so its column number is fixed).
+          Stanford-ESA messages will not appear if Stanford-ESA computation has not been enabled.
+          HDOP, PDOP and GDOP threshold messages will not appear if HDOP, PDOP or GDOP thresholds have not been enabled respectively.
+          Number of epochs with NPA epoch message will not appear if mode switching has not been enabled.
+
+          If user forced NPA processing through parameters, then all values in SBAS summary will be referred to NPA mode.
+          The lines referring to a reference file will only appear if a user sets a reference file. If user sets the reference file just for comparing
+            the solution, the line "Total epochs omitted in ..." will appear. Otherwise, if the reference file was set to be used as the a priori
+            position for the modelling computation, the line "Total epochs skipped due to no position from reference file ..." will appear.
+
+    DGNSS SUMMARY [DGNSS processing mode]
+        DGNSS statiscal summary. It is printed at the end of the output file if summary is enabled.
+        All time tags are in GPS time.
+        Sample:
+          INFO --------------------- DGNSS Summary ---------------------
+          INFO HDOP Threshold:   4.00
+          INFO PDOP Threshold:   6.00
+          INFO GDOP Threshold:  30.00
+          INFO First epoch of summary: 27/10/2016 00:00:00.00 / 2016 301     0.00 / 1920 345600.00
+          INFO Last  epoch of summary: 27/10/2016 23:59:59.00 / 2016 301 86399.00 / 1920 431999.00
+          INFO Total epochs processed: 86293
+          INFO Total epochs processed with DGNSS solution: 85932 ( 99.582% )
+          INFO Total epochs processed with SPP solution: 0 ( 0.000% )
+          INFO Total epochs processed with DGNSS solution and position from reference file: 85932 ( 99.582% )
+          INFO Total epochs omitted in summary due to no position from reference file: 0 ( 0.000% )
+          INFO Total epochs skipped due to less than 4 valid satellites available: 361 ( 0.418% )
+          INFO Total epochs skipped due to singular geometry matrix: 0 ( 0.000% )
+          INFO Total epochs skipped due to any DOP exceeding the threshold:       0 ( 0.000% )
+          INFO Total epochs skipped due to HDOP exceeding the threshold:          0 ( 0.000% )
+          INFO Total epochs skipped due to PDOP exceeding the threshold:          0 ( 0.000% )
+          INFO Total epochs skipped due to HDOP and PDOP exceeding the threshold: 0 ( 0.000% )
+          INFO Total epochs skipped due to GDOP exceeding the threshold: 0 ( 0.000% )
+          INFO Total epochs skipped (any reason): 361 ( 0.418% )
+          INFO Total epochs missing  in rover observation file (during summary period):    0
+          INFO Total epochs missing  in rover observation file (all the file):             0
+          INFO Number of data gaps in rover observation file (during summary period):      0
+          INFO Number of data gaps in rover observation file (all the file):               0
+          INFO Maximum data gap size in rover observation file (during summary period):    0
+          INFO Maximum data gap size in rover observation file (all the file):             0
+          INFO Total epochs missing  in reference station RINEX observation file (during summary period):   5
+          INFO Total epochs missing  in reference station RINEX observation file (all the file):           13
+          INFO Number of data gaps   in reference station RINEX observation file (during summary period):   4
+          INFO Number of data gaps   in reference station RINEX observation file (all the file):            7
+          INFO Maximum data gap size in reference station RINEX observation file (during summary period):   2 at epoch 26/01/2018 23:50:04.00 / 2018 026 85804.00 / 1985 517804.00
+          INFO Maximum data gap size in reference station RINEX observation file (all the file):            6 at epoch 25/01/2018 23:46:36.00 / 2018 025 85596.00 / 1985 431196.00
+          INFO PDOP  95 Percentile:   2.33
+          INFO GDOP  95 Percentile:   2.69
+          INFO TDOP  95 Percentile:   1.34
+          INFO HDOP  95 Percentile:   1.30
+          INFO VDOP  95 Percentile:   1.98
+          INFO Maximum PDOP   3.04 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Maximum GDOP   3.57 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Maximum TDOP   1.87 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO Maximum HDOP   1.60 at epoch 26/01/2018 02:20:30.00 / 2018 026  8430.00 / 1985 440430.00
+          INFO Maximum VDOP   2.66 at epoch 26/01/2018 23:52:30.00 / 2018 026 85950.00 / 1985 517950.00
+          INFO First epoch of summary for computing positioning error percentiles: 27/10/2016 00:00:00.00 / 2016 301     0.00 / 1920 345600.00
+          INFO Last  epoch of summary for computing positioning error percentiles: 27/10/2016 23:59:59.00 / 2016 301 86399.00 / 1920 431999.00
+          INFO Total samples in Stanford-ESA processed: 111056799
+          INFO Total samples in Stanford-ESA processed with solution: 111056798 ( 99.999% )
+          INFO Total samples in Stanford-ESA skipped due to singular geometry matrix: 1 ( 9.004E-07% )
+          INFO Horizontal  95 Positioning Error Percentile:   0.80 metres
+          INFO Vertical    95 Positioning Error Percentile:   1.73 metres
+          INFO Maximum Horizontal Positioning Error: 4.26 metres at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Maximum Vertical   Positioning Error: 7.53 metres at epoch 27/10/2016 17:40:32.00 / 2016 301 63632.00 / 1920 409232.00
+          INFO Rover: helg Lon:   7.89309376 Lat:   54.17448223 Height:   48.4689 HPE_Percentile:  95   0.80 VPE_Percentile:  95   1.73 MaxHPE:   0.00 MaxVPE:   0.00 Avail%:   0.000 PDOP_Percentile:   95   2.33 Max_PDOP:   3.04 GDOP_Percentile:   95   2.69 Max_GDOP:   3.57 TDOP_Percentile:   95   1.34 Max_TDOP:   1.87 HDOP_Percentile:   95   1.30 Max_HDOP:   1.60 VDOP_Percentile:   95   1.98 Max_VDOP:   2.66 Epochs_missing_Rover_Sum:   0 Epochs_missing_Rover_All_file:   0 Num_DataGaps_Rover_Sum:   0 Num_DataGaps_Rover_All_file:   0 MaxSize_DataGap_Rover_Sum:   0 MaxSize_DataGap_Rover_All_file:   0 Epochs_missing_Ref_Sum:   5 Epochs_missing_Ref_All_file:  13 Num_DataGaps_Ref_Sum:   4 Num_DataGaps_Ref_All_file:   7 MaxSize_DataGap_Ref_Sum:   2 MaxSize_DataGap_Ref_All_file:   6 Station_Network_Name: Other
+        NOTES:
+          If observation file starts at 22 hours or later, gLAB will automatically assume that all the epochs until the start of the next day (midnight)
+            are for convergence time. During this convergence time, all the epochs computed will not be taken into account for the summary and
+            the Stanford-ESA computation will be skipped. This behaviour can be disabled with the parameter '--summary:waitfordaystart'.
+          If rover position is not provided, the percentile lines will not appear.
+          If user provides a reference file for comparing the solution and if at a certain epoch the reference file position is not available,
+            the epoch will be skipped from the summary.
+          If rover position is not provided, the station coordinates will be the solution from the last computed epoch.
+          The last line of the summary contains all the values of the previous lines along with the station coordinates.
+          The last line is useful for plotting world maps with data from each station.
+          Stanford-ESA messages will not appear if Stanford-ESA computation has not been enabled.
+          HDOP, PDOP and GDOP threshold messages will not appear if HDOP, PDOP or GDOP thresholds have not been enabled respectively.
+          The lines referring to a reference file will only appear if a user sets a reference file.
+
+    SATDIFF [orbit and clock comparison]
+        Satellite difference message for products comparison mode. This message shows the difference between
+        both orbit and clocks for two different OC products fonts for a specific time. It is shown each time step.
+        The SISRE fields are the Signal-in-Space Range Error, it is a measure of how the error impact a general
+        receiver found in the Earth's surface. It is computed as:
+            SISRE = sqrt((radDiff-clkDiff)^2 + 1/49*(ctDiff^2 + atDiff^2))
+        Being:
+            radDiff, the difference of satellite positions in the radial component
+            clkDiff, the difference of satellite clock offsets
+            ctDiff, the difference of satellite positions in the cross-track component
+            atDiff, the difference of satellite positions in the along-track component
+        All time tags are in GPS time.
+        Field 1:   'SATDIFF'
+        Field 2:   Year
+        Field 3:   Doy
+        Field 4:   Seconds of day
+        Field 5:   GNSS System (GPS, GAL, GLO or GEO)
+        Field 6:   PRN satellite identifier
+        Field 7:   SISRE difference
+        Field 8:   SISRE orbit-only difference
+        Field 9:   3D orbit difference
+        Field 10:  Clock difference
+        Field 11:  Radial position difference
+        Field 12:  Along-track position difference
+        Field 13:  Cross-track position difference
+        Field 14:  X position difference
+        Field 15:  Y position difference
+        Field 16:  Z position difference
+        Sample:
+            SATDIFF 2006 200     0.00 GPS  1     4.1082     0.5359     1.1019    -3.5883     0.5176     0.5497     0.8025      1.527     0.4156     3.7061
+
+    SATSTAT [orbit and clock comparison]
+        Satellite difference summary message for products comparison mode. This message shows the differences
+        between orbit and clocks for two different OC products fonts for a specific satellite. It is shown after
+        all the comparisons are done, and presents a summary for each satellite.
+        All time tags are in GPS time.
+        Field 1:      'SATSTAT'
+        Field 2:      GNSS System (GPS, GAL, GLO or GEO)
+        Field 3:      PRN satellite identifier
+        Field 4:      Number of samples
+        Field 5-7:    SISRE comparisons  [mean,RMS,stdDev]
+        Field 8-10:   SISRE orbit-only comparisons  [mean,RMS,stdDev]
+        Field 11-13:  3D orbit comparisons  [mean,RMS,stdDev]
+        Field 14-16:  Clock comparisons  [mean,RMS,stdDev]
+        Field 17-19:  Radial position comparisons  [mean,RMS,stdDev]
+        Field 20-22:  Along-track position comparisons  [mean,RMS,stdDev]
+        Field 23-25:  Cross-track position comparisons  [mean,RMS,stdDev]
+        Sample:
+            SATSTAT  1   95     1.5530     2.1112     1.4302     0.9279     1.0058     0.3881     1.4115     1.4714     0.4155    -0.3357     1.9280     1.8985     0.8988     0.9938     0.4239     0.6081     0.9604     0.7433     0.1717     0.5050     0.4750
+
+    SATSTATTOT [orbit and clock comparison]
+
+        Difference summary message for products comparison mode. This message shows the statistics of the
+        differences between orbit and clocks for two different OC products fonts. It is shown after all the
+        comparisons are done, and presents a summary for all of them.
+        All time tags are in GPS time.
+        Field 1:      'SATSTATTOT'
+        Field 2:      Number of samples
+        Field 3-5:    SISRE comparisons  [mean,RMS,stdDev]
+        Field 6-8:    SISRE orbit-only comparisons  [mean,RMS,stdDev]
+        Field 9-11:   3D orbit comparisons  [mean,RMS,stdDev]
+        Field 12-14:  Clock comparisons  [mean,RMS,stdDev]
+        Field 15-17:  Radial position comparisons  [mean,RMS,stdDev]
+        Field 18-20:  Along-track position comparisons  [mean,RMS,stdDev]
+        Field 21-23:  Cross-track position comparisons  [mean,RMS,stdDev]
+        Sample:
+            SATSTATTOT 2660     1.2971     1.6206     0.9714     1.0207     1.1478     0.5250     1.6623     1.7701     0.6083    -0.1909     1.3835     1.3702     0.9488     1.1312     0.6160     0.0514     1.1930     1.1918    -0.0345     0.6560     0.6551
+
+    SATPVT [show product mode]
+        Satellite data messages for show product mode. This message show the PVT data for a specific time
+        and satellite. All time tags are in GPS time.
+        Coordinates are in WGS84 system except for BeiDou with broadcast orbits, which are in CGCS2000 system.
+        CGCS2000 system is aligned to WGS84 to a few centimetres, therefore, it is assumed that CGCS2000=WGS84.
+        Field 1:      'SATPVT'
+        Field 2:      Year
+        Field 3:      Doy
+        Field 4:      Seconds of day
+        Field 5:      GNSS System (GPS, GAL, GLO, GEO or BDS)
+        Field 6:      PRN satellite identifier
+        Field 7:      Satellite X position [m]
+        Field 8:      Satellite Y position [m]
+        Field 9:      Satellite Z position [m]
+        Field 10:     Satellite X velocity [m/s]
+        Field 11:     Satellite Y velocity [m/s]
+        Field 12:     Satellite Z velocity [m/s]
+        Field 13:     Satellite clock offset [m]
+        Sample:
+            SATPVT 2006 199 79500.00 GPS  1  15340446.1662 -20066066.3778  -7929249.6479      1191.6479      2132.5615     -3023.0448     19826.4736
+

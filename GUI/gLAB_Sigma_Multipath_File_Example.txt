@@ -1,0 +1,63 @@
+#gLAB version v5.5.1, built on Dec 11 2020 12:27:40
+#Lines with comments start with a # at the beginning of line
+#If the symbol # is found in the middle of the line, the rest of the line will be omitted, as it will be considered a comment
+#Empty lines will be skipped
+#This is an example of user multipath model configuration file.
+#This file is for introducing a user defined model for sigma multipath model for a SBAS receiver, which can be elevation or SNR dependent.
+#By executing 'gLAB -sigmamultipathfile > usermultipathfile.txt' a valid user multipath model configuration file is created (this file).
+#
+#The following lines explain the rules for creating this configuration file:
+#First line (non empty or without '#') indicates if the following values are for an elevation or S/N ratio model
+#Values for first line are: 'Elevation' or 'SNR' (values are case insensitive)
+#For example:
+#Elevation
+#SNR
+#
+#Values will be given in the same manner for both cases:
+#For each line, the first column will be either the elevation or the SNR sample, the second column will be the relevant sigma value for the sample.
+#There will be as many lines as the number of available samples.
+#Lines must be sorted from lower to higher range values. If lines are not sorted, gLAB will show an error and exit.
+#The unit for the samples are:
+#  degrees for an elevation dependent model
+#  dBHz for a S/N ratio dependent model
+#The unit for the sigma values are metres
+#Sigma values between intervals will be linearly interpolated
+#If a value to be interpolated is below the minimum sample, the minimum sample value will be used. The same criteria will be used for values over the maximum sample.
+#Range step does not need to be constant.
+#
+#If SNR model is selected and no SNR from RINEX is available, the highest SNR sample will be used.
+#
+#Example for an elevation dependent model:
+#Elevation
+#20   0.7
+#30   0.6
+#40   0.5
+#60   0.3
+#78   0.2
+#80   0.1
+# 
+#Example for a SNR dependent model:
+#SNR
+#30     0.6
+#40 0.5
+#56 0.4
+#60 0.3
+#
+#Data columns do not need to have a specific number of spaces between them, as well as leading and trailing spaces at the beginning or end of line respectively are ignored. Furthermore, leading zero for values lower than 1 is optional.
+#Data columns may have as column separator white spaces (' '), commas (',') or semicolon (';'). gLAB, internally, will replace all commas and semicolons by spaces, therefore, these column separators can be set combined in different or in the same line.
+#Numbers MUST have decimals with a dot ('.'), as commas are treated as a column separator
+#For example, this line:
+#20   0.5
+#Can also be written like this:
+#   20        .5
+#
+Elevation
+10  0.8
+20      0.7
+30  0.6
+40  0.5
+50  0.4
+60  0.3
+70  0.2
+80  0.1
+90  0.1

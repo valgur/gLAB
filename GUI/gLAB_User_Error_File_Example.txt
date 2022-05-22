@@ -1,0 +1,193 @@
+#gLAB version v5.5.1, built on Dec 11 2020 12:27:40
+#This is an example of user-defined error configuration file
+#Lines with comments start with a # at the beginning of line
+#If the symbol # is found in the middle of the line, the rest of the line will be omitted, as it will be considered a comment
+#Empty lines will be skipped
+#By executing 'gLAB -usererrorfile > usererrorfile.txt' a valid user-defined error configuration file is created (this file). Only dates need to be adjusted by user
+#
+#The following lines explain the rules for creating a user defined error configuration file:
+#First line (non empty or without '#') will have two words:
+##The first word indicates if time is given in [GPS week and ToW (Time of Week)] or in [GPS Year, DoY (Day of Year) and SoD (Seconds of Day)]:
+## ToW        -> Time of week (case insensitive)
+## SoD        -> Seconds of Day (case insensitive)
+##The second word indicates if the user wants to indicate the duration of the user-defined error either by specifying the length (in seconds) with the word "Length" or by giving the date where the error ends (in the same time format as the initial time) with the word "Time".
+## Length     -> Length of user-defined error (case insensitive)
+## Time       -> End time (case insensitive)
+#
+#The second line indicates the seed (random function initial value) for the AWGN (Additive White Gaussian Noise) noise (applied just after being read). It can be the system time, specified with the word "Time" or by a number given by user. This line will start with the word "Seed" (or "seed") and then the word to specify the seed type:
+## CurrentTime -> Use current execution time (from system) as seed (case insensitive)
+## <number>    -> Use this number as seed. It must be a positive integer. Floating values will be truncated, but negative values will make gLAB show an error and exit. 
+#
+#Each line will contain a type of user-defined error to be generated for a given time period.
+#The entries MUST be sorted by time (from earliest to latest). If entries are not sorted, user-defined errors from previous epochs will be ignored.
+#
+#The first word of each line will indicate the type of user-defined error to be generated
+#The type of user-defined error possible are:
+#  Step       -> for a step function
+#  Ramp       -> for a ramp function
+#  Sinu       -> for a sinusoidal function
+#  AWGN       -> for AWGN noise
+#The second word will be to indicate the constellation and PRN in which the error is added.
+##The constellation will be given with one the following letters:
+#  G -> GPS
+#  R -> GLONASS
+#  E -> Galileo
+#  S -> SBAS
+#  C -> BeiDou
+#  J -> QZSS
+##The PRN number is from 0 to 32. A PRN of 0 means that all satellites in the constellation will have this added noise.
+#The third word is to indicate the signal where to add the error. 
+#The signal code must be one of the observation codes from RINEX version 3.03, (e.g. C1C, L1P, etc.).  For a full list of observation codes, refer to [RINEX, The Receiver Independent Exchange Format, Version 3.02, 14 July 2015].
+#
+#Step function definition:
+#       Step(t)=A*(u(t-t0)-u(t-t1))
+# Where:
+#    A is the amplitude of step, which is a constant value. It is defined by the user (in metres).
+#    t is the current epoch (in seconds of day).
+#    t0 is the epoch where the step function begins (in seconds of day). It is defined by the user.
+#    t1 is the epoch where the step function ends (in seconds of day). It is defined by the user.
+#    u(t) is the unit step or Heavyside function, defined as:
+#          t>=0 u(t)=1
+#          t<0  u(t)=0
+#    Step(t) is the added error to the measurement (in metres).
+#
+#Ramp function definition:
+#       Ramp(t)=B*(t-t0)*(u(t-t0)-u(t-t1))
+# Where:
+#    B is the amplitude of ramp, which is a constant value. It is defined by the user (in metres).
+#    t is the current epoch (in seconds of day).
+#    t0 is the epoch where the ramp function begins (in seconds of day). It is defined by the user.
+#    t1 is the epoch where the ramp function ends (in seconds of day). It is defined by the user.
+#    u(t) is the unit step or Heavyside function, defined as:
+#          t>=0 u(t)=1
+#          t<0  u(t)=0
+#    Ramp(t) is the added error to the measurement (in metres).
+#
+#Sinusoidal function definition:
+#       Sinusoidal(t)=C*sin(2*Pi*t/T + alpha)*(u(t-t0)-u(t-t1))
+# Where:
+#    C is the amplitude of sinusoidal, which is a constant value. It is defined by the user (in metres).
+#    T is the period of the sinusoidal, which is a constant value. It is defined by the user (in seconds).
+#    alpha is the offset of the sinusoidal, which is a constant value. It is defined by the user (in degrees).
+#    t is the current epoch (in seconds of day).
+#    t0 is the epoch where the sinusoidal function begins (in seconds of day). It is defined by the user.
+#    t1 is the epoch where the sinusoidal function ends (in seconds of day). It is defined by the user.
+#    u(t) is the unit step or Heavyside function, defined as:
+#          t>=0 u(t)=1
+#          t<0  u(t)=0
+#    sin(t) is the nominal sinusoidal function.
+#    Sinusoidal(t) is the added error to the measurement (in metres).
+#
+#AWGN function definition:
+#       AWGN(t)=w(t)*(u(t-t0)-u(t-t1))
+# Where:
+#    w(t) is an Additive White Gaussian Noise (AWGN) random process. In particular:
+#      w(t) samples has an associated sigma which can be defined by the user (in metres).
+#      The mean value of w(t) samples is zero.
+#    t is the current epoch (in seconds of day).
+#    t0 is the epoch where the ramp function begins (in seconds of day). It is defined by the user.
+#    t1 is the epoch where the ramp function ends (in seconds of day). It is defined by the user.
+#    u(t) is the unit step or Heavyside function, defined as:
+#          t>=0 u(t)=1
+#          t<0  u(t)=0
+#    AWGN(t) is the added error to the measurement (in metres).
+#
+#Example for Step function (using SoD and Length):
+#Step G3 C1C 5 2016 1 300 500
+# Where "G3" indicates satellite with PRN 3 from GPS constellation
+#       "C1C" is the observation code for GPS L1 frequency civil psudorange measurement
+#       "5" is the amplitude (in metres) of the step function
+#       "2016" is the year when the step starts
+#       "1" is the day of year when the step starts
+#       "300" is the seconds of day when the step starts
+#       "500" is the duration (in seconds) of the step
+#
+#Example for Ramp function (using SoD and Time):
+#Ramp G0 L1P 5 2016 1 300 2016 1 500
+# Where "G0" indicates all satellites from GPS constellation
+#       "L1P" is the observation code for GPS L1 frequency carrier phase measurement
+#       "5" is the amplitude (in metres/second) of the ramp function
+#       "2016" is the year when the ramp starts
+#       "1" is the day of year when the ramp starts
+#       "300" is seconds of day when the ramp starts
+#       "2016" is the year when the ramp ends
+#       "1" is the day of year when the ramp ends
+#       "500" is the seconds of day when the ramp ends
+#Example for Sinusoidal function (using ToW and Length):
+#Sinu G12 C1C 5 20E-6 90 1848 259200 500
+# Where "G12" indicates satellite with PRN 12 from GPS constellation
+#       "C1C" is the observation code for GPS L1 frequency civil psudorange measurement
+#       "5" is the amplitude (in metres) of the sinusoidal function
+#       "20E-6" is the period of the signal (in seconds). 
+#       "90" is the offset (in degrees) to be added in the sinusoidal function
+#       "1848" is the GPS week when the sinusoidal starts
+#       "259200" is the seconds of week when the sinusoidal starts
+#       "500" is the duration (in seconds) of the sinusoidal
+#
+#Example for AWGN function (using ToW and Time):
+#AWGN G31 C1C 5 1848 259200 1848 259700
+# Where "G31" indicates satellite with PRN 31 from GPS constellation
+#       "C1C" is the observation code for GPS L1 frequency civil psudorange measurement
+#       "5" is the standard deviation (in metres) of the AWGN random process
+#       ""1848" is the GPS week when the AWGN starts
+#       "259200" is the seconds of week when the AWGN starts
+#       "1848" is the GPS week when the AWGN ends
+#       "259700" is the seconds of week when the AWGN ends
+#
+#Data lines with wrong number of columns will be ignored (except for the initial two lines with time format and seed)
+#Data lines with a user-defined error model different from the ones listed above will be ignored
+#
+#Data columns do not need to have a specific number of spaces between them, as well as leading and trailing spaces at the beginning or end of line respectively are ignored. Furthermore, leading zero for values lower than 1 is optional.
+#Data columns may have as column separator white spaces (' '), commas (',') or semicolon (';'). gLAB, internally, will replace all commas and semicolons by spaces, therefore, these column separators can be combined in different or in the same line.
+#Numbers MUST have decimals with a dot ('.'), as commas are treated as a column separator
+#For example, this line:
+#Step G10 C1C 5 2016 1 300 50
+#Can also be written like this:
+# Step   G10  C1C     5    2016    1 300        50   
+#
+#gLAB will print the user-defined error in the lines starting with 'USERADDEDERROR' (which are enabled by default). The description of each field in the message is shown by executing 'gLAB -messages'.
+#
+#For RINEX 2 files, the user must use the equivalent measurements for RINEX 3. The measurement conversion table is:
+#C1 -> C1C
+#P1 -> C1P
+#L1 -> L1P
+#D1 -> D1P
+#S1 -> S1P
+#
+#C2 -> C2C
+#P2 -> C2P
+#L2 -> L2P
+#D2 -> D2P
+#S2 -> S2P
+#
+#C5 -> C5X
+#L5 -> L5X
+#D5 -> D5X
+#S5 -> S5X
+#
+#C6 -> C6X
+#L6 -> L6X
+#D6 -> D6X
+#S6 -> S6X
+#
+#C7 -> C7X
+#L7 -> L7X
+#D7 -> D7X
+#S7 -> S7X
+#
+#C8 -> C8X
+#L8 -> L8X
+#D8 -> D8X
+#S8 -> S8X
+#
+#Usage Example:
+SoD Length
+Seed 10
+#Add all user-defined errors at the same time
+Step G10 C1C 5 2016 1 300 50
+Ramp G20 C1C 5 2016 1 300 500
+Sinu G15 L1P 5 20E-6 90 2016 1 300 500
+AWGN G10 C1C 5 2016 1 300 500
+#Add some more user-defined error later
+Ramp G0 C1C 5 2016 1 500 400
+Sinu G32 L1P 5 20E-6 90 2016 1 5000 300

@@ -1,0 +1,53 @@
+#gLAB version v5.5.1, built on Dec 11 2020 12:27:40
+#This is an example of a reference position file
+#Lines with comments start with a '#' or '%' at the beginning of line
+#If the symbol # is found in the middle of the line, the rest of the line will be omitted, as it will be considered a comment
+#Empty lines will be skipped
+#By executing 'gLAB -referenceposfile > referencepositionfile.txt' a valid reference position file is created (this file). Dates and positions have to be adjusted by user
+#
+#The following lines explain the rules for creating a reference position file:
+#Data columns do not need to have a specific number of spaces between them, as well as leading and trailing spaces at the beginning or end of line respectively are ignored. Furthermore, leading zero for values lower than 1 is optional.
+#Data columns may have as column separator white spaces (' '), commas (',') or semicolon (';'). gLAB, internally, will replace all commas and semicolons by spaces, therefore, these column separators can be set combined in different or in the same line.
+#Numbers MUST have decimals with a dot ('.'), as commas are treated as a column separator.
+#The first line of data (first line non empty or without a '#') must have the names of the elements of each column.
+#Names of columns are case insensitive, and must be given in the same order as the data (so gLAB what type of data has each column).
+#The order of the data is not important as long as the data type matches the position of the name of the data in the first line.
+#The accepted names of columns are (all time tags must be in GPS time):
+#Year      -> Year
+#DoY       -> Day of Year
+#SoD       -> Seconds of Day
+#GPSWeek   -> GPSWeek
+#SoW       -> Seconds of Day
+#Date      -> Date in calendar format (YYYY/MM/DD)
+#Time      -> Time in calendar format (HH:MM:SS.zzz). 'zzz' are milliseconds
+#X         -> X coordinate (metres)
+#Y         -> Y coordinate (metres)
+#Z         -> Z coordinate (metres)
+#Lon       -> Longitude (degrees). Range is [-180..180]. Values outside of this range will be rejected
+#Longitude -> Longitude (degrees). Range is [-180..180]. Values outside of this range will be rejected
+#Lat       -> Latitude (degrees). Range is [-90..90]. Values outside of this range will be rejected
+#Latitude  -> Latitude (degrees). Range is [-90..90]. Values outside of this range will be rejected
+#Height    -> Height (metres)
+#
+#X, Y and Z are in cartesian ECEF WGS84 reference frame.
+#Latitude, Longitude and Height are in geodetic ECEF WGS84 reference frame.
+#
+#The file must contain a full set of valid date and coordinates. That is, it must have at least the fields 'Year, DoY, SoD' or 'GPSWeek, SoW' or 'Date Time' for the date, and fields 'X, Y ,Z' or 'Lon, Lat, Height' for the coordinates
+#If file contains more than one date formats or both coordinate systems, gLAB will prefer 'Year, DoY, SoD' format for date and 'X, Y, Z' for coordinates (it has less computational cost)
+#All other columns that do not match any of the accepted names will be ignored.
+#
+#Furthermore, RTKlib output file is also supported (output must be in 'Lat/Lon/Height' -in ellipsodial or geodetic height- or 'X/Y/Z-ECEF' formats).
+#
+#For example, the first line could be like the following samples (note that order and number of column separators is not important):
+#Year DoY SoD  X Y Z
+#Year, DoY, SoD,  X, Y, Z
+#GPSWeek  SoW    Y  X      Z
+#DoY   SoD   Year  Lon   Lat    Height
+#SoW    GPSWeek  Lat Lon Height
+#DoY  Year  Lon  Height  SoD  Lat
+#
+#The lines below are a valid set of data lines:
+Year DoY       SoD              X              Y              Z
+2014 067 21200.000   3219920.5954   4672079.7551   3465886.3080
+2014 067 21500.000   3219919.9508   4672079.7847   3465887.1434
+2014 067 21800.000   3219920.2422   4672080.7439   3465887.0480

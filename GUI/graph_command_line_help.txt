@@ -1,0 +1,1681 @@
+#############################################################################
+# Copyright: gAGE/UPC & ESA
+# Project: EDUNAV GNSS Lab Tool
+# Authors: Adria Rovira-Garcia (group of Astronomy and GEomatics - gAGE/UPC)
+#          Pere Ramos-Bosch (group of Astronomy and GEomatics - gAGE/UPC)
+# Curator: Adria Rovira-Garcia ( gAGE/UPC )
+# Developer: Deimos Ibanez Segura ( gAGE/UPC )
+#            Yixie Shao ( gAGE/UPC )
+#          glab.gage @ upc.edu           
+# File: graph.py
+# Code Management Tool File Version: 5.5  Revision: 1
+# Date: 2020/12/11
+#############################################################################
+
+
+GRAPHIC GENERAL OPTIONS (default options):
+
+  The General Options are the ones that can be specified once per graphic,
+  and will affect the entire graphic window.
+
+  A hash ('#') means that the parameter expects a numerical value.
+  A comma (',') or semicolon (';') means that the parameter expects a list of values
+    separated by comma or semicolon (the list may be of numerical values if it has
+    hashes or strings if it has the symbols '<' and '>'. If the list has a
+    variable number of items, the "..." are shown.
+  A '<text>' or any word between '<' and '>' means that the parameter expects a string
+    (without the '<' and '>' symbols).
+
+  -h, --help                                  Show this help message and exit
+
+  -t, --title, --tit          <text>          Set the title of the Graphic
+
+  --Xlabel, --xlab, --xl      <text>          Set the x-axis label
+
+  --Ylabel, --ylab, --yl      <text>          Set the y-axis label
+
+  --Xmin, --xmin, --xn             #          The minimum value for the x axis to be plot, if 
+                                                no value is provided, automatic limits are set.  
+
+  --Xmax, --xmax, --xx             #          The maximum value for the x axis to be plot, if 
+                                                no value is provided, automatic limits are set.
+
+  --Ymin, --ymin, --yn             #          The minimum value for the y axis to be plot, if 
+                                                no value is provided, automatic limits are set.
+
+  --Ymax, --ymax, --yx             #          The maximum value for the y axis to be plot, if 
+                                                no value is provided, automatic limits are set. 
+
+  --Xticks, --xticks, --xt     #,#,#          Set the ticks for x axis. The values must be 
+                                                given in this format: Xmin,Xmax,NumberOfTicks
+                                                (this parameter is incompatible with --XticksStep
+                                                and --XTicksList). See note below.
+
+  --Yticks, --yticks, --yt     #,#,#          Set the ticks for y axis. The values must be 
+                                                given in this format: Ymin,Ymax,NumberOfTicks
+                                                (this parameter is incompatible with --YticksStep
+                                                and --YTicksList). See note below
+
+
+  --XticksStep, --xticksstep,      #          Set the ticks step for x axis (this parameter
+  --xts                                         is incompatible with --Xticks and --XTicksList).
+
+  --YticksStep, --yticksstep,      #          Set the ticks step for y axis (this parameter
+  --yts                                         is incompatible with --Yticks and --YTicksList).
+
+  --XTicksList, --xtickslist,  #,#,...        Set the list of ticks for x axis. The list does
+  --xtl                                         not to be ordered and must be comma (',') separated. 
+                                                (this parameter is incompatible --Xticks and --XticksStep).
+
+  --YTicksList, --ytickslist,  #,#,...        Set the list of ticks for y axis. The list does
+  --ytl                                         not to be ordered and must be comma (',') separated. 
+                                                (this parameter is incompatible --Yticks and --YticksStep).
+
+  --Ftitle, --ftitle, --ft    <text>          Add a fractional title to the upper left corner.
+
+  --wm, --watermark           <text>          Add a watermark with the given text.
+
+  --wmc, --watermarkcolor   <colour>          Sets the watermark colour [DEFAULT 'black'].
+                                                See option '--color' for the full list of colours.
+
+  --wms, --watermarksize           #          Set the size of the watermark text [DEFAULT 8]
+
+  --wmp, --watermarkposition     #,#          Set the X and Y position of the watermark. The position
+                                                must be given relative to the lower left corner of the plot,
+                                                and  with the X and Y values given a comma (',') separated string.
+                                                For example, to set the default position of the watermark in
+                                                SBAS plots (lower right corner), the parameter values should be
+                                                provided as ".87,.03"
+
+  --textmark                  <text>          Add an text mark with the given text. For adding multiple
+                                                text marks, set this option as many times as necessary
+
+  --textmarkc,              <colour>          Sets the text mark colour [DEFAULT 'black']. Set this option
+  --textmarkcolor                               for each text mark set with option '--textmark'.
+                                                See option '--color' for the full list of colours.
+
+  --textmarks, --textmarksize      #          Set the size of the text mark [DEFAULT 10]. Set this option
+                                                for each annotation text set with option '--textmark'.
+
+  --textmarkp,                   #,#          Set the X and Y position of the text mark.  Set this option
+  --textmarkposition                            for each annotation text set with option '--textmark'. 
+                                                The position must be given relative to the lower left corner of the 
+                                                plot, and with the X and Y values given a comma (',') separated string.
+                                                For example, to set the default position of the text mark
+                                                in the center of the image, the parameter values should be
+                                                provided as ".5,.5"
+
+  --atm, --adjusttomargin                     Expand the figure to fit the image margin (works for python
+  --AdjustToMargin                              versions greater or equal to 2.7).
+
+  --no-lock-file                              Do not create the ".plot.lock" file. This file is necessary
+                                                to synchronize graph.py with the GUI, but not in command line.
+                                                This option is recommended when multiple instances of this tool
+                                                are executed in parallel.
+
+  --colormap,        <colourmapname>          Set the colour map used [DEFAULT: 'jet']
+  --ColorMap                                    See full list of colormaps in the following link:
+                                                https://matplotlib.org/users/colormaps.html
+
+  NOTE:  In '--Xticks' or '--Yticks' options, the maximum and minimum can be different from
+         the plot range (it is an independent range). The number of ticks (NumberOfTicks)
+         shall be computed with the following formula:
+
+         NumberOfTicks = 1 + ToInteger((MaxTick-MinTick)/TickResolution)
+
+
+
+  Example:
+       graph.py -t "Graphic title" --xl "time (s)" --yl "Altitude [m]" --xmin -3.0 --ymax 5.0 --xticks 0,24,7
+
+
+PLOT DEPENDENT OPTIONS (default options):
+
+  The Plot Dependent Options are specific to each plot.
+  One new plot is considered from the point that a '-f' or '--file' is found. 
+  All the options coming after this parameter belong to that specific plot.
+
+  -f, --file                <filename>        Set the input file name for the specific plot.
+
+  -x, -X, --Xcol                 <val>        Set the source of the x axis: 
+                                                -x 4 or -x '$4' : will take as x axis the 4th
+                                                column of the input file.
+
+                                                Operations can be done in this parameter, such as:
+                                                -x '($4-$5)': This will take the difference between
+                                                the 4th and the 5th column 
+
+                                                Mathematical functions and constants are supported:
+                                                -x '(math.sin($12*math.pi/180)'
+
+  -y, -Y, --Ycol                 <val>        Set the source of the y axis
+                                                Identical properties as x column
+
+
+  -c, --cond               <condition>        Specify the plotting condition:
+                                               -c '($6>=10)' Include the 6th column if it is 
+                                                equal or greater than 10
+
+                                                -c '($1=="OUTPUT")' Include the 1st column by a specific
+                                                string: surrounding the string by "  
+
+                                                Mathematical functions, booleans and constants are supported:
+                                                -c '($1=="POSTFIT")&(math.e($12+$5)>5.0)'
+
+                                                NOTE: Windows users have to exchange the ' for " and the " for '
+                                                    when specifying a condition. For example, the following
+                                                    condition: 
+                                                          -c '($1=="POSTFIT")&(math.e($12+$5)>5.0)'
+                                                    is valid in Linux, but in Windows it shall be written like this:
+                                                          -c "($1=='POSTFIT')&(math.e($12+$5)>5.0)"
+
+
+  -l, --label, --plotlabel      <text>        Enables the label for the current plot
+
+  --npl, --numpointslabel            #        Set the number of points to be shown in the label.
+                                                If no value is provided, it is set to 2, except for
+                                                stations map, which the default is one
+
+  --lp, --labelpos, --labelPos   <val>        Set the position of the label in the plot.
+                                                The following values are supported:
+                                                'tl'             top    left
+                                                'tc'             top    center
+                                                'tr'             top    right [DEFAULT]
+                                                'bl'             bottom left
+                                                'bc'             bottom center
+                                                'br'             bottom right
+                                                'cl'             center left
+                                                'c'              center
+                                                'cr'             center right
+                                                'coordX,coordY'  user defined position 
+                                                                  coordX values must be between [-0.05,1.3]
+                                                                  coordY values must be between [-0.05,1.15]
+
+  -s, --style                  <style>        Sets the style for the current plot  
+                                                The following styles are supported:
+                                                '.'     circle marker [DEFAULT]
+                                                '-'     solid line style
+                                                '--'    dashed line style
+                                                '-.'    dash-dot line style
+                                                '.-'    dots joined with lines
+                                                ':'     dotted line style
+                                                ','     pixel marker
+                                                'o'     point marker
+                                                's'     square marker
+                                                'p'     pentagon marker
+                                                '+'     plus marker
+                                                'x'     x marker
+                                                '^'     triangle up marker
+                                                '>'     triangle right marker
+                                                '<'     triangle left marker
+                                                'v'     triangle down marker
+                                                '*'     star marker
+                                                'h'     hexagon1 marker (top part with edge)
+                                                'H'     hexagon2 marker (top part straight)
+                                                'D'     diamond marker
+                                                'd'     thin diamond marker
+                                                '|'     vertical line marker
+                                                '_'     horizontal line marker
+                                                '1'     tri_down marker
+                                                '2'     tri_up marker
+                                                '3'     tri_left marker
+                                                '4'     tri_right marker
+
+
+  --color, --cl                <color>        Sets the colour for the current plot
+                                                Here is a provided a short list of the colours supported:
+                                                'b'     blue [DEFAULT]
+                                                'g'     green
+                                                'r'     red
+                                                'c'     cyan
+                                                'm'     magenta
+                                                'y'     yellow
+                                                'k'     black
+                                                'w'     white
+                                                OR
+                                                Any colour in HTML format. For a full list of colours, see the link:
+                                                 http://matplotlib.org/api/pyplot_api.html#matplotlib.pyplot.plot
+
+  --markersize, --ms                 #        Sets the plot maker size [DEFAULT 5]  
+
+  --linewidth, --lw                  #        Sets the plot line width [DEFAULT 1]
+
+  -g, --grid                     <val>        Set the plot grid [DEFAULT on]
+                                                It could be turn off by 'off' or 'no'
+
+  Example:
+       graph.py -f /home/gLAB/Example -x '(math.sin($1*math.pi/180))' -y 2 
+       -l "Plot Label" --style p --color cyan   
+
+
+
+MULTIPLE PLOTS:
+
+  Each graphic window can contain several plots. One new plot is considered 
+  from the point that a '-f' or '--file' is found:
+      Graphic General Options: will apply to all the plots present
+      Plot Dependent options: parameters specific to each plot.
+
+  Example:
+       graph.py -f /home/gLAB/Example -x 1 -y 2 -f /home/gLAB/Example -x 2 -y 1
+
+
+SAVE CURRENT GRAPHIC:
+
+  User can save the entire graphic window into the path specified. If no path 
+  is specified, it will be allocated in the current working directory.
+  The graphic output format is deduced from the extension of the file name, if no
+  extension is provided a 'png' extension type will be used: 
+
+
+  --save, --sv              <filename>        Stores the graphic window given a file name. The graphic           
+                                                output format is deduced from the extension of the file name.
+                                                Supported formats are: 
+                                                emf, eps, jpeg, jpg, pdf, png [DEFAULT], ps, raw, rgba, svg, svgz.
+
+  Example:
+       graph.py -f /home/gLAB/Example -x 1 -y 2 --save Figure_Example
+       graph.py -f /home/gLAB/Example -x 1 -y 2 --sv /home/Desktop/Figure_Example.eps
+
+
+
+
+STANFORD PLOT:
+
+  In this mode: 
+
+  For GRAPHIC GENERAL OPTIONS, all the options work the same way as in the default plots,
+                               except the options "--Ftitle" (add a fractional title), "--xt" and "--yt" (for setting ticks) which are disabled. 
+
+  For PLOT DEPENDENT OPTIONS, the options "-f", "-x", "-y", "-c", "-g" work the same way as in the default plots,
+                              while the other options in this part are disabled in this mode.
+                              "-x" and "-y" options can also be written as "--error" and "--pl" respectively.
+
+  MULTIPLE PLOTS are disabled in this mode.
+
+  For SAVE CURRENT GRAPHIC, it works the same way as for the other kind of plots.
+
+  --stanford, --sf, --sp                      Make a stanford plot.
+
+  --AL, --al                         #        Set the alarm limit for the protection level [DEFAULT 40] 
+
+
+  --clean                                     Make a stanford Plot without failure patches.
+
+  --xr,   --xresolution              #        Set the resolution in x-direction of the plot [DEFAULT 0.5] 
+
+  --yr,   --yresolution              #        Set the resolution in y-direction of the plot [DEFAULT 0.5]
+
+  --percentilex, --percentileX                Show ticks where the percentiles 68, 95 and 99.9
+                                                of the points are reached in the horizontal axis.
+
+  --percentiley, --percentileY                Show ticks where the percentiles 68, 95 and 99.9
+                                                of the points are reached in the vertical axis.
+
+  --percentilexlist,           #,#,...        Show ticks where the user provided percentiles of 
+  --percentileXList                             the points are reached in the horizontal axis.
+                                                The list of points must be a comma separated list.
+                                                If this parameter is provided along with parameter
+                                                '--percentilex', the latter will be ignored.
+
+  --percentileylist,           #,#,...        Show ticks where the user provided percentiles of
+  --percentileYList                             the points are reached in the vertical axis.
+                                                The list of points must be a comma separated list.
+                                                If this parameter is provided along with parameter
+                                                '--percentiley', the latter will be ignored.
+
+  --noepochsintitle,                     Do not add the number of epochs in the title. Alternatively, the user can
+  --NoEpochsInTitle                        set the number of epochs by adding in the title (with option '-t')
+                                           the following texts (without quotes) which will be substituted with
+                                           the values shown:
+                                            {0:d} -> Print the total number of epochs
+                                            {1:d} -> Print the total number of epochs that are not MI
+                                            {2:d} -> Print the total number of epochs that are MIs
+                                            {3:d} -> Print the total number of epochs that are below the
+                                                       alarm limit and are not MIs
+                                            {4:d} -> Print the total number of epochs that are over the
+                                                       alarm limit and are not MIs
+                                            {5:d} -> Print the total number of epochs that are MI and
+                                                       are below the alarm limit in both axis
+                                            {6:d} -> Print the total number of epochs that are HMI
+                                            {7:d} -> Print the total number of epochs that are MI and
+                                                       are over the alarm limit
+
+  --availepochpos,           #,#         Set the position (in X,Y components) in the plot of the text for the available
+  --AvailEpochPos                          epochs or 'normal operation'
+
+  --unavailepochpos,         #,#         Set the position (in X,Y components) in the plot of the text for the
+  --UnAvailEpochPos                       unavailable epochs (over the alarm limit) and not MI 
+
+  --hmiepochpos,             #,#         Set the position (in X,Y components) in the plot of the text for the HMI epochs
+  --HMIEpochPos                           
+
+  --miavailpochpos,          #,#         Set the position (in X,Y components) in the plot of the text for the MI
+  --MIAvailEpochPos                        epochs under alarm limit and not HMI
+
+  --miunavailpochpos,        #,#         Set the position (in X,Y components) in the plot of the text for the MI
+  --MIUnAvailEpochPos                      epochs over alarm limit
+
+  --percentilex, --percentileX                Show ticks where the percentiles 68, 95 and 99.9
+                                                of the points are reached in the horizontal axis.
+
+  --percentiley, --percentileY                Show ticks where the percentiles 68, 95 and 99.9
+                                                of the points are reached in the vertical axis.
+
+  --percentilexlist,           #,#,...        Show ticks where the user provided percentiles of 
+  --percentileXList                             the points are reached in the horizontal axis.
+                                                The list of points must be a comma separated list.
+                                                If this parameter is provided along with parameter
+                                                '--percentilex', the latter will be ignored.
+
+  --percentileylist,           #,#,...        Show ticks where the user provided percentiles of
+  --percentileYList                             the points are reached in the vertical axis.
+                                                The list of points must be a comma separated list.
+                                                If this parameter is provided along with parameter
+                                                '--percentiley', the latter will be ignored.
+
+ Example:
+        graph.py -f /home/gLAB/Example -x 1 -y 2 --sf
+
+
+STANFORD-ESA PLOT:
+
+  In this mode: 
+
+  The input file should have this fixed format (this is gLAB's output format):
+
+  The first three lines have the header with this format (numerical values can vary according to the plot):
+
+  #XSTEP  YSTEP  XMAX  YMAX
+   0.100  0.100  50.0  50.0
+  # XPOS   YPOS  NUM_HOR  NUM_VER
+
+  Since the fourth row, each row should provide the values: positioning error (the horizontal axis), protection level (the vertical axis), 
+    number of horizontal vertical occurences (at the given coordinate of positioning error and protection level).
+
+  For GRAPHIC GENERAL OPTIONS, all the options work the same way as in the default plots
+                               except the option "--Ftitle" (add a fractional title),  "--xt" and "--yt" (for setting ticks) which are disabled.
+
+  For PLOT DEPENDENT OPTIONS, the options "-f" works the same way as in the default plots,
+                              while the other options in this part are disabled in this mode.
+
+  MULTIPLE PLOTS are disabled in this mode.
+
+  For SAVE CURRENT GRAPHIC, since it has two plots, then two save paths should be provided. If only one path is provided,
+                            only the vertical plot will be saved.
+
+  --stanfordESA, --sfesa, --spesa        Make a stanford-ESA plot.
+
+  --sfesawithepochs,                     In the title and texts, set the word 'Epochs' instead of 'Geometries'
+  --sfESAWithEpochs
+
+  --nogeometriesintitle,                 Do not add the number of geometries (or epochs) in the title. Alternatively, the
+  --NoGeometriesInTitle,                   user can set the number of geometries (or epochs) by adding in the title
+  --noepochsintitle,                       (with option '-t') the following texts (without quotes) which will be 
+  --NoEpochsInTitle                        substituted with the values shown:
+                                            {0:d} -> Print the total number of geometries or epochs
+                                            {1:d} -> Print the total number of geometries or epochs that are not MI
+                                            {2:d} -> Print the total number of geometries or epochs that are MIs
+                                            {3:d} -> Print the total number of geometries or epochs that are below the
+                                                       alarm limit and are not MIs
+                                            {4:d} -> Print the total number of geometries or epochs that are over the
+                                                       alarm limit and are not MIs
+                                            {5:d} -> Print the total number of geometries or epochs that are MI and
+                                                       are below the alarm limit in both axis
+                                            {6:d} -> Print the total number of geometries or epochs that are HMI
+                                            {7:d} -> Print the total number of geometries or epochs that are MI and
+                                                       are over the alarm limit
+
+
+  --sfesawithregions,                    Add the regions 'MI', 'HMI' and 'System Unavailable' as in the Stanford plots.
+  --sfESAWithRegions                       The number of geometries/epochs in each area will be printed as in
+                                           the Stanford Plots.
+
+  --hal, --HAL                 #         Set the alarm limit for the horizontal plot. This option only has effect if
+                                           option '--sfesawithregions' is set  [Default 40]
+
+  --val, --VAL                 #         Set the alarm limit for the vertical plot. This option only has effect if
+                                           option '--sfesawithregions' is set  [Default 50]
+
+  --availepochpos,           #,#         Set the position (in X,Y components) in the plot of the text for the available
+  --AvailEpochPos                          epochs or 'normal operation'
+
+  --unavailepochpos,         #,#         Set the position (in X,Y components) in the plot of the text for the
+  --UnAvailEpochPos                        unavailable epochs (over the alarm limit) and not MI
+
+  --hmiepochpos,             #,#         Set the position (in X,Y components) in the plot of the text for the HMI epochs
+  --HMIEpochPos                         
+
+  --miavailepochpos,         #,#         Set the position (in X,Y components) in the plot of the text for the MI
+  --MIAvailEpochPos                        epochs under alarm limit and not HMI
+
+  --miunavailepochpos,       #,#         Set the position (in X,Y components) in the plot of the text for the MI
+  --MIUnAvailEpochPos                      epochs over alarm limit
+
+  --percentilex, --percentileX                Show ticks where the percentiles 68, 95 and 99.9
+                                                of the points are reached in the horizontal axis.
+
+  --percentiley, --percentileY                Show ticks where the percentiles 68, 95 and 99.9
+                                                of the points are reached in the vertical axis.
+
+  --percentilexlist,           #,#,...        Show ticks where the user provided percentiles of 
+  --percentileXList                             the points are reached in the horizontal axis.
+                                                The list of points must be a comma separated list.
+                                                If this parameter is provided along with parameter
+                                                '--percentilex', the latter will be ignored.
+
+  --percentileylist,           #,#,...        Show ticks where the user provided percentiles of
+  --percentileYList                             the points are reached in the vertical axis.
+                                                The list of points must be a comma separated list.
+                                                If this parameter is provided along with parameter
+                                                '--percentiley', the latter will be ignored.
+
+
+ Examples: 
+       graph.py -f /home/gLAB/Example --sfesa --sv /home/Desktop/Figure_Vertical.eps --sv /home/Desktop/Figure_Horizontal.eps
+
+       graph.py -f /home/gLAB/Example --sfesa
+
+
+WORLD MAP / STATION NAME MAP / WORST INTEGRITY RATIO PLOTS:
+  In this mode: One, two or three plots can be generated depending on the input.
+
+  The input file should contain the following fields: station name, geodetic coordinates (in degrees) and the values to be plotted.
+  Parameter "-x": longitude (degrees)
+  Parameter "-y": latitude (degrees)
+
+  For GRAPHIC GENERAL OPTIONS, all the options work as in the default plots
+                               except:
+                                     the setting of "--xmax","--xmin","--ymax","--ymin"  only works 
+                                     properly with the 'Equidistant Cylindrical Projection'.
+
+                                     the option "--Ftitle", add a fractional title, is disabled. 
+
+                                     the options "--xt" and "--yt" (for setting ticks) which are disabled.
+
+                                     the option "--AdjustToMargin" will only take effect on station maps.
+
+  For PLOT DEPENDENT OPTIONS, the options "-f", "-x", "-y", "--ms" work as in the default plots,
+                              while the other options in this part are blocked in this mode.
+
+  For SAVE CURRENT GRAPHIC:
+                               In the case of one plot, it works the same way as for default plots
+                               In the case of two plots, two save paths should be provided. If only one path is provided,
+                               only the vertical map will be saved.
+                               In the case of three plots, three save paths should be provided. If only one path is provided,
+                               only the vertical map will be saved. If only two path are provided, only the vertical and
+                               horizontal maps will be saved.
+
+
+  --map --Map                                 Make a world map plot with the given values.
+
+  --wir, --WIR                                Make a worst integrity ratio plot. This is a world map, but
+                                                sets a fixed scale (with a minimum of 0 and a maximum of 2 
+                                                independently of user input), and a fixed set of colors
+                                                for the colourbar.
+
+  --rv, --ratioV, --RV           <val>        Set the source of the vertical values or worst integrity ratio.
+                                                Identical properties as x,y column in the default plots.
+
+  --rh, --ratioH, --RH           <val>        Set the source of the horizontal values or worst integrity ratio.
+                                                Identical properties as x,y column in the default plots.
+
+  --miv, --MIV                   <val>        Set the source of the vertical MIs.
+                                                Identical properties as x,y column in the default plots.
+
+  --mih, --MIH                   <val>        Set the source of the horizontal MIs.
+                                                Identical properties as x,y column in the default plots.
+
+  --projection, --pj      <projection>        Set the projection of the map. [DEFAULT 'Equidistant Cylindrical Projection']
+                                                User can set the value of projection as 'lcc' or 'lambert' 
+                                                to switch to "Lambert Conformal Projection".
+
+  --cbarMin,--cbarmin,--cmin         #        The minimum value for the colourbar, if no value is provided,
+                                                automatic limits are set.  
+
+  --cbarMax,--cbarmax,--cmax         #        The maximum value for the colourbar, if no value is provided,
+                                                automatic limits are set. 
+
+  --cbarInterval,--cbarN,--cn        #        The value of interval for colourbar's tick[DEFAULT 8]
+
+  --continentColor,--cc        <color>        The continent's colour [DEFAULT 'yellow']
+
+  --lakeColor, --lc            <color>        The lake's colour [DEFAULT 'white']
+
+  --boundaryColor,--bc         <color>        The continent's colour, if no value is provided, 'white' is 
+                                                set as [DEFAULT]
+
+  --mapres, --MapResolution      <val>        Sets the world map resolution. Valid values are 'c', 'l' [DEFAULT],
+                                                'i', 'h' or 'f' (ordered from lower to higher resolution).
+
+  --sn, --staName, --SN          <val>        Set the source for the station name. Setting this value will make a new
+                                                plot with the stations positions. The plot may have the name or a marker
+                                                (or both) in the station coordinates
+
+  --stanetwithnames,                          Add the station name in the station map. This is the default behaviour
+  --staNetWithNames                             if this option ('--stanetwithnames') and marker option ('--stanetwithmarkers') 
+                                                are not set. Also, this option is automatically set if options 
+                                                '--stanetdefaultnamesize', '--stanetdefaultnamecolor', 
+                                                '--stanetdefaultnamealign', '--stanetnamesize', '--stanetnamecolor' or
+                                                '--stanetnamealign' are provided.
+
+  --stanetdefaultnamesize,           #        Change the default letter size for the station names [DEFAULT 9]
+  --staNetDefaultNameSize
+
+  --stanetdefaultnamecolor,    <color>        Change the default letter colour for the station names [DEFAULT blue]
+  --staNetDefaultNameColor
+
+  --stanetdefaultnamealign,  <val1>  <val2>   Change the default letter alignment for the station names. There are two alignments,
+  --staNetDefaultNameAlign                      horizontal and vertical alignment. The two values must be provided, first the
+                                                horizontal alignment and then the vertical alignment.
+                                                The possible values for horizontal alignment are:
+                                                   'left'
+                                                   'right'
+                                                   'center' [DEFAULT]
+
+                                                The possible values for vertical alignment are:
+                                                   'top' [DEFAULT]
+                                                   'bottom'
+                                                   'center' 
+                                                   'baseline'
+
+  --stanetwithmarkers,                        Add a marker for each station in the station map. The marker properties can
+  --staNetWithMarkers                           be set with the following options: '--stanetdefaultmarkertype', 
+                                                '--stanetdefaultmarkersize', '--stanetdefaultmarkercolor'
+                                                and '--stanetmarkersize' shown below. This option is automatically set if any
+                                                of the marker properties option are set. If this option is set but no marker
+                                                properties are set, the default values for the markers are to be a circular
+                                                shape, with blue color and size 5.
+
+  --stanetdefaultmarkertype,     <val>        Change the default marker type [DEFAULT 'o']
+  --staNetDefaultMarkerType                     See parameter '-s' or '--style' for the list of marker types
+
+  --stanetdefaultmarkersize,         #        Change the default marker size [DEFAULT '5']
+  --staNetDefaultMarkerSize
+
+  --stanetdefaultmarkercolor,    <val>        Change the default marker color [DEFAULT 'blue']
+  --staNetDefaultMarkerColor                    See parameter '--color' for the list of colours
+
+  --stanet,--staNetwork,         <val>        Set the source for the station network name. This option is for allowing to add
+  --staNetwork                                  labels in the plot with the station map, as gLAB will be able to read from this
+                                                column to what network each station belongs to.
+
+  --stanetautolabel,                          Add an automatic label for each station network, which will be read from the column 
+  --stanetAutoLabel                            set in parameter '--stanet'
+
+  --stanetlabelnumsta,                        Add to the label of each station network the number of stations read. The number
+  --staNetLabelNumSta                           will added at the end of the label name, adding a space (' ') and the number
+                                                of station between parenthesis. This options works even if user sets a custom
+                                                label for any network.
+
+  --stanetdefaultlabel,        <label>        Change the default label for the station network [DEFAULT 'Other']
+  --staNetDefaultLabel
+
+  --stanetlabel,      <stanetname>  <label>   Set the label for a station network. Two values must be provided:
+  --staNetworkLabel                             the name read from the input data (in the column specified with parameter
+                                                '--stanet') and the label to be applied. To set a label to each
+                                                station network that appears on the file, set this parameter as
+                                                many times as necessary
+
+  --stanetmarkertype,   <stanetname>  <val>   Set the marker type for a station network. Two values must be provided:
+  --staNetworkMarkerType                        the name read from the input data (in the column specified with parameter
+                                                '--stanet') and the marker type to be applied (see parameter '-s' for marker options). 
+                                                In order to set a marker type to each station network that appears on the file, 
+                                                set this parameter as many times as necessary
+
+  --stanetmarkercolor,  <stanetname>  <val>   Set the marker colour for a station network. Two values must be provided:
+  --staNetworkMarkerColor                       the name read from the input data (in the column specified with parameter
+                                                '--stanet') and the marker colour to be applied (see parameter '--cl' for colours). 
+                                                In order to set a marker colour to each station network that appears on the file, 
+                                                set this parameter as many times as necessary
+
+  --stanetmarkersize,   <stanetname>      #   Set the marker size for a station network. Two values must be provided:
+  --staNetworkMarkerSize                        the name read from the input data (in the column specified with parameter
+                                                '--stanet') and the marker size to be applied. 
+                                                In order to set a marker size to each station network that appears on the file, 
+                                                set this parameter as many times as necessary
+
+  --stanetnamecolor,    <stanetname>  <val>   Set the colour for the station name for a given network. All the station name from
+  --staNetNameColor                             the same network will have the same letter colour. Two values must be provided:
+                                                the name read from the input data (in the column specified with parameter
+                                                '--stanet') and the letter colour to be applied. 
+                                                In order to set a letter colour to each station network that appears on the file, 
+                                                set this parameter as many times as necessary
+
+  --stanetnamesize,     <stanetname>      #   Set the letter size for the station name for a given network. All the station name from
+  --staNetNameSize                              the same network will have the same letter size. Two values must be provided:
+                                                the name read from the input data (in the column specified with parameter
+                                                '--stanet') and the letter size to be applied. 
+                                                In order to set a letter size to each station network that appears on the file, 
+                                                set this parameter as many times as necessary
+
+  --stanetnamealign, <stanetname> <val1>  <val2>  Set the letter alignment for the station name for a given network. All the station name
+  --staNetNameAlign                                 from the same network will have the same alignment. Three values must be provided:
+                                                    the name read from the input data (in the column specified with parameter
+                                                    '--stanet') the horizontal and vertical alignment -in this order- (see parameter 
+                                                    '--stanetdefaultnamealign'). In order to set a letter alignment to each station network 
+                                                    that appears on the file, set this parameter as many times as necessary
+
+
+ NOTES on World Maps / Worst Integrity Ratio Maps: 
+    If only one of the parameters '--rh' or '--rv' is given, only the horizontal or vertical plots will be shown. 
+    If both parameters '--rh' or '--rv' are given, two plots will be shown.
+    If any of '--mih' or '--miv' parameters are given. a coloured ring around the coloured circles will appear on the corresponding plot.
+    If only '--sn' parameter is given, a single plot with the station map will be shown.
+    It is recommended to save station name maps in pdf format, as station names will be searchable inside the file.
+    An horizontal label will only fit if no MIs are plotted, as the second colourbar for the MIs will occupy the free space.
+    The European FIR area can also be added to this plots. See option '--fireu' in "SBAS AVAILABILITY" plots below.
+
+ Example:
+       Generate one plot:      graph.py -f /home/gLAB/Example --wir -x 5 -y 7 --rh 139 
+       Generate two plots:     graph.py -f /home/gLAB/Example --wir -x 5 -y 7 --rh 139 --rv 141 --mih 149 --grid off
+       Generate three plots:   graph.py -f /home/gLAB/Example --wir -x 5 -y 7 --rh 139 --rv 141 --sn 3 --mih 149 --miv 151 
+
+ Example for saving the plots: 
+       graph.py -f /home/gLAB/Example --wir  -x 5 -y 7 --rv 141 --miv 151 --rh 139 --mih 149 --xmin -30 --xmax 40 --ymin 25 --ymax 75  --sv /home/Desktop/Figure_V.eps --sv /home/Desktop/Figure_H.eps --sv /home/Desktop/Figure_Station_Map.pdf
+
+SBAS AVAILABILITY, CONTINUITY AND DOP PLOTS:
+
+  In this mode: 
+
+  The input file should have this fixed format (this is gLAB's output format):
+
+  The first three lines have the header with this format (numerical values can vary according to the plot):
+    For SBAS Availability map:
+       #MINLAT MAXLAT  MINLON  MAXLON RESOLUTION REC-HEIGHT    HAL    VAL DoY YEAR NUMEPOCHS GEO-PRN ELEV-MASK
+         25.00  70.00  -30.00   40.00       1.00       0.00  40.00  50.00 315 2016     86400     120      5.00
+       #  LAT     LON AVAIL% NUMAVAIL NUMEPOCHS
+
+    NOTE: Previous versions of gLAB (5.2.0 and below) only had 4 fields in the third header line of the availability
+           map (e.g. '#  LAT     LON AVAIL%'). This old file format is also accepted.
+
+    For SBAS Continuity Risk map:
+       #MINLAT MAXLAT  MINLON  MAXLON RESOLUTION REC-HEIGHT    HAL    VAL DoY YEAR NUMEPOCHS GEO-PRN ELEV-MASK WINDOW_SIZE
+         25.00  70.00  -30.00   40.00       1.00       0.00  40.00  50.00 315 2016     86400     120      5.00          15
+       #  LAT     LON      CONT-RISK    NUMRISK NUMEPOCHS
+
+    NOTE: Previous versions of gLAB (5.2.0 and below) only had 4 fields in the third header line of the continuity risk
+           map (e.g. '#  LAT     LON      CONT-RISK'). This old file format is also accepted.
+
+    For SBAS Maritime Continuity Risk map:
+       #MINLAT MAXLAT  MINLON  MAXLON RESOLUTION REC-HEIGHT    HAL    VAL DoY YEAR NUMEPOCHS GEO-PRN ELEV-MASK WINDOW_SIZE
+         25.00  70.00  -30.00   40.00       1.00       0.00 100000 100000 315 2016     86400     120      5.00         900
+       #  LAT     LON      CONT-RISK NUMDISCONT NUMEPOCHS
+
+    For SBAS Ionosphere Availability map:
+       #MINLAT MAXLAT  MINLON  MAXLON RESOLUTION DoY YEAR NUMEPOCHS GEO-PRN
+         65.00  73.00   30.00   40.00       0.10 255 2016       288     120
+       #  LAT     LON AVAIL% NUMAVAIL NUMEPOCHS
+
+    NOTE: Previous versions of gLAB (5.2.0 and below) only had 4 fields in the third header line of the ionosphere
+           availability map (e.g. '#  LAT     LON AVAIL%'). This old file format is also accepted.
+
+    For SBAS HDOP map:
+       #MINLAT MAXLAT  MINLON  MAXLON RESOLUTION REC-HEIGHT    HAL    VAL DoY YEAR NUMEPOCHS GEO-PRN ELEV-MASK
+         25.00  70.00  -30.00   40.00       1.00       0.00  40.00  50.00 026 2018     86400       0      5.00
+       #  LAT     LON    MEANHDOP       TOTALHDOP NUMEPOCHS    PERCENT95
+
+    For SBAS PDOP map:
+       #MINLAT MAXLAT  MINLON  MAXLON RESOLUTION REC-HEIGHT    HAL    VAL DoY YEAR NUMEPOCHS GEO-PRN ELEV-MASK
+         25.00  70.00  -30.00   40.00       1.00       0.00  40.00  50.00 026 2018     86400       0      5.00
+       #  LAT     LON    MEANPDOP       TOTALPDOP NUMEPOCHS    PERCENT95
+
+    For SBAS GDOP map:
+       #MINLAT MAXLAT  MINLON  MAXLON RESOLUTION REC-HEIGHT    HAL    VAL DoY YEAR NUMEPOCHS GEO-PRN ELEV-MASK
+         25.00  70.00  -30.00   40.00       1.00       0.00  40.00  50.00 026 2018     86400       0      5.00
+       #  LAT     LON    MEANGDOP       TOTALGDOP NUMEPOCHS    PERCENT95
+
+    For SBAS combined DOP map (file with HDOP, PDOP and GDOP):
+       #MINLAT MAXLAT  MINLON  MAXLON RESOLUTION REC-HEIGHT    HAL    VAL DoY YEAR NUMEPOCHS GEO-PRN ELEV-MASK
+         25.00  70.00  -30.00   40.00       1.00       0.00  40.00  50.00 026 2018     86400       0      5.00
+       #  LAT     LON    MEANHDOP       TOTALHDOP    PERCENT95    MEANPDOP       TOTALPDOP    PERCENT95    MEANGDOP       TOTALGDOP    PERCENT95 NUMEPOCHS
+
+
+  Graph program will automatically detect which type of input file is given using the header, 
+  and will read the map size from the header.
+
+  Since the fourth row, each row should provide the following values: latitude, longitude, value.
+
+  For DOP files, the default option is to do only the mean DOP map. To do an additional map with the
+  percentile values, set option '--doppercentileplot'.
+
+  The combined DOP file will make a plot for HDOP, PDOP and GDOP in a single run.
+
+  For GRAPHIC GENERAL OPTIONS, only the option to set the title "--title" is enabled. If non set,
+                               a title will be set automatically. The plot region will be
+                               automatically set from the header values.
+
+  For PLOT DEPENDENT OPTIONS, the options "-f" works the same way as in the default plots,
+                              while the other options in this part are disabled in this mode.
+
+  MULTIPLE PLOTS are disabled in this mode.
+
+  For SAVE CURRENT GRAPHIC,   it works the same way as for the default plots.
+
+  --sbas, --SBAS                              Make a SBAS map
+
+  --bineqcond,                                When assigning values to the bins, the condition thresholds
+  --BinEqCond,                                  will be 'equal or greater than' (for availability and ionosphere
+  --binequalcondition,                          plots) and 'equal or less than' (for continuity and DOP plots)
+  --BinEqualCondition                           instead of 'greater than' or 'less than'
+
+  --disablebineqcond,                         Option '--bineqcond' is by default disabled, but the options
+  --DisableBinEqCond,                           '--sbasserviceformat', '--sbasservicemaritimeformat',
+  --disablebinequalcondition,                   '--sbasservicebinaryformat' or '--sbasservicemaritimebinaryformat'
+  --DisableBinEqualCondition                    will enable '--bineqcond' option. With this option you can force
+                                                the program to keep it disabled.
+
+  --disablenotavailbin,                       Disable the bin at the bottom of the colourbar with the text "NA" (Not Available)
+  --DisableNotAvailBin                        The values in this bin were set according to this criteria:
+                                                  - In availability and ionosphere availability maps, all values
+                                                    larger than 100 or with the number of epochs equal to 0
+                                                  - In continuity and continuity risk maps, all values larger
+                                                    than 1 or with the number of epochs equal to 0
+                                                  - In DOP maps, all values with the number of epochs equal to 0
+
+  --notavailbincolor,          <color>        Set the colour for the "NA" (Not Available) bin. The colour must be
+  --NotAvailBinColor                            using the rgb code with a hash ('#') at the beginning or with one
+                                                values shown in the '--color' option.
+
+  --notavailbintext,            <text>        Set the text for the "NA" (Not Available) bin to be shown in the colourbar.
+  --NotAvailBinText
+
+  --contriskaspercentage,                     In continuity risk and maritime continuity risk plots, show the bin values as the
+  --ContRiskAsPercentage                        continuity percentage instead of the continuity risk. That is, the bin values
+                                                shown will computed as: 100*(1-binvalue), converting also the symbols "<" and
+                                                "<=" to ">" and ">=" respectively.
+
+  --availmapbins,              #,#,...        Set a custom list of bins for the availability plot. The list
+  --AvailMapBins                                must be comma (',') separated. The program will automatically add a
+                                                bin in the beginning as all values smaller or equal than the
+                                                smallest bin value provided. Values may be provided in any order, as
+                                                they will be automatically sorted. 
+                                                DEFAULT: 20.0,50.0,75.0,90.0,95.0,97.5,99.0,99.5,99.9
+
+  --contriskmapbins,           #,#,...        Set a custom list of bins for the continuity risk plot. The list
+  --ContRiskMapBins                             must be comma (',') separated. The program will automatically add a
+                                                bin in the beginning as all values equal or greater than the
+                                                greater bin value provided. Values may be provided in any order, as
+                                                they will be automatically sorted. 
+                                                DEFAULT: 1e-2,7.5e-3,5e-3,2.5e-3,1e-3,7.5e-4,5e-4,2.5e-4,1e-4,1e-5
+
+  --contriskmarmapbins,        #,#,...        Set a custom list of bins for the maritime continuity risk plot. The
+  --ContRiskMarMapBins                          list must be comma (',') separated. The program will automatically add two bins:
+                                                one for all values greater than one ('1') and a bin with all values
+                                                equal or greater than the greater bin value provided but smaller than 1.
+                                                Values may be provided in any order, as they will be automatically sorted. 
+                                                DEFAULT: 1e-2,7.5e-3,5e-3,2.5e-3,1e-3,7.5e-4,5e-4,2.5e-4,1e-4,1e-5
+
+  --ionoavailmapbins,          #,#,...        Set a custom list of bins for the ionosphere availability plot. The list
+  --IonoAvailMapBins                            must be comma (',') separated. The program will automatically add a
+                                                bin in the beginning as all values smaller or equal than the
+                                                smallest bin value provided. Values may be provided in any order, as
+                                                they will be automatically sorted. 
+                                                DEFAULT: 20.0,50.0,75.0,90.0,95.0,97.5,99.0,99.5,99.9
+
+  --hdopmapbins,               #,#,...        Set a custom list of bins for the Horizontal DOP (HDOP) plot. The list
+  --HDOPMapBins                                 must be comma (',') separated. The program will automatically add a
+                                                bin in the beginning as all values greater or equal than the
+                                                greater bin value provided. Values may be provided in any order, as
+                                                they will be automatically sorted. 
+                                                DEFAULT: 4,2
+
+  --pdopmapbins,               #,#,...        Set a custom list of bins for the Position DOP (PDOP) plot. The list
+  --PDOPMapBins                                 must be comma (',') separated. The program will automatically add a
+                                                bin in the beginning as all values greater or equal than the
+                                                greater bin value provided. Values may be provided in any order, as
+                                                they will be automatically sorted. 
+                                                DEFAULT: 6,3.5
+
+  --gdopmapbins,               #,#,...        Set a custom list of bins for the Geometric DOP (GDOP) plot. The list
+  --GDOPMapBins                                 must be comma (',') separated. The program will automatically add a
+                                                bin in the beginning as all values greater or equal than the
+                                                greater bin value provided. Values may be provided in any order, as
+                                                they will be automatically sorted. 
+                                                DEFAULT: 7,5
+
+  --availmapbinstext,   <text1>;<text2>;...   Set a custom list with the text to be shown in the bins of the colourbar
+  --AvailMapBinsText                            for the availability plot. The list must be semicolon (';') separated, 
+                                                with the same number of items plus one as in the default colourbar or
+                                                the same number plus one as set with parameter '--availmapbins'. The 
+                                                additional bin is to account for the bin that gLAB adds for all values
+                                                smaller than the minimum bin provided.
+
+  --contriskmapbinstext, <text1>;<text2>;...  Set a custom list with the text to be shown in the bins of the colourbar
+  --ContRiskMapBinsText                         for the continuity risk plot. The list must be semicolon (';') separated, 
+                                                with the same number of items plus one as in the default colourbar or
+                                                the same number plus one as set with parameter '--contriskmapbins'. The 
+                                                additional bin is to account for the bin that gLAB adds for all values
+                                                greater than the maximum bin provided.
+
+  --contriskmarmapbinstext, <text1>;<text2>;... Set a custom list with the text to be shown in the bins of the colourbar
+  --ContRiskMarMapBinsText                      for the maritime continuity risk plot. The list must be semicolon (';')
+                                                separated,with the same number of items plus one as in the default colourbar
+                                                or the same number plus one as set with parameter '--contriskmarmapbins'.
+                                                The additional bin is to account for the bin that gLAB adds for all values
+                                                greater than the maximum bin provided.
+
+  --ionoavailmapbinstext, <text1>;<text2>;... Set a custom list with the text to be shown in the bins of the colourbar
+  --IonoAvailMapBinsText                        for the ionosphere availability plot. The list must be semicolon (';')
+                                                separated, with the same number of items plus one as in the default colourbar
+                                                or the same number plus one as set with parameter '--ionoavailmapbins'. The 
+                                                additional bin is to account for the bin that gLAB adds for all values
+                                                smaller than the minimum bin provided.
+
+  --hdopmapbinstext,    <text1>;<text2>;...   Set a custom list with the text to be shown in the bins of the colourbar
+  --HDOPMapBinsText                             for Horizontal DOP (HDOP) plot. The list must be semicolon (';') separated, 
+                                                with the same number of items plus one as in the default colourbar or
+                                                the same number plus one as set with parameter '--hdopmapbins'. The 
+                                                additional bin is to account for the bin that gLAB adds for all values
+                                                greater than the maximum bin provided.
+
+  --pdopmapbinstext,    <text1>;<text2>;...   Set a custom list with the text to be shown in the bins of the colourbar
+  --PDOPMapBinsText                             for the Position DOP (PDOP) plot. The list must be semicolon (';') separated, 
+                                                with the same number of items plus one as in the default colourbar or
+                                                the same number plus one as set with parameter '--pdopmapbins'. The 
+                                                additional bin is to account for the bin that gLAB adds for all values
+                                                greater than the maximum bin provided.
+
+  --gdopmapbinstext,    <text1>;<text2>;...   Set a custom list with the text to be shown in the bins of the colourbar
+  --GDOPMapBinsText                             for the Geometric DOP (GDOP) plot. The list must be semicolon (';') separated, 
+                                                with the same number of items plus one as in the default colourbar or
+                                                the same number plus one as set with parameter '--gdopmapbins'. The 
+                                                additional bin is to account for the bin that gLAB adds for all values
+                                                greater than the maximum bin provided.
+
+  --availcontourlevels,        #,#,...        Set the levels list for drawing the availability map contour lines.
+  --AvailContourLevels,                         The list must be comma (',') separated, and the values provided must be
+  --availcontourlines,                           in the list of bins provided with '--availmapbins' parameter (or the
+  --AvailContourLines                           default bins if not provided. Values may be provided in any order,
+                                                as they will be automatically sorted.
+                                                DEFAULT: 95.0,97.5,99.9
+
+  --contriskcontourlevels,     #,#,...        Set the levels list for drawing the continuity risk map contour lines.
+  --ContRiskContourLevels,                      The list must be comma (',') separated, and the values provided must be
+  --contriskcontourlines,                       in the list of bins provided with '--contriskmapbins' parameter (or the
+  --ContRiskContourLines                        default bins if not provided. Values may be provided in any order,
+                                                as they will be automatically sorted.
+                                                DEFAULT: 1e-3,5e-4
+
+  --contriskmarcontourlevels,  #,#,...        Set the levels list for drawing the continuity maritime risk map contour lines.
+  --ContRiskMarContourLevels,                   The list must be comma (',') separated, and the values provided must be in the
+  --contriskmarcontourlines,                    in the list of bins provided with '--contriskmarmapbins' parameter (or the
+  --ContRiskMarContourLines                     default bins if not provided. Values may be provided in any order,
+                                                as they will be automatically sorted.
+                                                DEFAULT: 1e-3,5e-4
+
+  --availbincolors,        <val1>,<val2>,...  Set the colours to be used in the colour bar in a comma (',')  separated list for each
+  --AvailBinColors                              bin in the availability map. The number of colours must be the number of bins
+                                                plus 1 provided in the '--availmapbins' parameter (by default 10 colours). 
+                                                The extra colour is due to gLAB adds an extra bin for all values smaller than 
+                                                the minimum bin provided. The list of colours MUST be ordered, starting with 
+                                                the colour of the smallest bin and ending with the colour of the highest bin. 
+                                                The colour must be set using the rgb code with a hash ('#') at the beginning
+                                                or with one the values shown in the '--color' option.
+
+  --contriskbincolors,     <val1>,<val2>,...  Set the colours to be used in the colour bar in a comma (',') separated list for each
+  --ContRiskBinColors                           bin in the continuity risk map. The number of colours must be the number of bins
+                                                plus 1 provided in the '--contriskmapbins' parameter (by default 10 colours). 
+                                                The extra colour is due to gLAB adds an extra bin for all values greater than 
+                                                the maximum bin provided. The list of colours MUST be ordered, starting with 
+                                                the colour of the smallest bin and ending with the colour of the highest bin. 
+                                                The colour must be set using the rgb code with a hash ('#') at the beginning 
+                                                or with one the values shown in the '--color' option.
+
+  --contriskmarbincolors,  <val1>,<val2>,...  Set the colours to be used in the colour bar in a comma (',') separated list for each
+  --ContRiskMarBinColors                        bin in the maritime continuity risk map. The number of colours must be the number of bins
+                                                plus 2 provided in the '--contriskmarmapbins' parameter (by default 11 colours). 
+                                                gLAB adds an extra bin for all values greater than the maximum bin provided.
+                                                The list of colours MUST be ordered, starting with the colour of the smallest bin
+                                                and ending with the colour of the highest bin. 
+                                                The colour must be set using the rgb code with a hash ('#') at the beginning
+                                                or with one the values shown in the '--color' option.
+                                                For example, the default colours used for the maritime continuity risk map are:
+                                                "#000080,#0000F3,#004DFF,#00B3FF,#29FFCE,#7BFF7B,#CEFF29,#FFC600,#FF6800,#F30900"
+
+  --ionoavailbincolors,    <val1>,<val2>,...  Set the colours to be used in the colour bar in a comma (',') separated list for each bin
+  --IonoAvailBinColors                          in the ionosphere availability map. The number of colours must be the number of bins
+                                                plus 1 provided in the '--ionoavailmapbins' parameter (by default 10 colours). 
+                                                The extra colour is due to gLAB adds an extra bin for all values smaller than 
+                                                the minimum bin provided. The list of colours MUST be ordered, starting with 
+                                                the colour of the smallest bin and ending with the colour of the highest bin. 
+                                                The colour must be set using the rgb code with a hash ('#') at the beginning 
+                                                or with one the values shown in the '--color' option.
+
+  --hdopbincolors,         <val1>,<val2>,...  Set the colours to be used in the colour bar in a comma (',') separated list for each
+  --HDOPBinColors                               bin in the Horizontal DOP (HDOP) map. The number of colours must be the number of bins
+                                                plus 1 provided in the '--hdopmapbins' parameter (by default 10 colours). 
+                                                The extra colour is due to gLAB adds an extra bin for all values greater than 
+                                                the maximum bin provided. The list of colours MUST be ordered, starting with 
+                                                the colour of the smallest bin and ending with the colour of the highest bin. 
+                                                The colour must be set using the rgb code with a hash ('#') at the beginning
+                                                or with one the values shown in the '--color' option.
+
+  --pdopbincolors,         <val1>,<val2>,...  Set the colours to be used in the colour bar in a comma (',') separated list for each
+  --PDOPBinColors                               bin in the Position DOP (PDOP) map. The number of colours must be the number of bins
+                                                plus 1 provided in the '--pdopmapbins' parameter (by default 10 colours). 
+                                                The extra colour is due to gLAB adds an extra bin for all values greater than 
+                                                the maximum bin provided. The list of colours MUST be ordered, starting with 
+                                                the colour of the smallest bin and ending with the colour of the highest bin. 
+                                                The colour must be set using the rgb code with a hash ('#') at the beginning 
+                                                or with one the values shown in the '--color' option.
+
+  --gdopbincolors,         <val1>,<val2>,...  Set the colours to be used in the colour bar in a comma (',') separated list for each
+  --GDOPBinColors                               bin in the Geometric DOP (GDOP) map. The number of colours must be the number of bins
+                                                plus 1 provided in the '--gdopmapbins' parameter (by default 10 colours). 
+                                                The extra colour is due to gLAB adds an extra bin for all values greater than 
+                                                the maximum bin provided. The list of colours MUST be ordered, starting with 
+                                                the colour of the smallest bin and ending with the colour of the highest bin. 
+                                                The colour must be set using the rgb code with a hash ('#') at the beginning 
+                                                or with one the values shown in the '--color' option.
+
+  --sbasserviceformat,                        Set the SBAS maps to an alternative format. In this format, contour lines
+  --SBASServiceFormat                           are disabled by default, but can be enabled by manually setting the contour
+                                                levels with any of these parameters: '--availcontourlevels',
+                                                '--contriskcontourlevels' or '--contriskmarcontourlevels'.
+
+                                                Availability Maps:
+                                                  Bin values: >=99.9,>=99,>=98,>=95,>=90,>=80,>=70,<70
+                                                  Bin colours: #00008b,#0040ff,#00ffff,#00ff00,#ffff00,#ffa500,#ff0000,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                Continuity Risk Maps:
+                                                  Bin values: <=1e-4,<=5e-4,<=1e-3,<=5e-3,<=1e-2,<=2e-2,<=3e-2,>3e-2
+                                                  Bin colours: #00008b,#0040ff,#00ffff,#00ff00,#ffff00,#ffa500,#ff0000,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                Maritime Continuity Risk Maps:
+                                                  Bin values: <=1e-4,<=5e-4,<=1e-3,<=5e-3,<=1e-2,<=2e-2,<=3e-2,>3e-2
+                                                  Bin colours: #00008b,#0040ff,#00ffff,#00ff00,#ffff00,#ffa500,#ff0000,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                Ionosphere Availability Maps:
+                                                  Bin values: >=99.9,>=99,>=98,>=95,>=90,>=80,>=70,<70
+                                                  Bin colours: #00008b,#0040ff,#00ffff,#00ff00,#ffff00,#ffa500,#ff0000,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                HDOP Maps:
+                                                  Bin values: <2,<4,>=4 (same as the default ones)
+                                                  Bin colours: #00008b,#ffa500,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                PDOP Maps:
+                                                  Bin values: <3.5,<6,>=6 (same as the default ones)
+                                                  Bin colours: #00008b,#ffa500,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                GDOP Maps:
+                                                  Bin values: <5,<7,>=7 (same as the default ones)
+                                                  Bin colours: #00008b,#ffa500,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+
+                                                NOTES:
+                                                   - If user manually sets the bin values or bin colours, the user options
+                                                     will prevail
+                                                   - The user change the bin thresholds from ">=" or "<=" to ">" or "<" respectively by
+                                                     setting the option '--disablebineqcond'
+
+  --sbasservicemaritimeformat,                  Set the SBAS maps to an alternative format. In this format, contour lines
+  --SBASServiceMaritimeFormat                     are disabled by default, but can be enabled by manually setting the contour
+                                                levels with any of these parameters: '--availcontourlevels',
+                                                '--contriskcontourlevels' or '--contriskmarcontourlevels'.
+
+                                                Availability Maps:
+                                                  Bin values: >=99.8,>=99.5,>=99,>=97.5,>=95,>=90,>=70,<70
+                                                  Bin colours: #00008b,#0040ff,#00ffff,#00ff00,#ffff00,#ffa500,#ff0000,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                Continuity Risk Maps:
+                                                  Bin values: <=3e-4,<=4e-4,<=5e-4,<=7e-4,<=1e-3,<=1e-2,>1e-1
+                                                  Bin colours: #00008b,#0040ff,#00ffff,#00ff00,#ffff00,#ffa500,#ff0000,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                Maritime Continuity Risk Maps:
+                                                  Bin values: <=3e-4,<=4e-4,<=5e-4,<=7e-4,<=1e-3,<=1e-2,>1e-1
+                                                  Bin colours: #00008b,#0040ff,#00ffff,#00ff00,#ffff00,#ffa500,#ff0000,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                Ionosphere Availability Maps:
+                                                  Bin values: >=99.8,>=99.5,>=99,>=97.5,>=95,>=90,>=70,<70
+                                                  Bin colours: #00008b,#0040ff,#00ffff,#00ff00,#ffff00,#ffa500,#ff0000,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                HDOP Maps:
+                                                  Bin values: <2,<4,>=4 (same as the default ones)
+                                                  Bin colours: #00008b,#ffa500,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                PDOP Maps:
+                                                  Bin values: <3.5,<6,>=6 (same as the default ones)
+                                                  Bin colours: #00008b,#ffa500,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+                                                GDOP Maps:
+                                                  Bin values: <5,<7,>=7 (same as the default ones)
+                                                  Bin colours: #00008b,#ffa500,#8b0000
+                                                  Not Avail bin is enabled and with default colour
+
+                                                NOTES: 
+                                                   - If user manually sets the bin values or bin colours, the user options
+                                                     will prevail
+                                                   - The user change the bin thresholds from ">=" or "<=" to ">" or "<" respectively by
+                                                     setting the option '--disablebineqcond'
+
+  --sbasservicebinaryformat,                  Set the SBAS maps to an alternative format that only has two bins (plus
+  --SBASServiceBinaryFormat                     the 'Not Avail' bin). The bin texts are 'Not \n Compliant' and 'Compliant'
+                                                This format is useful for visually checking if a condition is met or not
+                                                (e.g. availability >=99.8). The user may change the bin value to set the
+                                                desired condition. Also, contour lines are disabled by default, but can be
+                                                enabled by manually setting the contour levels with any of these parameters:
+                                                '--availcontourlevels', '--contriskcontourlevels' or '--contriskmarcontourlevels'.
+                                                The default values for this format are:
+
+                                                Availability Maps:
+                                                  Bin values: >=99.9,<99.9
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "          >=99.9%" (the spaces are for padding the text to the right)
+                                                Continuity Risk Maps:
+                                                  Bin values: <=1e-4,>1e-4
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "           <=1e-4" (the spaces are for padding the text to the right)
+                                                Maritime Continuity Risk Maps:
+                                                  Bin values: <=1e-4,>1e-4
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "           <=1e-4" (the spaces are for padding the text to the right)
+                                                Ionosphere Availability Maps:
+                                                  Bin values: >=99.9,<99.9
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "          >=99.9%" (the spaces are for padding the text to the right)
+                                                HDOP Maps:
+                                                  Bin values: <4,>=4 
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "  <4" (the spaces are for padding the text to the right)
+                                                PDOP Maps:
+                                                  Bin values: <6,>=6 
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "  <6" (the spaces are for padding the text to the right)
+                                                GDOP Maps:
+                                                  Bin values: <7,>=7 
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "  <7" (the spaces are for padding the text to the right)
+
+                                                NOTES: 
+                                                   - If user manually sets the bin values, bin colours or bin texts, the user options will prevail
+                                                   - If user changes the bin value, the colourbar title will show the user defined bin value
+                                                   - The user change the bin thresholds from ">=" or "<=" to ">" or "<" respectively by
+                                                     setting the option '--disablebineqcond'
+
+  --sbasservicemaritimebinaryformat,          Set the SBAS maps to an alternative format that only has two bins (plus
+  --SBASServiceMaritimeBinaryFormat             the 'Not Avail' bin). The bin texts are 'Not \n Compliant' and 'Compliant'
+                                                This format is useful for visually checking if a condition is met or not
+                                                (e.g. availability >=99.8). The user may change the bin value to set the
+                                                desired condition. Also, contour lines are disabled by default, but can be
+                                                enabled by manually setting the contour levels with any of these parameters:
+                                                '--availcontourlevels', '--contriskcontourlevels' or '--contriskmarcontourlevels'.
+                                                The default values for this format are:
+
+                                                Availability Maps:
+                                                  Bin values: >=99.8,<99.8
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "          >=99.8%" (the spaces are for padding the text to the right)
+                                                Continuity Risk Maps:
+                                                  Bin values: <=3e-4,>3e-4
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "           <=3e-4" (the spaces are for padding the text to the right)
+                                                Maritime Continuity Risk Maps:
+                                                  Bin values: <=3e-4,>3e-4
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "           <=3e-4" (the spaces are for padding the text to the right)
+                                                Ionosphere Availability Maps:
+                                                  Bin values: >=99.8,<99.8
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "          >=99.8%" (the spaces are for padding the text to the right)
+                                                HDOP Maps:
+                                                  Bin values: <4,>=4 
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "  <4" (the spaces are for padding the text to the right)
+                                                PDOP Maps:
+                                                  Bin values: <6,>=6 
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "  <6" (the spaces are for padding the text to the right)
+                                                GDOP Maps:
+                                                  Bin values: <7,>=7 
+                                                  Bin colours: #ffffff,#006400
+                                                  Colourbar title: "  <7" (the spaces are for padding the text to the right)
+
+                                                NOTES: 
+                                                   - If user manually sets the bin values, bin colours or bin texts, the user options will prevail
+                                                   - If user changes the bin value, the colourbar title will show the user defined bin value
+                                                   - The user change the bin thresholds from ">=" or "<=" to ">" or "<" respectively by
+                                                     setting the option '--disablebineqcond'
+
+  --availcbartitle,             <text>        Set the title for the colourbar in the availability maps
+  --AvailCbarTitle
+
+  --contriskcbartitle,          <text>        Set the title for the colourbar in the continuity risk maps
+  --ContRiskCbarTitle
+
+  --contriskmarcbartitle,       <text>        Set the title for the colourbar in the maritime continuity risk maps
+  --ContRiskMarCbarTitle
+
+  --ionoavailcbartitle,         <text>        Set the title for the colourbar in the ionosphere availability maps
+  --IonoAvailCbarTitle
+
+  --hdopcbartitle,              <text>        Set the title for the colourbar in the Horizontal DOP (HDOP) maps
+  --HDOPCbarTitle
+
+  --pdopcbartitle,              <text>        Set the title for the colourbar in the Position DOP (PDOP) maps
+  --PDOPCbarTitle
+
+  --gdopcbartitle,              <text>        Set the title for the colourbar in the Geometric DOP (GDOP) maps
+  --GDOPCbarTitle
+
+  --nocontourlines,                           Do not show contour lines in Availability, Continuity Risk or 
+  --NoContourLines,                             Maritime Continuity Risk Maps
+  --nocontourlevels,                            
+  --NoContourLevels
+
+  --nocbarpercent, --NoCbarPercent            Do not put the '%' sign in top of the colourbar
+
+  --doppercentileplot,                        In DOP maps, also do percentile DOP plots
+  --DOPPercentilePlot
+
+  --CbarLabel, --cbarlabel      <text>        Add a label next to the colourbar
+
+  --SBASSystemname,             <text>        Set the name of the SBAS system in the title, replacing the default
+  --sbassystemname                              "SBAS" text in the default title.
+
+  --PRNtext, --prntext          <text>        Replace the "PRN <number>" text in the default title with the given
+                                              text. This is useful when the plot is from multiple PRNs, where the
+                                              default PRN is 0.
+
+  --PRNtextnewline, --prntextnewline          Move the "PRN <number>" to a newline below (instead of being next to
+                                                the alarm limits and the pixel resolution)
+
+  --firuser, --FIRUser      <filename>        Add a user defined FIR area through a text file. The text file must contain
+                                                no header and each line at least two columns (separated by any number of spaces):
+                                                one with the longitude and another with the latitude (in degrees, in ellipsoidal
+                                                coordinates). Additional columns will be ignored. Also, lines starting with a 
+                                                hash ('#') will be ignored.
+                                                In order to be able to compute the degradation percentage inside the area, the
+                                                FIR area must be closed by repeating the initial point at the end of the file.
+
+                                                For setting multiple FIR areas, set this parameter as many times as necessary
+
+  --fireu, --FIREu, --FIREU                   Add the external borders of the European FIR (Flight Information Region)
+                                                area in the map (the European FIR coordinates are hardcoded in the program)
+
+  --firconus, --FIRCONUS                      Add the external borders of the CONUS FIR (Flight Information Region)
+                                                area in the map (the CONUS FIR coordinates are hardcoded in the program)
+
+  --firalaska, --FIRAlaska                    Add the external borders of the Alaska FIR (Flight Information Region)
+                                                area in the map (the Alaska FIR coordinates are hardcoded in the program)
+
+  --fircanada, --FIRCanada                    Add the external borders of the Canada FIR (Flight Information Region)
+                                                area in the map (the Canada FIR coordinates are hardcoded in the program)
+
+  --firmexico, --FIRMexico                    Add the external borders of the Mexico FIR (Flight Information Region)
+                                                area in the map (the Mexico FIR coordinates are hardcoded in the program)
+
+  --firlinetype,                 <val>        Set the linewidth for FIR area border (see option '-s') [DEFAULT '--']
+  --FIRLineType                                 Set this option for each user defined FIR area drawn (option '--firuser').
+                                                If only one FIR area is drawn (including the European FIR area), this option
+                                                will be set for that area (so it keeps compatibility with previous versions).
+
+  --firlinetypeeu,               <val>        Same as '--firlinetype', but only applies to the European FIR area defined in
+  --FIRLineTypeEu                               option '--fireu'.
+
+  --firlinetypeconus,            <val>        Same as '--firlinetype', but only applies to the CONUS FIR area defined in
+  --FIRLineTypeCONUS                            option '--firconus'.
+
+  --firlinetypealaska,           <val>        Same as '--firlinetype', but only applies to the Alaska FIR area defined in
+  --FIRLineTypeAlaska                           option '--firalaska'.
+
+  --firlinetypecanada,           <val>        Same as '--firlinetype', but only applies to the Canada FIR area defined in
+  --FIRLineTypeCanada                           option '--fircanada'.
+
+  --firlinetypemexico,           <val>        Same as '--firlinetype', but only applies to the Mexico FIR area defined in
+  --FIRLineTypeMexico                           option '--firmexico'.
+
+  --firlinewidth,                    #        Set the linewidth for FIR area border [DEFAULT 2]
+  --FIRLineWidth                                Set this option for each user defined FIR area drawn (option '--firuser').
+                                                If only one FIR area is drawn (including the European FIR area), this option
+                                                will be set for that area (so it keeps compatibility with previous versions).
+
+  --firlinewidtheu,                  #        Same as '--firlinewidth', but only applies to the European FIR area defined in
+  --FIRLineWidthEu                              option '--fireu'.
+
+  --firlinewidthconus,               #        Same as '--firlinewidth', but only applies to the CONUS FIR area defined in
+  --FIRLineWidthCONUS                           option '--firconus'.
+
+  --firlinewidthalaska,              #        Same as '--firlinewidth', but only applies to the Alaska FIR area defined in
+  --FIRLineWidthAlaska                          option '--firalaska'.
+
+  --firlinewidthcanada,              #        Same as '--firlinewidth', but only applies to the Canada FIR area defined in
+  --FIRLineWidthCanada                          option '--fircanada'.
+
+  --firlinewidthmexico,              #        Same as '--firlinewidth', but only applies to the Mexico FIR area defined in
+  --FIRLineWidthMexico                          option '--firmexico'.
+
+  --firlinecolor,              <color>        Set the colour for the FIR area border [DEFAULT 'white' for availability maps,
+  --FIRLineColor                                                                              'black' for world maps]
+                                                Set this option for each user defined FIR area drawn (option '--firuser').
+                                                If only one FIR area is drawn (including the European FIR area), this option
+                                                will be set for that area (so it keeps compatibility with previous versions).
+
+  --firlinecoloreu,            <color>        Same as '--firlinecolor', but only applies to the European FIR area defined in
+  --FIRLineColorEu                              option '--fireu'.
+
+  --firlinecolorconus,         <color>        Same as '--firlinecolor', but only applies to the CONUS FIR area defined in
+  --FIRLineColorCONUS                           option '--firconus'.
+
+  --firlinecoloralaska,        <color>        Same as '--firlinecolor', but only applies to the Alaska FIR area defined in
+  --FIRLineColorAlaska                          option '--firalaska'.
+
+  --firlinecolorcanada,        <color>        Same as '--firlinecolor', but only applies to the Canada FIR area defined in
+  --FIRLineColorCanada                          option '--fircanada'.
+
+  --firlinecolormexico,        <color>        Same as '--firlinecolor', but only applies to the Mexico FIR area defined in
+  --FIRLineColorMexico                          option '--firmexico'.
+
+  --firmarkersize,                   #        Set the marker size for FIR area border [DEFAULT 5]
+  --FIRMarkerSize                               Set this option for each user defined FIR area drawn (option '--firuser').
+                                                If only one FIR area is drawn (including the European FIR area), this option
+                                                will be set for that area (so it keeps compatibility with previous versions).
+
+  --firmarkersizeeu,                 #        Same as '--firmarkersize', but only applies to the European FIR area defined in
+  --FIRMarkerSizeEu                             option '--fireu'.
+
+  --firmarkersizeconus,              #        Same as '--firmarkersize', but only applies to the CONUS FIR area defined in
+  --FIRMarkerSizeCONUS                          option '--firconus'.
+
+  --firmarkersizealaska,             #        Same as '--firmarkersize', but only applies to the Alaska FIR area defined in
+  --FIRMarkerSizeAlaska                         option '--firalaska'.
+
+  --firmarkersizecanada,             #        Same as '--firmarkersize', but only applies to the Canada FIR area defined in
+  --FIRMarkerSizeCanada                         option '--fircanada'.
+
+  --firmarkersizemexico,             #        Same as '--firmarkersize', but only applies to the Mexico FIR area defined in
+  --FIRMarkerSizeMexico                         option '--firmexico'.
+
+  --nofirborder,                     #        Do not show the user defined FIR in the map. This option is useful if the user
+  --NoFIRBorder                                 is only interested in computing the degradation percentage inside the FIR
+                                                area (and printing it in the plot), but not the FIR area border itself.
+                                                The parameter must come with the number of the user defined FIR that shall
+                                                not be plotted. For instance, if user defines two FIR areas, and the second
+                                                FIR area does not have to be plotted, then the parameter should be
+                                                '--nofirborder 2'. This parameter must be provided for each user defined FIR
+                                                area that shall not be plotted.
+
+                                                NOTE: If the number provided is 0, all user defined FIR areas will not be plotted
+
+  --nofirbordereu,                            Same as '--nofirborder', but only applies to the European FIR area defined in
+  --NoFIRBorderEu                               option '--fireu'.
+
+  --nofirborderconus,                         Same as '--nofirborder', but only applies to the CONUS FIR area defined in
+  --NoFIRBorderCONUS                            option '--firconus'.
+
+  --nofirborderalaska,                        Same as '--nofirborder', but only applies to the Alaska FIR area defined in
+  --NoFIRBorderAlaska                           option '--firalaska'.
+
+  --nofirbordercanada,                        Same as '--nofirborder', but only applies to the Canada FIR area defined in
+  --NoFIRBorderCanada                           option '--fircanada'.
+
+  --nofirbordermexico,                        Same as '--nofirborder', but only applies to the Mexico FIR area defined in
+  --NoFIRBorderMexico                           option '--firmexico'.
+
+  --firdegradation,                           Compute the availability degradation inside the FIR area and plot
+  --FIRDegradation                              it in the map
+
+  --firdegtextheader,           <text>         Set the header for the FIR availability degradation. This text will be printed
+  --FIRDegTextHeader                             once for each availability area defined by the user, on top of the degradation
+                                                 text. Set this option for each user defined FIR area (option '--firuser').
+                                                If option '--firdegtexttable' is set, it will change the header title for this FIR
+
+  --firdegtextheadereu,         <text>         Set the header for the European FIR availability degradation. This text will be
+  --FIRDegTextHeaderEu                           printed on top of the European area degradation text.
+                                                If option '--firdegtexttable' is set, it will change the header title for this FIR
+
+  --firdegtextheaderconus,      <text>         Set the header for the CONUS FIR availability degradation. This text will be
+  --FIRDegTextHeaderCONUS                        printed on top of the CONUS area degradation text.
+                                                If option '--firdegtexttable' is set, it will change the header title for this FIR
+
+  --firdegtextheaderalaska,     <text>         Set the header for the Alaska FIR availability degradation. This text will be
+  --FIRDegTextHeaderAlaska                       printed on top of the Alaska area degradation text.
+                                                If option '--firdegtexttable' is set, it will change the header title for this FIR
+
+  --firdegtextheadercanada,     <text>         Set the header for the Canada FIR availability degradation. This text will be
+  --FIRDegTextHeaderCanada                       printed on top of the Canada area degradation text.
+                                                If option '--firdegtexttable' is set, it will change the the header title for this FIR
+
+  --firdegtextheadermexico,     <text>         Set the header for the Mexico FIR availability degradation. This text will be
+  --FIRDegTextHeaderMexico                       printed on top of the Mexico area degradation text.
+                                                If option '--firdegtexttable' is set, it will change the header title for this FIR
+
+  --firdegtextheaderfirsum,     <text>         Set the header for all FIR availability degradation. This text will be
+  --FIRDegTextHeaderFIRSum                       printed on top of all FIR area degradation text.
+                                                 This option also sets '--firsumdeg'. 
+                                                If option '--firdegtexttable' is set, it will change the header title for this FIR
+
+  --firdegtextfooter,           <text>         Set the footer for the FIR availability degradation. This text will be printed
+  --FIRDegTextFooter                             once for each availability area defined by the user, below the last degradation
+                                                text. Set this option for each user defined FIR area drawn (option '--firuser').
+
+  --firdegtextfootereu,         <text>         Set the footer for the European FIR availability degradation. This text will be
+  --FIRDegTextFooterEu                           printed below the European area degradation text.
+
+  --firdegtextfooterconus,      <text>         Set the footer for the CONUS FIR availability degradation. This text will be
+  --FIRDegTextFooterCONUS                        printed below the CONUS area degradation text.
+
+  --firdegtextfooteralaska,     <text>         Set the footer for the Alaska FIR availability degradation. This text will be
+  --FIRDegTextFooterAlaska                       printed below the Alaska area degradation text.
+
+  --firdegtextfootercanada,     <text>         Set the footer for the Canada FIR availability degradation. This text will be
+  --FIRDegTextFooterCanada                       printed below the Canada area degradation text.
+
+  --firdegtextfootermexico,     <text>         Set the footer for the Mexico FIR availability degradation. This text will be
+  --FIRDegTextFooterMexico                       printed below the Mexico area degradation text.
+
+  --firdegtextfooterfirsum,     <text>         Set the footer for all FIR availability degradation. This text will be
+  --FIRDegTextFooterFIRSum                       printed below the all FIR area degradation text.
+                                                 This option also sets '--firsumdeg'. 
+
+  --firdegtext,                 <text>        Set the text for the FIR availability degradation (only if option '--firdegtexttable'
+  --FIRDegText                                  is not set).  This text will be printed for each bin defined with parameter
+                                                '--firdegtextbins', or if none defined, using the bin at the top of the colourbar.  
+                                                The default text is:
+                                                  '>{2:.1f}: {0:.2f}%
+                                                   <={2:.1f}: {1:.2f}%'
+                                                Note that '{0:.2f} sets to write the availability percentage value with 
+                                                two decimals, '{1:.2f}' sets to write the unavailability percentage
+                                                with two decimals and {2:.1f} sets to write the current bin value with
+                                                one decimal. If any of these are not set, the value missing will not
+                                                be printed. For example, to print only the availability percentage with
+                                                one decimal and no other text but a percentage, the string would be: 
+                                                '{0:.1f}%'
+                                                For example, to print the unavailability percentage with one decimal to get
+                                                text such as "<99.9: 1.2%", the string would be: '<{2:.1f}: {1:.1f}%'
+
+                                                NOTES: 
+                                                 - To print a literal curly-brace ('{' or '}'), set double number of curly
+                                                braces. For example, if the desired text is 'Avail {80%}', the string to be
+                                                passed by parameter shall be 'Avail {{{0:.0f}%}}'.
+
+                                                 - The total number of points inside the FIR area, the number of points over
+                                                the bin value and below the bin value (inside the FIR area) can be also printed
+                                                (the values used to compute the percentages). Use the following formats:
+                                                  {0:.1f} -> Percentage of points over the bin value inside the FIR area
+                                                  {1:.1f} -> Percentage of points below the bin value inside the FIR area
+                                                  {2:.1f} -> Value of the current bin (for continuity risk bins, use
+                                                               the exponential format, for instance: {2:.1e})
+                                                  {3:d} -> Number of points over the bin value inside the FIR area
+                                                  {4:d} -> Number of points below the bin value inside the FIR area
+                                                  {5:d} -> Total number of points inside the FIR area
+                                                  {6:d} -> Total number of points in the whole plot
+
+                                                Set this option for each user defined FIR area drawn (option '--firuser').
+
+  --firdegtexteu,               <text>        Same as '--firdegtext', but only applies to the European FIR area defined in
+  --FIRDegTextEu                                option '--fireu'.
+
+  --firdegtextconus,            <text>        Same as '--firdegtext', but only applies to the CONUS FIR area defined in
+  --FIRDegTextCONUS                             option '--firconus'.
+
+  --firdegtextalaska,           <text>        Same as '--firdegtext', but only applies to the Alaska FIR area defined in
+  --FIRDegTextAlaska                            option '--firalaska'.
+
+  --firdegtextcanada,           <text>        Same as '--firdegtext', but only applies to the Canada FIR area defined in
+  --FIRDegTextCanada                            option '--fircanada'.
+
+  --firdegtextmexico,           <text>        Same as '--firdegtext', but only applies to the Mexico FIR area defined in
+  --FIRDegTextMexico                            option '--firmexico'.
+
+  --firdegtextfirsum,           <text>        Same as '--firdegtext', but applies to the degradation which is the total sum
+  --FIRDegTextFIRSum                            of all FIR areas defined and set to be added.
+                                                When setting this option (computing the total degradation of all FIR areas),
+                                                the bins used in each FIR area must be the same for all of them. 
+                                                This option also sets '--firsumdeg'. 
+
+  --firsumdeg,                                Compute the total degradation for all FIR areas defined and print the result.
+  --FIRSumDeg                                   If any of the options '--firdegtextfirsum', '--firdegtextsizefirsum',
+                                                '--firdegtextcolorfirsum' or '--firdegtextpositionfirsum' are set, default
+                                                values will be set. 
+
+                                                NOTES:
+                                                 - If none of these options '--firsumdegeu', '--firsumdegconus',
+                                                   '--firsumdegAlaska', '--firsumdegcanada', '--firsumdegmexico',
+                                                   '--firsumdeguserfir' are provided, it will select all FIR areas enabled.
+                                                   Otherwise, if any of these options are provided, only the selected FIR
+                                                   areas will be used
+
+                                                 - If several FIR areas overlap, each overlapped point will count only once,
+                                                   and the value used will be the best of all FIRs (as it is enough for any
+                                                   area in the map to be covered by one system or GEO).
+                                                   
+                                                 - If this option is set and the degradation text is not printed in a table,
+                                                   all degradation bins must have the same values.
+
+                                                 - If option '--firsumdegtexttitle' is not set. the default title is "All FIRs".
+
+  --firsumdegeu,                              Select Eu FIR area to be added to the total degradation sum.
+  --FIRSumDegEu
+
+  --firsumdegconus,                           Select CONUS FIR area to be added to the total degradation sum.
+  --FIRSumDegCONUS
+
+  --firsumdegalaska,                          Select Alaska FIR area to be added to the total degradation sum.
+  --FIRSumDegAlaska
+
+  --firsumdegcanada,                          Select Canada FIR area to be added to the total degradation sum.
+  --FIRSumDegCanada
+
+  --firsumdegmexico,                          Select Mexico FIR area to be added to the total degradation sum.
+  --FIRSumDegMexico
+
+  --firsumdeguserfir,          #,#,...        Select user defined FIR areas (defined with parameter '--firuser') to be added to the
+  --FIRSumDegUserFIR                            total degradation sum (in a comma separated list). 
+                                              If value is 0, it will select all user defined FIR areas.
+
+  --firdegtextbins,            #,#,...        Set the bins for which the degradation will be computed and written (using the
+  --FIRDegTextBins                              text provided with '--firdegtext' or the default value). The bins values must
+                                                be comma (',') separated, and must be any of the bins provided with parameters
+                                                '--availmapbins', '--contriskmapbins', '--contriskmarmapbins','--ionoavailmapbins',
+                                                '--hdopmapbins', '--pdopmapbins' or '--gdopmapbins'. The order is not important
+                                                as they will be automatically sorted.
+
+                                                NOTES: 
+                                                 - If option '--contriskaspercentage' is set and it is a Continuity Risk or
+                                                   Maritime Continuity Risk plot, the bins can also be set as a percentage.
+
+                                                 - If option '--firdegtexttable' is set, this parameter will set the bin
+                                                   values of the table
+
+
+  --firdegtextbinseu,          #,#,...        Same as '--firdegtextbins', but only applies to the European FIR area defined in
+  --FIRDegTextBinsEu                            option '--fireu'.
+
+  --firdegtextbinsconus,       #,#,...        Same as '--firdegtextbins', but only applies to the CONUS FIR area defined in
+  --FIRDegTextBinsCONUS                         option '--firconus'.
+
+  --firdegtextbinsalaska,      #,#,...        Same as '--firdegtextbins', but only applies to the Alaska FIR area defined in
+  --FIRDegTextBinsAlaska                        option '--firalaska'.
+
+  --firdegtextbinscanada,      #,#,...        Same as '--firdegtextbins', but only applies to the Canada FIR area defined in
+  --FIRDegTextBinsCanada                        option '--fircanada'.
+
+  --firdegtextbinsmexico,      #,#,...        Same as '--firdegtextbins', but only applies to the Mexico FIR area defined in
+  --FIRDegTextBinsMexico                        option '--firmexico'.
+
+  --firdegtextsize,                  #        Set the text size for the FIR availability degradation [DEFAULT 5]
+  --FIRDegTextSize                              Set this option for each user defined FIR area drawn (option '--firuser').
+                                                If only one FIR area is drawn (including the European FIR area), this option
+                                                will be set for that area (so it keeps compatibility with previous versions).
+
+                                                NOTE: If option '--firdegtexttable' is set, this parameter will set the text
+                                                size of the table
+
+  --firdegtextsizeeu,                #        Same as '--firdegtextsize', but only applies to the European FIR area defined in
+  --FIRDegTextSizeEu                            option '--fireu'.
+
+  --firdegtextsizeconus,             #        Same as '--firdegtextsize', but only applies to the CONUS FIR area defined in
+  --FIRDegTextSizeCONUS                         option '--firconus'.
+
+  --firdegtextsizealaska,            #        Same as '--firdegtextsize', but only applies to the Alaska FIR area defined in
+  --FIRDegTextSizeAlaska                        option '--firalaska'.
+
+  --firdegtextsizecanada,            #        Same as '--firdegtextsize', but only applies to the Canada FIR area defined in
+  --FIRDegTextSizeCanada                        option '--fircanada'.
+
+  --firdegtextsizemexico,            #        Same as '--firdegtextsize', but only applies to the Mexico FIR area defined in
+  --FIRDegTextSizeMexico                        option '--firmexico'.
+
+  --firdegtextsizefirsum,            #        Same as '--firdegtextsize', but only applies to the text for the sum of the
+  --FIRDegTextSizeFIRSum                        degradation for all of the FIR areas defined
+                                                This option also sets '--firsumdeg'. 
+
+  --firdegtextcolor,           <color>        Set the text colour for the FIR availability degradation [DEFAULT 'white']
+  --FIRDegTextColor                             Set this option for each user defined FIR area drawn (option '--firuser').
+                                                If only one FIR area is drawn (including the European FIR area), this option
+                                                will be set for that area (so it keeps compatibility with previous versions).
+
+                                                NOTE: If option '--firdegtexttable' is set, this parameter will set the text
+                                                colour of the table
+
+  --firdegtextcoloreu,         <color>         Same as '--firdegtextcolor', but only applies to the European FIR area defined in
+  --FIRDegTextColorEu                            option '--fireu'.
+
+  --firdegtextcolorconus,      <color>         Same as '--firdegtextcolor', but only applies to the CONUS FIR area defined in
+  --FIRDegTextColorCONUS                         option '--firconus'.
+
+  --firdegtextcoloralaska,     <color>         Same as '--firdegtextcolor', but only applies to the Alaska FIR area defined in
+  --FIRDegTextColorAlaska                        option '--firalaska'.
+
+  --firdegtextcolorcanada,     <color>         Same as '--firdegtextcolor', but only applies to the Canada FIR area defined in
+  --FIRDegTextColorCanada                        option '--fircanada'.
+
+  --firdegtextcolormexico,     <color>         Same as '--firdegtextcolor', but only applies to the Mexico FIR area defined in
+  --FIRDegTextColorMexico                        option '--firmexico'.
+
+  --firdegtextcolorfirsum,     <color>         Same as '--firdegtextcolor', but only applies to the text for the sum of the
+  --FIRDegTextColorFIRSum                        degradation for all of the FIR areas defined.
+                                                 This option also sets '--firsumdeg'. 
+
+  --firdegtextposition,            #,#        Set the text position for the FIR availability degradation.
+  --FIRDegTextPosition                          Position must be given in x and y coordinates, separated by a comma (',') 
+                                                (for example "0.3,0.5"). The coordinate are respect to the lower
+                                                left corner of the plot [DEFAULT 0.245,0.88]
+                                                Set this option for each user defined FIR area drawn (option '--firuser').
+                                                If only one FIR area is drawn (including the European FIR area), this option
+                                                will be set for that area (so it keeps compatibility with previous versions).
+
+                                                NOTE: If option '--firdegtexttable' is set, this parameter will set the position
+                                                position of the table
+
+  --firdegtextpositioneu,          #,#        Same as '--firdegtextposition', but only applies to the European FIR area defined in
+  --FIRDegTextPositionEu                         option '--fireu'.
+
+  --firdegtextpositionconus,       #,#        Same as '--firdegtextposition', but only applies to the CONUS FIR area defined in
+  --FIRDegTextPositionCONUS                      option '--firconus'.
+
+  --firdegtextpositionalaska,      #,#        Same as '--firdegtextposition', but only applies to the Alaska FIR area defined in
+  --FIRDegTextPositionAlaska                     option '--firalaska'.
+
+  --firdegtextpositioncanada,      #,#        Same as '--firdegtextposition', but only applies to the Canada FIR area defined in
+  --FIRDegTextPositionCanada                     option '--fircanada'.
+
+  --firdegtextpositionmexico,      #,#        Same as '--firdegtextposition', but only applies to the Mexico FIR area defined in
+  --FIRDegTextPositionMexico                     option '--firmexico'.
+
+  --firdegtextpositionfirsum,      #,#        Same as '--firdegtextposition', but only applies to the text for the sum of the
+  --FIRDegTextPositionFIRSum                     degradation for all of the FIR areas defined.
+                                                 This option also sets '--firsumdeg'. 
+
+  --nofirdegtext,              #,#,...        Do not print the degradation text in the map. This option is useful if the user
+  --NoFIRDegText                                is only interested in showing the FIR border but does not want any degradation
+                                                text to be printed (this FIR will also be skipped in the degradation table if
+                                                option '--firdegtexttable').
+                                                The parameter must come with a comma separated list with the number of the user
+                                                defined FIR that shall not have degradation text. For instance, if user defines
+                                                two FIR areas, and the second FIR area does not have to be plotted, then the
+                                                parameter should be '--nofirdegtext 2'.
+
+                                                NOTE: If the number provided is 0, all user defined FIR areas will not have
+                                                degradation text printed.
+
+  --nofirdegtexteu,                           Same as '--nofirdegtext', but only applies to the European FIR area defined in
+  --NoFIRDegTextEu                              option '--fireu'.
+
+  --nofirdegtextconus,                        Same as '--nofirdegtext', but only applies to the CONUS FIR area defined in
+  --NoFIRDegTextCONUS                           option '--firconus'.
+
+  --nofirdegtextalaska,                       Same as '--nofirdegtext', but only applies to the Alaska FIR area defined in
+  --NoFIRDegTextAlaska                          option '--firalaska'.
+
+  --nofirdegtextcanada,                       Same as '--nofirdegtext', but only applies to the Canada FIR area defined in
+  --NoFIRDegTextCanada                          option '--fircanada'.
+
+  --nofirdegtextmexico,                       Same as '--nofirdegtext', but only applies to the Mexico FIR area defined in
+  --NoFIRDegTextMexico                          option '--firmexico'.                                                                                       
+
+  --firdegtextmonospacefont,                  Set the FIR degradation type (for all FIRs texts in the plots) font to monospace.
+  --FIRDegTextMonospaceFont                     The monospace font preserves the alignment of text (default 'sans-serif' font has,
+                                                for instance, different widths for '1' and '0' characters). The monospace font
+                                                is always used when option '--firdegtexttable' is set.
+
+  --firdegtexttable,                          Show all degradation text FIR values in a table.
+  --FIRDegTextTable                             The names for the user defined areas will be the filename (without extension). 
+                                                Each row of data will be for each bin defined with parameter '--firdegtextbins', 
+                                                and each column will be a different FIR area. Use parameters '--firdegtextsize', 
+                                                '--firdegtextcolor' and '--firdegtextposition' for setting its properties. If
+                                                these parameters are set multiple times, the values provided the first time will
+                                                prevail.
+
+  --printfirdegtext,                          Print the degradation text to standard output (does not work on Windows).
+  --PrintFIRDegText                             If the FIR values are shown in table format (parameter '--firdegtexttable' is set),
+                                                the whole table will be printed. Otherwise, each line of data will have its name
+                                                of the FIR region prepended to the line, so as it can be distinguished from which
+                                                FIR regions the current line belongs to. This option is compatible with
+                                                '--writetofilefirdegtext' option.
+                                                NOTE: Output text is encoded with 'utf-8'.
+
+  --writetofilefirdegtext,  <filename>        Same as '--printfirdegtext' option, but instead of printing the FIR values to 
+  --WriteToFileFIRDegText                       standard output, it will be written to the file provided (the output file
+                                                will be truncated). This option is compatible with '--printfirdegtext' option.
+                                                NOTE: Output text is encoded with 'utf-8'.
+
+  --onlyprintfirdegtext,                      Do not show the plots, just print the degradation text to standard output or to a file
+  --OnlyPrintFIRDegText                         (as in options '--printfirdegtext' and '--writetofilefirdegtext'). If option '--sv'
+                                                is set (save picture to file), then this option has no effect, as with '--sv' option 
+                                                plots are not shown.
+
+  --sbasplotsize,                  #,#        Set the plotting area size, by providing the horizontal and vertical
+  --SBASPlotSize                                size (in centimetres). The two values must be comma (',') separated.
+                                                [DEFAULT 20.32,15.24]
+
+  --sbastopfiguremargin,             #        Set the top figure margin by providing the fraction of image size
+  --SBASTopFigureMargin                         to be left as margin (starting from the top). The range values are
+                                                [0-0.5], being 0 no top margin. Adding top margin makes the figure
+                                                move downwards in the plot area (shrinking if necessary).
+
+  --sbasbottomfiguremargin,          #        Set the bottom figure margin by providing the fraction of image size
+  --SBASBottomFigureMargin                      to be left as margin (starting from the bottom). The range values are
+                                                [0-0.5], being 0 no bottom margin. Adding bottom margin makes the figure
+                                                move upwards in the plot area (shrinking if necessary).
+
+  --sbasleftfiguremargin,            #        Set the left figure margin by providing the fraction of image size
+  --SBASLeftFigureMargin                        to be left as margin (starting from the left). The range values are
+                                                [0-0.5], being 0 no left margin. Adding left margin makes the figure
+                                                move to the right in the plot area (shrinking if necessary).
+
+  --sbasrightfiguremargin,           #        Set the right figure margin by providing the fraction of image size
+  --SBASRightFigureMargin                       to be left as margin (starting from the right). The range values are
+                                                [0-0.5], being 0 no right margin. Adding right margin makes the figure
+                                               move to the left in the plot area (shrinking if necessary).
+
+  --countries,                                Draw the country borders in the map
+  --Countries
+
+  --usastates,                                Draw the USA states borders in the map
+  --USAStates
+
+  NOTE: If user sets a vertical label, the '--atm' option (adjust to margin) will be disabled in order to
+        fit the vertical label
+
+ Examples: 
+       graph.py -f /home/gLAB/Example --sbas --sv /home/Desktop/SBASAvailMap.eps
+
+       graph.py -f /home/gLAB/Example --SBAS
+
+
+
+Options:
+  --version             show program's version number and exit
+  -h, --help            show this help message and exit

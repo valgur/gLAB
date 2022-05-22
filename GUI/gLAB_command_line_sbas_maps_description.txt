@@ -1,0 +1,794 @@
+gLAB version v5.5.1, built on Dec 11 2020 12:27:40
+
+SBAS plots mode is a processing mode (available only in command line) where, instead of computing the navigation solution, gLAB
+loops through a grid of points (in longitude and latitude) in the map (by default the EGNOS coverage area), during a 24 hour period.
+In each point, gLAB checks how many satellites are available for SBAS solution (by computing its SBAS corrections). If there are
+4 or more satellites with SBAS corrections (and the geometry matrix can be inverted), the protection levels are computed. If the
+protection levels are below the alarm limits, then there is PA solution available for the current point and epoch. If the selected
+GEO has no PA solution and GEO switching is enabled, gLAB will loop through all GEO until a GEO provides a PA solution or no
+unprocessed GEO remain.
+
+In order to compute the geometry matrix, receiver a priori coordinates are needed. The a priori coordinates are the
+longitude and latitude of the current point in the grid, and the height is a fixed for all points (by default 0 metres
+-over the WGS84 geoid-). The geometry matrix also contains the measurements weights provided by the SBAS corrections.
+
+In SBAS plots mode, no RINEX observation file is used (as it is not necessary to compute the navigation solution). In order
+to select which satellites are available at each point in each epoch, gLAB has to loop through all available PRN
+(for GPS, PRNs 1 to 32) and try to compute its SBAS corrections.
+
+The number of epochs to be processed for the SBAS maps depends on the data files and the software used. gLAB
+computes daily (24 hours) SBAS map, with the possibility to generate hourly maps (use option '-sbasplots:hourlymaps').
+
+Two data files are necessary for computing a daily SBAS map (24 hours): a SBAS corrections file and a navigation file.
+In order to account for the convergence time (in this case, wait for the SBAS data buffers get filled), the SBAS data
+file must contain additional corrections from the previous day. The minimum amount of data is 15 minutes, but gLAB accepts up to
+two hours of data of convergence time. That is, if the SBAS data file starts at 22h or later, gLAB will automatically assume
+that all the data from 22h (or later) until 23:59h is data for convergence time and will read all this corrections at once for filling
+its internal SBAS data memory buffers. Once it reaches 0:00h of the following day it will start the data processing until 23:59h.
+Since version 5.4.0, gLAB shows an INFO message with the amount of convergence time detected in the SBAS file. If it less
+than 15 minutes, gLAB warns the user by stating that there is not enough convergence time.
+
+Regarding the navigation file, it is necessary for the user to create a consolidated navigation data file using data from many
+different stations (for instance, all IGS stations). This is due to each station does not have all of the navigation
+messages (selected by the IODE) used by SBAS (this can even occur with the 'brdc' consolidated file). One way to check that
+the navigation file has missing messages is to do a standard SBAS processing (using a RINEX observation file from any station)
+and enable the "SBASUNSEL" output message. In this message it should appear messages with the text "No broadcast block with IOD...".
+Since version 5.4.0, gLAB prints an INFO message about the need to create a consolidated file (except if the navigation filename's
+first 4 characters are "mixn" or "gage", as these are the navigation files created by the gAGE research group).
+Aside, for the navigation file, it is necessary to include 2 hours of navigation messages from the previous day and 2 hours from
+the following day. This is due as some of the navigation messages used by SBAS at the start or end of the day are saved in the
+previous or following day. Since version 5.4.0, gLAB checks the start and end time of the navigation file for these 2 hours
+of data from the previous and following day. If not included, a warning message is printed.
+Furthermore, it is recommended to apply a data cleansing algorithm to the navigation messages when creating the consolidated
+navigation message file, in order to remove data logging errors. An algorithm for data cleansing is described in chapter 3.3
+of the thesis "Safe satellite navigation with multiple constellations: global monitoring of GPS and GLONASS signal-in-space anomalies",
+available at "https://web.stanford.edu/group/scpnt/gpslab/pubs/theses/LHengThesisFinalSignedSecured.pdf"
+
+As stated above, gLAB can only process a single day in each run. When the user wants to process a range of days,
+it will need to process each day independently and join the results following the instructions below.
+Processing only a single day per run has the following advantages and disadvantages:
+  Advantages:
+    - More efficient code as it does not need to deal with day changes.
+    - Multiple instances of gLAB can be run independently in parallel (one for each CPU available).
+        It is much more efficient than running a single instance with multi-threading for multiple days.
+    - If the results are not as expected, it is easier to identify the day(s) with problems (e.g. a ionospheric storm),
+       as each day is an independent run.
+    - If one processed day fails (e.g. missing data), only that day has to be reprocessed.
+    - Data files remain the same size independently of the data range size processed.
+  Disadvantages:
+    - Data files with the convergence time have to be created for each day.
+    - An external script to run gLAB for each day must be generated by the user.
+    - Percentiles for DOP can only be computed for a single day, as DOP samples are not printed. Nevertheless, the DOP percentile
+        cannot be computed for a long range of days, as for each day, each DOP component (HDOP, PDOP or GDOP) needs around 1GB of
+        memory. For instance, computing HDOP, PDOP and GDOP percentiles for 10 days would need around 30GB of memory.
+    - Data for each day has to be added up in order to get the statistics for the whole period (explained below).
+
+In order to join the results from multiple days, it is necessary to build a script that reads the gLAB output files and adds everything up.
+The user can generate this script in many ways (e.g. a Python script). Below is provided some Bash scripts (which can be executed in Linux,
+Mac or in Windows -using the Cygwin terminal-). In these scripts, the following assumptions are made:
+  - The output files have the day of year (padded with zeros) and the year in its filenames. This is very important, as this allows to
+      select all the files at once in chronological order (as the bash interpreter automatically orders the selected files). In the examples
+      the filenames used are (user can set the output filenames using the appropriate parameters):
+        Daily files:
+          AvailMap_001_2017.txt, RiskMap_002_2017.txt, RiskMarMap_003_2017.txt, IonoMap_004_2017.txt, ...
+          HDOPMap_001_2017.txt, PDOPMap_002_2017.txt, GDOPMap_003_2017.txt, Discontinuities_List_004_2017.txt, ...
+        Hourly files:
+          AvailMap_001_2017_00h.txt, RiskMap_002_2017_01h.txt, RiskMarMap_003_2017_10h.txt, IonoMap_004_2017_11h.txt, ...
+          HDOPMap_001_2017_12h.txt, PDOPMap_002_2017_13h.txt, GDOPMap_003_2017_14h.txt, Discontinuities_List_004_2017_23h.txt, ...
+
+  - Data files are saved in a different folder for each day. The folder structure is "YYYY/DoY/", being "YYYY" the year with four digits
+      and "DoY" the day of year padded with zeros.
+  - This example will join data from two years (2017 and 2018).
+
+
+ADDING UP SBAS AVAILABILITY MAPS
+
+SBAS Availability map data is easy to add up, as the output file contains the number of epochs with PA solution under the protection levels
+and the number of epochs processed. These values are independent from day to day, therefore it is only needed to add to total number of epochs
+with solution and the total number of epochs processed for each day and location, and divide these values in order to get the availability
+percentage for the whole period. The following bash script does this computation:
+
+cat ./201?/???/AvailMap_???_201?.txt|awk -v OFMT="%9.5f" '$1=="#MINLAT" {getline;getline;getline} {avail[$1" "$2]+=$4;numepochs[$1" "$2]+=$5} END {for (i in avail) {print i,avail[i],numepochs[i],numepochs[i]==0?0:100*avail[i]/numepochs[i]}}'|awk '{printf "%6.2f %7.2f %9.5f %8d %8d\n",$1,$2,$5,$3,$4}'|sort -g -k1 -k2 > Avail_added_no_header.txt
+
+  NOTES:
+     - For selecting all the hourly maps, change the filename in the previous command from './201?/???/AvailMap_???_201?.txt' to './201?/???/AvailMap_???_201?_??h.txt'
+     - For selecting some hourly maps (not necessarily continuous hours), a comma separated list of hours (padded with zeros) inside curly braces must be given in the filenames.
+         For instance, for selecting hours "1,3,16,17,18,23", the filename should be: './201?/???/AvailMap_???_201?_{01,03,16,17,18,23}h.txt'
+
+The previous command line creates a new file in the gLAB format with all the values added, but with no header. Any header from any of the
+output files for availability maps can be used. The following command reads the header from the file "AvailMap_001_2017.txt" and copy it
+to the previous file:
+
+head -3 ./2017/001/AvailMap_001_2017.txt|cat - Avail_added_no_header.txt > Avail_added_with_header.txt
+
+The file created, 'Avail_added_with_header.txt' can now be processed by the gLAB plotting tool as a normal SBAS availability plot file.
+The user will have to change the plot title to state that the file has data for the two years (using the '-t' parameter).
+
+
+ADDING UP SBAS IONOSPHERE AVAILABILITY MAPS
+
+The process is identical as the SBAS availability maps. The same scripts are used, but changing the filenames:
+
+cat ./201?/???/IonoMap_???_201?.txt|awk -v OFMT="%9.5f" '$1=="#MINLAT" {getline;getline;getline} {avail[$1" "$2]+=$4;numepochs[$1" "$2]+=$5} END {for (i in avail) {print i,avail[i],numepochs[i],numepochs[i]==0?0:100*avail[i]/numepochs[i]}}'|awk '{printf "%6.2f %7.2f %9.5f %8d %8d\n",$1,$2,$5,$3,$4}'|sort -g -k1 -k2 > IonoAvail_added_no_header.txt
+
+  NOTES:
+     - For selecting all the hourly maps, change the filename in the previous command from './201?/???/IonoMap_???_201?.txt' to './201?/???/IonoMap_???_201?_??h.txt'
+     - For selecting some hourly maps (not necessarily continuous hours), a comma separated list of hours (padded with zeros) inside curly braces must be given in the filenames.
+         For instance, for selecting hours "1,3,16,17,18,23", the filename should be: './201?/???/IonoMap_???_201?_{01,03,16,17,18,23}h.txt'
+
+The previous command line creates a new file in the gLAB format with all the values added, but with no header. Any header from any of the output files
+for availability maps can be used. The following command reads the header from the file "IonoAvailMap_001_2017.txt" and copy it to the previous file:
+
+head -3 ./2017/001/IonoAvailMap_001_2017.txt|cat - IonoAvail_added_no_header.txt > IonoAvail_added_with_header.txt
+
+The file created, 'IonoAvail_added_with_header.txt' can now be processed by the gLAB plotting tool as a normal SBAS ionosphere availability
+plot file. The user will have to change the plot title to state that the file has data for the two years (using the '-t' parameter).
+
+
+ADDING UP SBAS HDOP MAPS
+
+SBAS HDOP output files contain the mean value, the total HDOP and the number of epochs with PA solution. Note that all epochs with protection
+levels over the alarm limits are not counted for the DOP percentile or mean value, as most of them will be outliers (this is the behaviour
+since version 5.4.0, whereas in version 5.3.0 all epochs with PA solution were included in the mean computation)
+The mean value for each day is independent from each day, therefore we just need to add the total HDOP value for each day and position and the
+total number of epochs with PA solution, and compute the global mean for the two years. In some positions (in the edges), the number of epochs
+with PA solution may be 0, so it is necessary to check for this value in order to avoid dividing by zero:
+
+cat ./201?/???/HDOPMap_???_201?.txt|awk -v OFMT="%9.5f" '$1=="#MINLAT" {getline;getline;getline} {mean[$1" "$2]+=$3;numepochs[$1" "$2]+=$5;total[$1" "$2]+=$4;percent[$1" "$2]+=$6} END {for (i in total) {print i,total[i],numepochs[i],numepochs[i]==0?0:total[i]/numepochs[i],percent[i]}}'|awk '{printf "%6.2f %7.2f %15.2f %17.2f %8d %10.2f\n",$1,$2,$5,$3,$4,$6}'|sort -g -k1 -k2 > HDOP_added_no_header.txt
+
+  NOTES:
+     - For selecting all the hourly maps, change the filename in the previous command from './201?/???/HDOPMap_???_201?.txt' to './201?/???/HDOPMap_???_201?_??h.txt'
+     - For selecting some hourly maps (not necessarily continuous hours), a comma separated list of hours (padded with zeros) inside curly braces must be given in the filenames.
+         For instance, for selecting hours "1,3,16,17,18,23", the filename should be: './201?/???/HDOPMap_???_201?_{01,03,16,17,18,23}h.txt'
+
+The previous command line creates a new file in the gLAB format with all the values added, but with no header. Any header from any of the output
+files for HDOP maps can be used. The following command reads the header from the file "HDOPMap_001_2017.txt" and copy it to the previous file:
+
+head -3 ./2017/001/HDOPMap_001_2017.txt|cat - HDOP_added_no_header.txt > HDOP_added_with_header.txt
+
+The file created, 'HDOP_added_with_header.txt' can now be processed by the gLAB plotting tool as a normal SBAS HDOP plot file. The user
+will have to change the plot title to state that the file has data for the two years (using the '-t' parameter).
+
+
+ADDING UP SBAS PDOP MAPS
+
+Identical to HDOP maps, but changing the filenames to PDOP files:
+cat ./201?/???/PDOPMap_???_201?.txt|awk -v OFMT="%9.5f" '$1=="#MINLAT" {getline;getline;getline} {mean[$1" "$2]+=$3;numepochs[$1" "$2]+=$5;total[$1" "$2]+=$4;percent[$1" "$2]+=$6} END {for (i in total) {print i,total[i],numepochs[i],numepochs[i]==0?0:total[i]/numepochs[i],percent[i]}}'|awk '{printf "%6.2f %7.2f %15.2f %17.2f %8d %10.2f\n",$1,$2,$5,$3,$4,$6}'|sort -g -k1 -k2 > PDOP_added_no_header.txt
+
+  NOTES:
+     - For selecting all the hourly maps, change the filename in the previous command from './201?/???/PDOPMap_???_201?.txt' to './201?/???/PDOPMap_???_201?_??h.txt'
+     - For selecting some hourly maps (not necessarily continuous hours), a comma separated list of hours (padded with zeros) inside curly braces must be given in the filenames.
+         For instance, for selecting hours "1,3,16,17,18,23", the filename should be: './201?/???/PDOPMap_???_201?_{01,03,16,17,18,23}h.txt'
+
+The previous command line creates a new file in the gLAB format with all the values added, but with no header. Any header from any of the output
+files for PDOP maps can be used. The following command reads the header from the file "PDOPMap_001_2017.txt" and copy it to the previous file:
+
+head -3 ./2017/001/PDOPMap_001_2017.txt|cat - PDOP_added_no_header.txt > PDOP_added_with_header.txt
+
+The file created, 'PDOP_added_with_header.txt' can now be processed by the gLAB plotting tool as a normal SBAS PDOP plot file. The user
+will have to change the plot title to state that the file has data for the two years (using the '-t' parameter).
+
+
+ADDING UP SBAS GDOP MAPS
+
+Identical to HDOP maps, but changing the filenames to GDOP files:
+cat ./201?/???/GDOPMap_???_201?.txt|awk -v OFMT="%9.5f" '$1=="#MINLAT" {getline;getline;getline} {mean[$1" "$2]+=$3;numepochs[$1" "$2]+=$5;total[$1" "$2]+=$4;percent[$1" "$2]+=$6} END {for (i in total) {print i,total[i],numepochs[i],numepochs[i]==0?0:total[i]/numepochs[i],percent[i]}}'|awk '{printf "%6.2f %7.2f %15.2f %17.2f %8d %10.2f\n",$1,$2,$5,$3,$4,$6}'|sort -g -k1 -k2 > GDOP_added_no_header.txt
+
+  NOTES:
+     - For selecting all the hourly maps, change the filename in the previous command from './201?/???/GDOPMap_???_201?.txt' to './201?/???/GDOPMap_???_201?_??h.txt'
+     - For selecting some hourly maps (not necessarily continuous hours), a comma separated list of hours (padded with zeros) inside curly braces must be given in the filenames.
+         For instance, for selecting hours "1,3,16,17,18,23", the filename should be: './201?/???/GDOPMap_???_201?_{01,03,16,17,18,23}h.txt'
+
+The previous command line creates a new file in the gLAB format with all the values added, but with no header. Any header from any of the output
+files for GDOP maps can be used. The following command reads the header from the file "GDOPMap_001_2017.txt" and copy it to the previous file:
+
+head -3 ./2017/001/GDOPMap_001_2017.txt|cat - GDOP_added_no_header.txt > GDOP_added_with_header.txt
+
+The file created, 'GDOP_added_with_header.txt' can now be processed by the gLAB plotting tool as a normal SBAS GDOP plot file. The user
+will have to change the plot title to state that the file has data for the two years (using the '-t' parameter).
+
+
+ADDING UP SBAS AVIATION CONTINUITY RISK MAPS (SLIDING WINDOW)
+
+When computing the total continuity risk for multiple continuous days from several single day files (or hourly files), data files are not
+independent from each other, as each discontinuity (defined as the transition from an epoch with PA solution to an epoch without PA solution)
+found affects previous samples. In the case of the sliding window, every time a discontinuity is found, the epochs with PA solution previous to
+the current discontinuity are counted as "in risk" or affected by the current discontinuity. The number of samples "in risk" is the size of
+of the window if the number of continuous epochs with PA solution (prior to the previous discontinuity) is equal or greater than the window size,
+otherwise, only the number of continuous epochs with PA solution (prior to the previous discontinuity) are "in risk".
+The total discontinuity risk is finally computed by dividing the total number of epochs "in risk" by the total number of epochs with PA solution.
+Discontinuities can occur, for instance, at the beginning of the day, which would affect samples from the previous day. To account for these
+cases, a script (attached at the end of this manual) has to read the discontinuities (from the discontinuity list file generated by gLAB) and
+count the number of samples which were "in risk" by discontinuities but not counted as "in risk" due to the day or hour change.
+In order to understand how to count these samples, two facts about how gLAB computes the number of discontinuities for the sliding window:
+    - For daily and hourly files, if the processing ended with discontinuity, the epochs "in risk" for this discontinuity are accounted in the statistics.
+    - For hourly files, at the beginning of each hour, internal counters are all reset, therefore, discontinuities from each
+        hour do not affect the previous hour or the following one.
+
+An example is shown below on how to compute the continuity risk, using a sliding window of 5 epochs (this is a very small
+
+window size, used for explanatory purposes. Default aviation sliding window size is 15 seconds):
+
+  NOTE: the following symbols are used:
+    - '||' is a separator for a day or hour transition
+    - 'X' is an epoch with PA solution
+    - 'O' is an epoch without PA solution
+
+        O O O X X X X X X X X O O O O X X X X X O O O O O O X X X O O O X X
+                    |       |         |       |             |   |
+                    - - - - -         - - - - -             - - - 
+                        |                 |                   |
+                        v                 v                   v
+             5 epochs "in risk"   5 epochs "in risk"  3 epochs "in risk"
+
+                      Total epochs "in risk":        13 epochs
+                      Total epochs with PA solution: 18 epochs
+                      Continuity Risk = 13/18 = 0.72
+
+The following cases can occur during a day or hour transition:
+Case 1: Day/hour ends without PA solution
+
+               X O O||O O O
+          or   X X O||X X O   (all epochs "in risk" are correctly accounted)
+          or   X X O||X X X
+
+  As stated above, when the day or hour ends with discontinuity, the previous epochs with
+    PA solution are counted for the number of epochs "in risk". No additional epochs "in risk"
+    have to be accounted to the global counter.
+Case 2: Day/hour ends with PA solution and the next day/hour file starts without PA solution
+
+               X X X||O O O   or   X X X||O O X
+               |   |               |   |
+               - - -               - - -
+                 |                   |
+                 v                   v
+        These epochs are not accounted as "in risk" due to the day/hour change
+
+  The discontinuity at the beginning of the next day/hour affects the epochs with PA solution
+    from the previous day. The number of epochs "in risk" from the previous day will be the
+    size of the window (if the number of continuous epoch with PA solution is equal or larger
+    than the window size) or the number of continuous epoch with PA solution if it is smaller
+    than the window size.
+Case 3: Day/hour ends with PA solution, the next day/hour starts with PA solution and a discontinuity
+        occurs in an epoch which is smaller than the window size:
+
+               X X X||X X X O   or   O X X||X X X O
+               |   |                   | |
+               - - -                   - -
+                 |                      |
+                 v                      v
+        These epochs are not accounted as "in risk" due to the day/hour change
+
+  When a day/hour ends with PA solution, the following day starts with PA solution, and a discontinuity
+    occurs, if the epoch of the discontinuity is equal or larger than the window size, all epochs "in risk"
+    will be accounted (as they will all be from the next day), but if the epoch of the discontinuity
+    is smaller than the window size, some of the epochs "in risk" will be in the previous day. Precisely,
+    the number of epochs in "in risk" from the previous day that need to be added to the global counter will be
+    the difference between the window size and the number of epochs with PA solution in the current day. If this
+    difference is greater than the number of continuous epochs until the end of the day in the previous day, then
+    the number of epochs "in risk" to be added to the global counter will be the number of continuous epochs
+    until the end of the previous day.
+
+To count the total continuity risk (sliding window) for the whole period, it has to be done in four steps. First, add the
+total number of epochs "in risk" and the total number of epochs with PA solution. This can be done with the following
+command line instruction:
+
+cat ./201?/???/RiskMap_???_201?.txt| awk -v OFMT="%9.5f" '$1=="#MINLAT" {getline;getline;getline} {numdiscont[$1" "$2]+=$4;numepochs[$1" "$2]+=$5} END {for (i in numdiscont) {print i,numdiscont[i],numepochs[i],numepochs[i]==0?1:numdiscont[i]/numepochs[i]}}'|awk '{printf "%6.2f %7.2f %9.5f %8d %8d\n",$1,$2,$5,$3,$4}'|sort -g -k1 -k2 > Risk_added_no_header.txt
+
+  NOTES:
+     - For selecting all the hourly maps, change the filename in the previous command from './201?/???/RiskMap_???_201?.txt' to './201?/???/RiskMap_???_201?_??h.txt'
+     - For selecting some hourly maps (not necessarily continuous hours), a comma separated list of hours (padded with zeros) inside curly braces must be given in the filenames.
+         For instance, for selecting hours "1,3,16,17,18,23", the filename should be: './201?/???/RiskMap_???_201?_{01,03,16,17,18,23}h.txt'
+
+The previous command line creates a new file in the gLAB format with all the values added, but with no header.
+The second step is to count the number of epochs "in risk" missing in the global counter due to the day/hour transitions. The AWK
+script 'count_samples_sliding_window.awk' at the end of this help) does the counting. To run it, execute the following command line:
+
+cat ./201?/???/Discontinuities_List_???_201?.txt|awk -f count_samples_sliding_window.awk > epochs_to_add_in_risk.txt
+
+  NOTES:
+     - For selecting all the hourly maps, change the filename in the previous command from './201?/???/Discontinuities_List_???_201?.txt' to './201?/???/Discontinuities_List_???_201?_??h.txt'
+     - For selecting some hourly maps (not necessarily continuous hours), a comma separated list of hours (padded with zeros) inside curly braces must be given in the filenames.
+         For instance, for selecting hours "1,3,16,17,18,23", the filename should be: './201?/???/Discontinuities_List_???_201?_{01,03,16,17,18,23}h.txt'
+     - The script 'count_samples_sliding_window.awk' will automatically recognize if files are daily or hourly and count epochs accordingly
+
+The script 'count_samples_sliding_window.awk' creates an output file with the same format as the file 'Risk_added_no_header.txt'.
+The third step is to add the epochs "in risk" from the 'epochs_to_add_in_risk.txt' file (generated by the AWK) script to the total epoch
+counter in 'Risk_added_no_header.txt' file. It can be done with the following command:
+
+awk -v OFMT="%9.5f" 'NR==FNR {numdiscont[$1" "$2]+=$4;numepochs[$1" "$2]+=$5;next} {numdiscont[$1" "$2]+=$3} END{for (i in numdiscont) {print i,numdiscont[i],numepochs[i],numepochs[i]==0?1:numdiscont[i]/numepochs[i]}}' Risk_added_no_header.txt epochs_to_add_in_risk.txt|awk '{printf "%6.2f %7.2f %9.5f %8d %8d\n",$1,$2,$5,$3,$4}'|sort -g -k1 -k2 > Risk_added_allriskepochs_no_header.txt
+
+The previous command line creates a new file in the gLAB format with all the values added, but with no header. Any header from any of the
+output files for continuity risk maps can be used. The following command reads the header from the file "RiskMap_001_2017.txt" and copy
+it to the previous file:
+
+head -3 ./2017/001/RiskMap_001_2017.txt|cat - Risk_added_allriskepochs_no_header.txt > Risk_added_allriskepochs_header.txt
+
+The file created, 'Risk_added_allriskepochs_header.txt' can now be processed by the gLAB plotting tool as a normal SBAS Continuity Risk
+plot file. The user will have to change the plot title to state that the file has data for the two years (using the '-t' parameter).
+
+NOTE: To ensure the steps were done correctly, it is recommended to execute the previous commands twice. Once using only the daily files,
+and the next time using only the hourly files. The resulting files created by both executions should be equal, as the total number of epochs
+"in risk" has to be equal independently if the total number of epochs "in risk" are counted using daily or hourly files.
+
+
+ADDING UP SBAS MARITIME CONTINUITY RISK MAPS (FIXED WINDOW)
+
+The continuity risk for the fixed window is computed as the number of discontinuities multiplied by the window size and divided by the total
+number of epochs in the processed range (independently if any epoch had PA solution or not). For instance, if the processed range is two
+non-gap years, the total number of epochs is 2*365*86400=63072000 (or 63158400 if there is a leap year). When adding up the total number
+of discontinuities for several days/hours, it can occur that some discontinuities are not accounted or other are counted twice. Prior to
+explain what these cases are, it is necessary first to detail three facts about how gLAB computes the discontinuities for the fixed window:
+    - For daily and hourly files, if the processing ended with discontinuity, this last discontinuity is accounted in the statistics.
+    - For hourly files, at the beginning of each hour, internal counters are all reset, therefore, discontinuities from each
+        hour do not affect the previous hour or the following one.
+    - If one day or hour has no epochs with PA solution, the number of discontinuities and number of epochs will be 0
+An example is shown below on how to compute the continuity risk, using a fixed window of 5 epochs (this is a very small
+window size, used for explanatory purposes. Default maritime fixed window size is 900 seconds or 15 minutes):
+
+  NOTE: the following symbols are used:
+    - '||' is a separator for a day or hour transition
+    - 'X' is an epoch with PA solution
+    - 'O' is an epoch without PA solution
+
+        O O O X X X X X X X X O O O O X X X X X O O O O O O X X X O O O X X
+        |   |                 |     |           |         |       |   |
+        - - -                 - - - -           - - - - - -       - - -
+          |                      |                   |              |
+          v                      v                   v              v
+   1 discontinuity       1 discontinuity      1 discontinuity   1 discontinuity
+
+                      Total number of discontinuities:     4 discontinuities
+                      Total number of epochs processed:   34 epochs
+                      Window Size:                         5 epochs
+                      Continuity Risk = 4*5/34 = 0.59
+
+The following cases can occur during a day or hour transition:
+Case 1: Day/hour ends without PA solution and the next epoch with PA solution is at the beginning of day/hour:
+
+               O X O||X X O
+          or   X X O||X X X          (All discontinuities are correctly accounted)
+          or   X X O||O O O||X X X
+
+  When the day or hour ends with discontinuity, the discontinuity is accounted in the global counter
+    of total discontinuities. As the following day starts with PA solution (or if the discontinuity spans
+     for multiple days but the first epoch with PA solution is at the beginning of the day/hour), only
+     one discontinuity is accounted (as days without any epoch with PA solution have zero discontinuities).
+     Therefore, no discontinuities have to be subtracted from the global counter.
+
+Case 2: Day/hour ends without PA solution and the following day starts without PA solution:
+
+            O X O||O X O   or   X X O||O X X   or   X X O||O O O||O X X   or   X O O||O O O||O O X
+                |  |                |  |                |         |              |             |
+                -  -                -  -                - - - - - -              - - - - - - - -
+                 |                   |                       |                           |
+                 v                   v                       v                           v
+        The discontinuity is counted twice due to the day/hour change (at the end and at the beginning of next day)
+
+  In this case, there is one discontinuity that start spans in multiple days/hours. This discontinuity is
+    accounted at the end of the day/hour and at the beginning of the next day/hour with PA solution (if the
+    discontinuity spans for multiple days/hours, days without any epochs with PA solution have zero discontinuities).
+    That is, it is counted twice. Therefore it is necessary to subtract one discontinuity to the global counter of discontinuities.
+
+Case 3: At the beginning of the data range, a discontinuity lasts a full day/hour and the next day starts with discontinuity:
+
+           ||O O O||X X O   or   ||O O O||X X X   or   ||O O O||O O O||X X X   or   ||O O O||O O O||X X O
+             |   |                 |   |                 |          |                 |          |
+             - - -                 - - -                 - - -  - - -                 - - -  - - -
+               |                     |                        |                            |
+               v                     v                        v                            v
+       The discontinuity is not counted due to it starts with the first epoch processed and ends at the end of a day
+
+  If in the first day/hour of the data range processed (or every time there is a reset due to the data considered is not
+    a range of continuous days or hours), the discontinuity lasts for the full day (and it may span to multiple days)
+    and the first epoch with PA solution is at the beginning of the day, then this initial discontinuity is not accounted
+    in the global counter. It is necessary to add one to the global counter.
+
+Case 4: A discontinuity lasts a full day/hour (or several days/hours) and the next day starts with PA solution:
+
+               X X X||O O O||X X X   or   X X X||O O O||O O O||X X X
+                      |   |                      |          |
+                      - - -                      - - -  - - -
+                        |                              |
+                        v                              v
+       The discontinuity is not counted due to it starts at the beginning of a day and ends at the end of a day
+
+  If a discontinuity lasts for multiple days/hours, and it starts at the beginning of a day/hour and ends at the end of
+    a day/hour, this discontinuity will not be accounted in the global counter of discontinuities, as days without PA solution
+    have zero discontinuities. It is necessary to add one to the global counter.
+
+Case 5: At the end of the data range, a discontinuity starts at the beginning of day/hour and last until the end of the data range:
+
+               X X X||O O O||   or   O X X||O O O||O O O||
+                      |   |                 |          |
+                      - - -                 - - -  - - -
+                        |                        |
+                        v                        v
+     The discontinuity is not counted due to it starts at the beginning of a day and ends in the last epoch processed
+
+  At the end of the data range, if a discontinuity starts at the beginning of day and lasts for a full day or hour
+    (or multiple full days or hours) until the end of data, then this discontinuity is not accounted in the global
+    counter of discontinuities, as days without PA solution have zero discontinuities. Therefore it is necessary
+    to add one discontinuity to the global counter of discontinuities.
+
+To count the total continuity risk (fixed window) for the whole period, it has to be done in four steps. First, add the total
+total number of discontinuities. This can be done with the following command line instruction:
+
+cat ./201?/???/RiskMarMap_???_201?.txt| awk -v totalepochs=63072000 -v windowsize=900 -v OFMT="%9.5f" '$1=="#MINLAT" {getline;getline;getline} {numdiscont[$1" "$2]+=$4;numepochs[$1" "$2]+=$5} END {for (i in numdiscont) {print i,numdiscont[i],numepochs[i],numepochs[i]==0?1:windowsize*numdiscont[i]/totalepochs}}'|awk '{printf "%6.2f %7.2f %9.5f %8d %8d\n",$1,$2,$5,$3,$4}'|sort -g -k1 -k2 > RiskMar_added_no_header.txt
+
+  NOTES:
+     - The size of the window must be set (in seconds). By default is 900. To change it, change the text 'windowsize=900' to another value.
+         For instance, to set the window size to 15, the text should be 'windowsize=15'
+     - The total number of epochs of the processed must be set (in this example it is two years, which are 63072000 epochs). To change it,
+          change the text 'totalepochs=63072000' to another value.
+     - For selecting all the hourly maps, change the filename in the previous command from './201?/???/RiskMarMap_???_201?.txt' to './201?/???/RiskMarMap_???_201?_??h.txt'
+     - For selecting some hourly maps (not necessarily continuous hours), a comma separated list of hours (padded with zeros) inside curly braces must be given in the filenames.
+         For instance, for selecting hours "1,3,16,17,18,23", the filename should be: './201?/???/RiskMarMap_???_201?_{01,03,16,17,18,23}h.txt'
+
+The second step is to count the number of discontinuities counted twice and the number of discontinuities not counted
+due to the day/hour transitions. As the cases of discontinuities not being counted only occur if there were any epochs
+with PA solution and are less frequent than the number of discontinuities counted twice, the AWK script
+'count_samples_fixed_window.awk' will count both cases and provide the number of discontinuities to be subtracted
+from the global counter of discontinuities, as there will be more case of discontinuities counted twice. To run the
+script, execute the following command line:
+
+cat ./201?/???/Discontinuities_List_???_201?.txt|awk -f count_samples_fixed_window.awk > epochs_to_subtract_riskmar.txt
+
+  NOTES:
+     - For selecting all the hourly maps, change the filename in the previous command from './201?/???/Discontinuities_List_???_201?.txt' to './201?/???/Discontinuities_List_???_201?_??h.txt'
+     - For selecting some hourly maps (not necessarily continuous hours), a comma separated list of hours (padded with zeros) inside curly braces must be given in the filenames.
+         For instance, for selecting hours "1,3,16,17,18,23", the filename should be: './201?/???/Discontinuities_List_???_201?_{01,03,16,17,18,23}h.txt'
+     - The script 'count_samples_fixed_window.awk' will automatically recognize if files are daily or hourly and count discontinuities accordingly
+
+The script 'count_samples_fixed_window.awk' creates an output file with the same format as the file 'RiskMar_added_no_header.txt'.
+The third step is to subtract the discontinuities from the 'epochs_to_subtract_riskmar.txt' file (generated by the AWK) script to the
+total epoch counter in 'RiskMar_added_no_header.txt' file. It can be done with the following command:
+
+awk -v totalepochs=63072000 -v windowsize=900 -v OFMT="%9.5f" 'NR==FNR {numdiscont[$1" "$2]+=$4;numepochs[$1" "$2]+=$5;next} {numdiscont[$1" "$2]-=$3} END{for (i in numdiscont) {print i,numdiscont[i],numepochs[i]==0?0:totalepochs,numepochs[i]==0?1:windowsize*numdiscont[i]/63072000}}' RiskMar_added_no_header.txt epochs_to_subtract_riskmar.txt|awk '{printf "%6.2f %7.2f %9.5f %8d %8d\n",$1,$2,$5,$3,$4}'|sort -g -k1 -k2 > RiskMar_subtracted_alldiscontinuities_no_header.txt
+
+  NOTES:
+     - The size of the window must be set (in seconds). By default is 900. To change it, change the text 'windowsize=900' to another value.
+         For instance, to set the window size to 15, the text should be 'windowsize=15' (the default for aviation is 15 seconds,
+           for maritime is 900 seconds or 15 minutes).
+     - The total number of epochs of the processed must be set (in this example it is two years, which are 63072000 epochs). To change it,
+          change the text 'totalepochs=63072000' to another value.
+
+The previous command line creates a new file in the gLAB format with all the values added, but with no header. Any header from any of the output
+files for maritime continuity risk maps can be used. The following command reads the header from the file "RiskMarMap_001_2017.txt" and copy
+it to the previous file:
+
+head -3 ./2017/001/RiskMarMap_001_2017.txt|cat - RiskMar_subtracted_alldiscontinuities_no_header.txt > RiskMar_subtracted_alldiscontinuities_header.txt
+
+The file created, 'RiskMar_subtracted_alldiscontinuities_header.txt' can now be processed by the gLAB plotting tool as a normal SBAS
+Maritime Continuity Risk plot file. The user will have to change the plot title to state that the file has data for the two years
+(using the '-t' parameter).
+
+NOTE: To ensure the steps were done correctly, it is recommended to execute the previous commands twice. One time using only the daily files,
+and the second time using only the hourly files. The resulting files created by both executions should be equal, as the total number of
+discontinuities has to be equal independently if the total number of discontinuities are counted using daily or hourly files.
+
+---------------------------------------------------------------------------------------------
+AWK script 'count_samples_sliding_window.awk' for counting the number of samples that have
+to be added to the total number of epochs with continuity risk when computing the total
+number of of epochs with continuity risk for a multiple day period with a sliding window.
+NOTES:
+ - Before running the script, the window size has to be set in the second line of the script.
+ - This script works in gLAB version 5.4.0 and onwards.
+---------------------------------------------------------------------------------------------
+BEGIN {
+	WinSize=15 #Set the size of the window size (in seconds)
+    #Default window size of SBAS Aviation: 15
+    #Default window size of SBAS Maritime: 900
+	FirstFile=0
+	Firstday=1
+	HourlyMap=0
+} 
+
+$1=="#MINLAT" {
+	#Check if we are joining hourly files
+	if ($NF=="HOUR") {
+		HourlyMap=1
+	}
+	getline
+	Hour23to0=0
+	if (HourlyMap==1 && ($9!=DoY || $10!=Year)) {
+		if (Hour==23 && $NF==0 && ($9==(DoY+1) || (DoY==1 && $10==(Year+1)))) {
+			Offset=3600*23
+			Hour23to0=1
+			#Reset lastValidEpoch values that are previous to 23 hour
+			for (i in lastValidEpochHour) {
+				if (lastValidEpochHour[i]<23) {
+					lastValidEpoch[i]=0
+					lastValidEpochHour[i]=0
+				}
+			}
+		} else {
+			#New day found. Don't take into account discontinuities
+			#from previous day as when joining hourly maps we do not
+			#join the whole day (except when hour 23 and hour 0 is used)
+			FirstFile=0
+			Firstday=1
+			Offset=3600
+			#Reset lastValidEpoch values
+			for (i in lastValidEpoch) {
+				lastValidEpoch[i]=0
+				lastValidEpochHour[i]=0
+			}
+		}
+	} else if (HourlyMap==1 && $9==DoY && $10==Year) {
+   		if ((Hour+1)!=$NF) {
+			#For the case we are joining hourly files but hourly files
+			#are not consecutive hours
+			FirstFile=0
+			Firstday=1
+			#Reset lastValidEpoch values
+			for (i in lastValidEpoch) {
+				lastValidEpoch[i]=0
+				lastValidEpochHour[i]=0
+			}
+		}
+		Offset=3600
+	} else if (HourlyMap==0) {
+   		if ($9==(DoY+1) || (DoY==1 && $10==(Year+1))) {
+			#New day, which is the following one
+		} else {
+			#New day, but it is not a continuous day. Don't take into account
+		    #discontinuities from the previous days
+			FirstFile=0
+			Firstday=1
+			#Reset lastValidEpoch values
+			for (i in lastValidEpoch) {
+				lastValidEpoch[i]=0
+				lastValidEpochHour[i]=0
+			}
+		}
+	}
+	DoY=$9
+	Year=$10
+	if (HourlyMap==1) {
+		Hour=$NF
+		TotalEpochs=3600*Hour
+	} else {
+		TotalEpochs=86400
+		Hour=0
+		Offset=0
+	}
+	getline
+	for (i in TodayAlreadyComputed) {
+		TodayAlreadyComputed[i]=0
+	}
+	FirstFile++
+	if (FirstFile>1) {
+		Firstday=0
+	}
+	next
+}
+
+($3-3600*Hour)<WinSize && Firstday==0 {
+	NumAffectedToday=$3-3600*Hour
+	StablePeriod=$6
+	NumToAffectYesterday=WinSize-NumAffectedToday
+	if (Hour23to0==1) {
+		LastEpochsAvailYesterday=86400-lastValidEpoch[$1" "$2]
+	} else if (HourlyMap==1 && lastValidEpoch[$1" "$2]>TotalEpochs) {
+		LastEpochsAvailYesterday=WinSize
+	} else {
+		LastEpochsAvailYesterday=TotalEpochs-lastValidEpoch[$1" "$2]
+	}
+	#Check that last epoch of previous day was not in a discontinuity
+	if (TodayAlreadyComputed[$1" "$2]==0 && lastValidEpoch[$1" "$2]!=(TotalEpochs+Offset)) {
+		#Check if the continuity duration was from the start of the file
+		if (NumAffectedToday<WinSize) {
+			if (LastEpochsAvailYesterday>0) {
+				#Check that discontinuity started at epoch 0 or that is is the first
+				#discontinuity found in the file
+				if ((NumAffectedToday-StablePeriod)==0) { 
+					if (LastEpochsAvailYesterday>=NumToAffectYesterday) {
+						TotalExtraAffected[$1" "$2]+=NumToAffectYesterday
+					} else {
+						TotalExtraAffected[$1" "$2]+=LastEpochsAvailYesterday
+					}
+				}
+			}
+		}
+	}
+	TodayAlreadyComputed[$1" "$2]=1
+}
+
+{
+	lastValidEpoch[$1" "$2]=$4+1 #Add 1 as the available epoch starts the next epoch
+	lastValidEpochHour[$1" "$2]=Hour
+}
+
+END {
+	for (i in TotalExtraAffected) {
+		split(i,coord)
+		printf "%6.2f %7.2f %6d\n",coord[1],coord[2],TotalExtraAffected[i]
+	}
+}
+
+---------------------------------------------------------------------------------------------
+AWK script 'count_samples_fixed_window.awk' for counting the number of samples that have
+to be subtracted to the total number of discontinuities when computing the total number
+of discontinuities for a multiple day period with a fixed window.
+NOTES:
+ - Before running the script, the window size has to be set in the second line of the script.
+ - This script works in gLAB version 5.4.0 and onwards.
+---------------------------------------------------------------------------------------------
+BEGIN {
+	WinSize=900 #Set the size of the window size (in seconds)
+    #Default window size of SBAS Aviation: 15
+    #Default window size of SBAS Maritime: 900
+	FirstFile=0
+	Firstday=1
+	HourlyMap=0
+} 
+
+$1=="#MINLAT" {
+	#For the case that the files has no discontinuity data
+	if (NumLinesReadFile<=3) {
+		for (i in SubtractDiscon) {
+			if (SubtractDiscon[$1" "$2]==1) {
+				EpochAvailStartFile[$1" "$2]=1
+			}
+		}
+	}
+	NumLinesReadFile=1
+	#Check if we are joining hourly files
+	if ($NF=="HOUR") {
+		HourlyMap=1
+	}
+	getline
+	if (HourlyMap==1 && ($9!=DoY || $10!=Year)) {
+		if (Hour==23 && $NF==0 && ($9==(DoY+1) || (DoY==1 && $10==(Year+1)))) {
+			Offset=86400
+		} else {
+			#New day found. Don't take into account discontinuities
+			#from previous day as when joining hourly maps we do not
+			#join the whole day (except when hour 23 and hour 0 is used)
+			FirstFile=0
+			Firstday=1
+			Offset=0
+			#Reset lastValidEpoch values
+			for (i in lastValidEpoch) {
+				lastValidEpoch[i]=0
+				DataAvailAndEndedWithDiscontinuity[i]=0
+				SubtractDiscon[i]=0
+				EpochAvailStartFile[i]=0
+			}
+		}
+	} else if (HourlyMap==1 && $9==DoY && $10==Year) {
+   		if ((Hour+1)!=$NF) {
+			#For the case we are joining hourly files but hourly files
+			#are not consecutive hours
+			FirstFile=0
+			Firstday=1
+			#Reset lastValidEpoch values
+			for (i in lastValidEpoch) {
+				lastValidEpoch[i]=0
+				DataAvailAndEndedWithDiscontinuity[i]=0
+				SubtractDiscon[i]=0
+				EpochAvailStartFile[i]=0
+			}
+		}
+		Offset=0
+	} else if (HourlyMap==0) {
+   		if ($9==(DoY+1) || (DoY==1 && $10==(Year+1))) {
+			#New day, which is the following one
+		} else {
+			#New day, but it is not a continuous day. Don't take into account
+		    #discontinuities from the previous days
+			FirstFile=0
+			Firstday=1
+			#Reset lastValidEpoch values
+			for (i in lastValidEpoch) {
+				lastValidEpoch[i]=0
+				DataAvailAndEndedWithDiscontinuity[i]=0
+				SubtractDiscon[i]=0
+				EpochAvailStartFile[i]=0
+			}		
+		}
+	}
+	DoY=$9
+	Year=$10
+	if (HourlyMap==1) {
+		Hour=$NF
+		TotalEpochs=3600*Hour
+		MaxDisconDuration=3600
+	} else {
+		TotalEpochs=86400
+		MaxDisconDuration=86400
+		Hour=0
+		Offset=0
+	}
+	getline
+	for (i in TodayAlreadyComputed) {
+		TodayAlreadyComputed[i]=0
+	}
+	FirstFile++
+	if (FirstFile>1) {
+		Firstday=0
+	}
+	next
+} 
+
+{
+	NumLinesReadFile++
+}
+
+#If the first day has no available epochs, we need to check if the first
+#day with valid data, the valid data starts at the first hour or day
+((($3-3600*Hour-$6)==0 || ($3-$6)==0)) && $6>0 {
+	if (SubtractDiscon[$1" "$2]==1) {
+		EpochAvailStartFile[$1" "$2]=1
+	}
+}
+
+SubtractDiscon[$1" "$2]==1 && $5!=MaxDisconDuration {
+	SubtractDiscon[$1" "$2]=0
+}
+
+($3-3600*Hour)==0 && Firstday==0 {
+	#Discontinuities that are counted double are only in the case that previous day ends
+	#with a discontinuity and the next day starts with a discontinuity. Also, the 
+	#discontinuity from the previous day must be one that did not last the hole day,
+	#as in this case, the number of discontinuities (NUMDISCONT) is set to 0, as no PA
+	#epochs were available, no discontinuity events occurred
+	if (lastValidEpoch[$1" "$2]==(TotalEpochs+Offset) && TodayAlreadyComputed[$1" "$2]==0 && $5!=MaxDisconDuration) {
+		#if (HourlyMap==0 || (HourlyMap==1 && DataAvailAndEndedWithDiscontinuity[$1" "$2]==1) ) {
+		if (DataAvailAndEndedWithDiscontinuity[$1" "$2]==1) {
+			if (EpochAvailStartFile[$1" "$2]==0) {
+				TotalExtraAffected[$1" "$2]++
+			}
+			SubtractDiscon[$1" "$2]=0
+			EpochAvailStartFile[$1" "$2]=0
+		}
+		DataAvailAndEndedWithDiscontinuity[$1" "$2]=0
+	}
+	TodayAlreadyComputed[$1" "$2]=1
+}
+
+{
+	if ($5==MaxDisconDuration) {
+		#if (Firstday==1) {
+		if (lastValidEpoch[$1" "$2]!=86400) {
+			#If the discontinuity lasts the whole day and the previous day ended without discontinuity,
+			#and the next day starts with valid data, this discontinuity will not be counted
+			#Therefore we need to subtract one from the total count when necessary
+			#The check for if the following day starts with data is done later
+			if ((lastValidEpoch[$1" "$2]!=(3600*Hour) && Hour>0) || (lastValidEpoch[$1" "$2]==0 && Hour==0 ) ) {
+				SubtractDiscon[$1" "$2]=1
+			}
+		}
+		#Discontinuity lasts the hole day or hour
+		if (HourlyMap==0) {
+			lastValidEpoch[$1" "$2]=86400
+		} else {
+			lastValidEpoch[$1" "$2]=3600*(Hour+1) 
+		}
+	} else if ((HourlyMap==1 && ($4+1)==(3600*(Hour+1))) || (HourlyMap==0 && ($4+1)==86400) ) {
+		lastValidEpoch[$1" "$2]=$4+1 #Add 1 as the avail epoch starts the next epoch
+		DataAvailAndEndedWithDiscontinuity[$1" "$2]=1
+		HasHadDataAvail[$1" "$2]=1
+	} else {
+		lastValidEpoch[$1" "$2]=$4+1 #Add 1 as the avail epoch starts the next epoch
+		DataAvailAndEndedWithDiscontinuity[$1" "$2]=0
+		HasHadDataAvail[$1" "$2]=1
+	}
+}
+
+END {
+	for (i in SubtractDiscon) {
+		#If the last day(s) or hour(s) ends had discontinuity for the hole day/hour and the
+		#last available epoch was at the end of a day/hour, then the discontinuity that lasted
+		#all the hour(s) or day(s) is not accounted for, so it is necessary to subtract one
+		#to the total count so it is taken into account
+		if (SubtractDiscon[i]==1 && TotalExtraAffected[i]>0 && HasHadDataAvail[i]==1) {
+			TotalExtraAffected[i]--
+		}
+	}
+	for (i in TotalExtraAffected) {
+		split(i,coord)
+		printf "%6.2f %7.2f %6d\n",coord[1],coord[2],TotalExtraAffected[i]
+	}
+}

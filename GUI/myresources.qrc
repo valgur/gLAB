@@ -1,0 +1,21 @@
+<RCC>
+    <qresource prefix="/data">
+        <file>gAGE.ico</file>
+        <file>gage_logo.png</file>
+        <file>Header.png</file>
+        <file>warning.png</file>
+        <file>MainLogo.gif</file>
+        <file>gLAB_DGNSS_SUM.pdf</file>
+        <file>gLAB_SBAS_SUM.pdf</file>
+        <file>graph_command_line_help.txt</file>
+        <file>gLAB_User_Error_File_Example.txt</file>
+        <file>gLAB_Sigma_Multipath_File_Example.txt</file>
+        <file>gLAB_command_line_messages.txt</file>
+        <file>gLAB_command_line_help.txt</file>
+        <file>igp_grid.jpg</file>
+        <file>gLAB_SUM.pdf</file>
+        <file>gLAB.icns</file>
+        <file>gLAB_Reference_Position_File_Example.txt</file>
+        <file>gLAB_command_line_sbas_maps_description.txt</file>
+    </qresource>
+</RCC>
