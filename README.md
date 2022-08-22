@@ -10,7 +10,7 @@ The gLAB software tool is quite flexible, able to run under Linux, Windows and M
 * [gLAB - Download](https://gage.upc.edu/en/learning-materials/software-tools/glab-tool-suite/glab-download)
 * [gLAB - Release Notes](https://gage.upc.edu/en/learning-materials/software-tools/glab-tool-suite/glab-release-notes)
 * [gLAB - User Manual](gLAB_SUM.pdf)
-* [gLAB - Frequent Asked Questions](https://gage.upc.edu/en/learning-materials/software-tools/glab-tool-suite/glab-faq)
+* [gLAB - FAQ](https://gage.upc.edu/en/learning-materials/software-tools/glab-tool-suite/glab-faq)
 * [gLAB - Tutorials](https://gage.upc.edu/en/learning-materials/software-tools/glab)
 * [gLAB - Citations](https://gage.upc.edu/en/learning-materials/software-tools/glab-tool-suite/glab-citations)
 
