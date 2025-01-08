@@ -70,7 +70,11 @@ void gLAB_GUI::on_checkBox_KML_TimeStamps_clicked(bool checked) {
         }
     }
 	ui->KMLTimeStampsFrame->setHidden(!checked);
-
+    if (ui->KMLTimeStampsFrame->isHidden()==false && ui->checkBox_KML_Range->isChecked()==true) {
+        ui->KMLTimeStampsRangeSubFrame->setHidden(false);
+    } else if (ui->KMLTimeStampsFrame->isHidden()==true) {
+        ui->KMLTimeStampsRangeSubFrame->setHidden(true);
+    }
 }
 
 // Function to show or hide the KML timestamps range when range for timestamps are activated
@@ -252,6 +256,7 @@ void gLAB_GUI::labelOutputFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Output File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -275,15 +280,15 @@ void gLAB_GUI::labelOutputFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditOutputDestination->text() == "") {
-            messageBox.warning(0, "Error","Output file is empty\n");
+            messageBox.warning(nullptr, "Error","Output file is empty\n");
         } else if (this->fileExists(ui->lineEditOutputDestination->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputDestination->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputDestination->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputDestination->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputDestination->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -300,24 +305,25 @@ void gLAB_GUI::checkBoxKMLMenu(const QPoint& pos) {// this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open KML File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
     if (selectedItem)
     {
         if (ui->lineEditKML->text() == "") {
-            messageBox.warning(0, "Error","KML file is empty\n");
+            messageBox.warning(nullptr, "Error","KML file is empty\n");
         } else if (this->fileExists( ui->lineEditKML->text() ) == false ) {
-            messageBox.critical(0, "Error","File '" + ui->lineEditKML->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Error","File '" + ui->lineEditKML->text() + "' does not exist.\n");
         } else {
             #ifdef Q_OS_LINUX
                 if ( !QDesktopServices::openUrl(QUrl::fromLocalFile(ui->lineEditKML->text()))) {
-                    messageBox.critical(0, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML->text() + "' file.\n");
+                    messageBox.critical(nullptr, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML->text() + "' file.\n");
                 }
             #elif defined(Q_OS_WIN32)
                 QString str = ui->lineEditKML->text().replace("\\","/");
                 if ( !QDesktopServices::openUrl(QUrl::fromLocalFile(str)) ) {
-                    messageBox.critical(0, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML->text() + "' file.\n");
+                    messageBox.critical(nullptr, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML->text() + "' file.\n");
                 }
             #elif defined(Q_OS_MAC)
                 // Execute the program
@@ -329,7 +335,7 @@ void gLAB_GUI::checkBoxKMLMenu(const QPoint& pos) {// this is a slot
                 // Execute the program
                 processUserManual->start(program,arguments);
                 if (processUserManual->state()==QProcess::NotRunning) {
-                   messageBox.critical(0, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML->text() + "' file.\n");
+                   messageBox.critical(nullptr, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML->text() + "' file.\n");
                 }
             #endif
         }
@@ -346,25 +352,26 @@ void gLAB_GUI::checkBoxKML0Menu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open KML0 File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
     if (selectedItem)
     {
         if (ui->lineEditKML0->text() == "") {
-            messageBox.warning(0, "Error","KML0 file is empty\n");
+            messageBox.warning(nullptr, "Error","KML0 file is empty\n");
         } else if (this->fileExists( ui->lineEditKML0->text() ) == false ) {
-            messageBox.critical(0, "Error","File '" + ui->lineEditKML0->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Error","File '" + ui->lineEditKML0->text() + "' does not exist.\n");
         } else {
             // Based on the OS open the text editor
             #ifdef Q_OS_LINUX
                 if ( !QDesktopServices::openUrl(QUrl::fromLocalFile(ui->lineEditKML0->text()))) {
-                    messageBox.critical(0, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML0->text() + "' file.\n");
+                    messageBox.critical(nullptr, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML0->text() + "' file.\n");
                 }
             #elif defined(Q_OS_WIN32)
                 QString str = ui->lineEditKML0->text().replace("\\","/");
                 if ( !QDesktopServices::openUrl(QUrl::fromLocalFile(str)) ) {
-                    messageBox.critical(0, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML0->text() + "' file.\n");
+                    messageBox.critical(nullptr, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML0->text() + "' file.\n");
                 }
             #elif defined(Q_OS_MAC)
                 // Execute the program
@@ -376,7 +383,7 @@ void gLAB_GUI::checkBoxKML0Menu(const QPoint& pos) { // this is a slot
                 // Execute the program
                 processUserManual->start(program,arguments);
                 if (processUserManual->state()==QProcess::NotRunning) {
-                   messageBox.critical(0, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML0->text() + "' file.\n");
+                   messageBox.critical(nullptr, "Errors found", "Google Earth could not be executed for opening '" + ui->lineEditKML0->text() + "' file.\n");
                 }
             #endif
         }
@@ -393,6 +400,7 @@ void gLAB_GUI::checkBoxOutputSP3Menu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SP3 File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -416,15 +424,15 @@ void gLAB_GUI::checkBoxOutputSP3Menu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditOutputSP3->text() == "") {
-            messageBox.warning(0, "Error","SP3 file is empty\n");
+            messageBox.warning(nullptr, "Error","SP3 file is empty\n");
         } else if (this->fileExists(ui->lineEditOutputSP3->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputSP3->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputSP3->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputSP3->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputSP3->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -441,6 +449,7 @@ void gLAB_GUI::checkBoxOutRefFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Reference File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -464,15 +473,15 @@ void gLAB_GUI::checkBoxOutRefFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditOutRefFile->text() == "") {
-            messageBox.warning(0, "Error","Reference file is empty\n");
+            messageBox.warning(nullptr, "Error","Reference file is empty\n");
         } else if (this->fileExists(ui->lineEditOutRefFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutRefFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutRefFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutRefFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutRefFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -490,6 +499,7 @@ void gLAB_GUI::labelStfdESAPlotFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Stanford-ESA Plot File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -513,15 +523,15 @@ void gLAB_GUI::labelStfdESAPlotFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditOutputStanfordEsaPlot->text() == "") {
-            messageBox.warning(0, "Error","Stanford-ESA Plot file is empty\n");
+            messageBox.warning(nullptr, "Error","Stanford-ESA Plot file is empty\n");
         } else if (this->fileExists(ui->lineEditOutputStanfordEsaPlot->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputStanfordEsaPlot->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputStanfordEsaPlot->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputStanfordEsaPlot->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputStanfordEsaPlot->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -538,6 +548,7 @@ void gLAB_GUI::labelStfdESADataFileMenu(const QPoint& pos) {  // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Stanford-ESA Data File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -561,15 +572,15 @@ void gLAB_GUI::labelStfdESADataFileMenu(const QPoint& pos) {  // this is a slot
 
         // Execute the program
         if (ui->lineEditOutputframeStanfordESAallGeometries->text() == "") {
-            messageBox.warning(0, "Error","Stanford-ESA Data file is empty\n");
+            messageBox.warning(nullptr, "Error","Stanford-ESA Data file is empty\n");
         } else if (this->fileExists(ui->lineEditOutputframeStanfordESAallGeometries->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputframeStanfordESAallGeometries->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputframeStanfordESAallGeometries->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputframeStanfordESAallGeometries->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputframeStanfordESAallGeometries->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -581,8 +592,12 @@ void gLAB_GUI::labelStfdESADataFileMenu(const QPoint& pos) {  // this is a slot
 void gLAB_GUI::on_pushButtonCommonNavigationMessagesAll_clicked() {
     ui->checkBoxPrintInfo->setChecked(true);
     ui->checkBoxPrintCS->setChecked(true);
+    ui->checkBoxPrintSFCS->setChecked(true);
+    ui->checkBoxPrintMWCS->setChecked(true);
+    ui->checkBoxPrintLICS->setChecked(true);
+    ui->checkBoxPrintIGFCS->setChecked(true);
     ui->checkBoxPrintInput->setChecked(true);
-    ui->checkBoxPrintMeas->setChecked(true);
+    this->on_checkBoxPrintMeas_clicked(true);
     ui->checkBoxPrintModel->setChecked(true);
     ui->checkBoxPrintEpochsat->setChecked(true);
     ui->checkBoxPrintSatsel->setChecked(true);
@@ -597,8 +612,12 @@ void gLAB_GUI::on_pushButtonCommonNavigationMessagesAll_clicked() {
 void gLAB_GUI::on_pushButtonCommonNavigationMessagesNone_clicked() {
     ui->checkBoxPrintInfo->setChecked(false);
     ui->checkBoxPrintCS->setChecked(false);
+    ui->checkBoxPrintSFCS->setChecked(false);
+    ui->checkBoxPrintMWCS->setChecked(false);
+    ui->checkBoxPrintLICS->setChecked(false);
+    ui->checkBoxPrintIGFCS->setChecked(false);
     ui->checkBoxPrintInput->setChecked(false);
-    ui->checkBoxPrintMeas->setChecked(false);
+    this->on_checkBoxPrintMeas_clicked(false);
     ui->checkBoxPrintModel->setChecked(false);
     ui->checkBoxPrintEpochsat->setChecked(false);
     ui->checkBoxPrintSatsel->setChecked(false);
@@ -633,6 +652,9 @@ void gLAB_GUI::on_pushButtonSbasMessagesAll_clicked() {
     ui->checkBoxPrintSbasiono->setChecked(true);
     ui->checkBoxPrintSbasunsel->setChecked(true);
     ui->checkBoxPrintSbasunused->setChecked(true);
+    ui->checkBoxPrintSbasDFMCCor->setChecked(true);
+    ui->checkBoxPrintSbasDFMCVar->setChecked(true);
+    ui->checkBoxPrintSbasDFMCUnsel->setChecked(true);
 }
 
 // Function to set off all prints for SBAS Messages
@@ -643,6 +665,9 @@ void gLAB_GUI::on_pushButtonSbasMessagesNone_clicked() {
     ui->checkBoxPrintSbasiono->setChecked(false);
     ui->checkBoxPrintSbasunsel->setChecked(false);
     ui->checkBoxPrintSbasunused->setChecked(false);
+    ui->checkBoxPrintSbasDFMCCor->setChecked(false);
+    ui->checkBoxPrintSbasDFMCVar->setChecked(false);
+    ui->checkBoxPrintSbasDFMCUnsel->setChecked(false);
 }
 
 // Function to set on all prints for DGNSS Messages
@@ -693,6 +718,7 @@ void gLAB_GUI::on_checkBoxStanfordESAallGeometries_clicked(bool checked) {
     ui->frameStanfordESAallGeometries->setHidden(!checked);
 }
 
+
 // Function to show or hide the content of the summary options when printSummary is checked
 void gLAB_GUI::on_checkBoxPrintSummary_clicked(bool checked) {
     ui->checkBoxPrintSummary->setChecked(checked);
@@ -714,6 +740,35 @@ void gLAB_GUI::on_checkBoxStartTimeSummary_clicked(bool checked) {
         ui->checkBoxWaitforDayStart->setChecked(false);
     }
     ui->dateTimeEditStartTimeSummary->setHidden(!checked);
+}
+// Function to configure printed measurement messages
+void gLAB_GUI::on_checkBoxPrintMeas_clicked(bool checked){
+    ui->checkBoxPrintMeas->setChecked(checked);
+    ui->groupBoxMeasSelect->setHidden(!checked);
+    this->on_radioButtonMeasSelectAuto_clicked();
+}
+void gLAB_GUI::on_radioButtonMeasSelectAuto_clicked(){
+    ui->radioButtonMeasSelectAuto->setChecked(true);
+    ui->radioButtonMeasSelectSpecify->setChecked(false);
+    ui->pushButtonMeasSelectSpecify->setEnabled(false);
+}
+void gLAB_GUI::on_radioButtonMeasSelectSpecify_clicked(){
+    ui->radioButtonMeasSelectSpecify->setChecked(true);
+    ui->radioButtonMeasSelectAuto->setChecked(false);
+    ui->pushButtonMeasSelectSpecify->setEnabled(true);
+}
+void gLAB_GUI::on_pushButtonMeasSelectSpecify_clicked(){
+    MeasSelectGNSS->setModal(true);
+    MeasSelectGNSS->show();
+    //check radioButtonMeasSelectAuto if no measurements was selected
+    /*if (MeasSelectGNSS->MeasFlag<1){
+        QMessageBox messageBox;
+        messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+        messageBox.critical(nullptr, "Warning",
+                            "User did not select any measurement in any constellation. Default print selection will be used.\n");
+
+        this->on_radioButtonMeasSelectAuto_clicked();
+    }*/
 }
 
 // Function to get the OUTPUT options and errors
@@ -909,7 +964,7 @@ void gLAB_GUI::getOutputOptions(QString *errorString, QString *warningString, QS
         }
     }
     // Stanford-ESA
-    if ( ui->labelCurrentTemplate->text() == "SBAS" || ui->groupBoxSbas->isChecked()==true ) {
+    if ( ui->labelCurrentTemplate->text() == "SBAS 1F" || ui->groupBoxSbas->isChecked()==true ) {
         // Plot
         if ( ui->groupBoxStanfordESA->isChecked() == true ) {
             if ( ui->lineEditOutputStanfordEsaPlot->text() == "" ) {
@@ -953,10 +1008,12 @@ void gLAB_GUI::getOutputOptions(QString *errorString, QString *warningString, QS
     if (ui->checkBoxPrintInfo->isChecked() == true && ui->checkBoxPrintCS->isChecked() == true && ui->checkBoxPrintInput->isChecked() == true && ui->checkBoxPrintMeas->isChecked() == true
             && ui->checkBoxPrintModel->isChecked() == true && ui->checkBoxPrintEpochsat->isChecked() == true && ui->checkBoxPrintPrefit->isChecked() == true
             &&  ui->checkBoxPrintPostfit->isChecked() == true && ui->checkBoxPrintSatsel->isChecked() == true && ui->checkBoxPrintFilter->isChecked() == true
-            && ui->checkBoxPrintOutput->isChecked() == true && ui->checkBoxPrintUsererror->isChecked() == true && ui->checkBoxPrintSummary->isChecked() == true ) {
-        if ( ui->groupBoxSbas->isChecked()==true || ui->labelCurrentTemplate->text() == "SBAS" ) {
+            && ui->checkBoxPrintOutput->isChecked() == true && ui->checkBoxPrintUsererror->isChecked() == true && ui->checkBoxPrintSummary->isChecked() == true
+            && ui->checkBoxPrintSFCS->isChecked() == true && ui->checkBoxPrintMWCS->isChecked() == true && ui->checkBoxPrintLICS->isChecked() == true && ui->checkBoxPrintIGFCS->isChecked() == true) {
+        if ( ui->groupBoxSbas->isChecked()==true || ui->labelCurrentTemplate->text() == "SBAS 1F" ) {
             if (ui->checkBoxPrintSbasout->isChecked() == true && ui->checkBoxPrintSbasvar->isChecked() == true && ui->checkBoxPrintSbascor->isChecked() == true
-                    && ui->checkBoxPrintSbasiono->isChecked() == true && ui->checkBoxPrintSbasunsel->isChecked() == true && ui->checkBoxPrintSbasunused->isChecked() == true) {
+                    && ui->checkBoxPrintSbasiono->isChecked() == true && ui->checkBoxPrintSbasunsel->isChecked() == true && ui->checkBoxPrintSbasunused->isChecked() == true
+                    && ui->checkBoxPrintSbasDFMCCor->isChecked() ==true && ui->checkBoxPrintSbasDFMCVar->isChecked() ==true && ui->checkBoxPrintSbasDFMCUnsel->isChecked() ==true) {
                 printAll=1;
             }
         } else if (ui->groupBoxReferenceStation->isChecked()==true || ui->labelCurrentTemplate->text() == "DGNSS") {
@@ -969,10 +1026,12 @@ void gLAB_GUI::getOutputOptions(QString *errorString, QString *warningString, QS
     } else if (ui->checkBoxPrintInfo->isChecked() == false && ui->checkBoxPrintCS->isChecked() == false && ui->checkBoxPrintInput->isChecked() == false && ui->checkBoxPrintMeas->isChecked() == false
                && ui->checkBoxPrintModel->isChecked() == false && ui->checkBoxPrintEpochsat->isChecked() == false && ui->checkBoxPrintPrefit->isChecked() == false
                &&  ui->checkBoxPrintPostfit->isChecked() == false && ui->checkBoxPrintSatsel->isChecked() == false && ui->checkBoxPrintFilter->isChecked() == false
-               && ui->checkBoxPrintOutput->isChecked() == false && ui->checkBoxPrintUsererror->isChecked() == false && ui->checkBoxPrintSummary->isChecked() == false ) {
-       if ( ui->groupBoxSbas->isChecked()==true || ui->labelCurrentTemplate->text() == "SBAS" ) {
+               && ui->checkBoxPrintOutput->isChecked() == false && ui->checkBoxPrintUsererror->isChecked() == false && ui->checkBoxPrintSummary->isChecked() == false
+               && ui->checkBoxPrintSFCS->isChecked() == false && ui->checkBoxPrintMWCS->isChecked() == false && ui->checkBoxPrintLICS->isChecked() == false && ui->checkBoxPrintIGFCS->isChecked() == false) {
+       if ( ui->groupBoxSbas->isChecked()==true || ui->labelCurrentTemplate->text() == "SBAS 1F" ) {
            if (ui->checkBoxPrintSbasout->isChecked() == false && ui->checkBoxPrintSbasvar->isChecked() == false && ui->checkBoxPrintSbascor->isChecked() == false
-                   && ui->checkBoxPrintSbasiono->isChecked() == false && ui->checkBoxPrintSbasunsel->isChecked() == false && ui->checkBoxPrintSbasunused->isChecked() == false) {
+                   && ui->checkBoxPrintSbasiono->isChecked() == false && ui->checkBoxPrintSbasunsel->isChecked() == false && ui->checkBoxPrintSbasunused->isChecked() == false
+                   && ui->checkBoxPrintSbasDFMCCor->isChecked() ==false && ui->checkBoxPrintSbasDFMCVar->isChecked() ==false && ui->checkBoxPrintSbasDFMCUnsel->isChecked() ==false) {
                printNone=1;
            }
        } else if (ui->groupBoxReferenceStation->isChecked()==true || ui->labelCurrentTemplate->text() == "DGNSS") {
@@ -1004,116 +1063,124 @@ void gLAB_GUI::getOutputOptions(QString *errorString, QString *warningString, QS
         // CS
         if ( ui->checkBoxPrintCS->isChecked() == true ) {
             //Enabled in all modes by default. No need to set the option
-             if (WriteAllParameters==1) {
-                *saveString += "-print:cycleslips\n";
-                *runString << "-print:cycleslips";
-             }
-        } else {
+            *saveString += "-print:cycleslips\n";
+            *runString << "-print:cycleslips";
+        } else if (WriteAllParameters==1) {
             *saveString += "--print:cycleslips\n";
             *runString << "--print:cycleslips";
+        }
+        // SFCS
+        if ( ui->checkBoxPrintSFCS->isChecked() == true ) {
+            //Enabled in all modes by default. No need to set the option
+            *saveString += "-print:sfcsdata\n";
+            *runString << "-print:sfcsdata";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:sfcsdata\n";
+            *runString << "--print:sfcsdata";
+        }
+        // MWCS
+        if ( ui->checkBoxPrintMWCS->isChecked() == true ) {
+            //Enabled in all modes by default. No need to set the option
+            *saveString += "-print:mwcsdata\n";
+            *runString << "-print:mwcsdata";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:mwcsdata\n";
+            *runString << "--print:mwcsdata";
+        }
+        // LICS
+        if ( ui->checkBoxPrintLICS->isChecked() == true ) {
+            //Enabled in all modes by default. No need to set the option
+            *saveString += "-print:licsdata\n";
+            *runString << "-print:licsdata";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:licsdata\n";
+            *runString << "--print:licsdata";
+        }
+        // IGFCS
+        if ( ui->checkBoxPrintIGFCS->isChecked() == true ) {
+            //Enabled in all modes by default. No need to set the option
+            *saveString += "-print:igfcsdata\n";
+            *runString << "-print:igfcsdata";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:igfcsdata\n";
+            *runString << "--print:igfcsdata";
         }
         // INPUT
         if ( ui->checkBoxPrintInput->isChecked() == true ) {
             //Enabled in SPP, PPP and DGNSS, but not in SBAS
-            if (ui->groupBoxSbas->isChecked()==true||WriteAllParameters==1) {
-                *saveString += "-print:input\n";
-                *runString << "-print:input";
-            }
-        } else {
-            if (ui->groupBoxSbas->isChecked()==false || WriteAllParameters==1) {
-                *saveString += "--print:input\n";
-                *runString << "--print:input";
-            }
+            *saveString += "-print:input\n";
+            *runString << "-print:input";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:input\n";
+            *runString << "--print:input";
         }
         // MEAS
         if ( ui->checkBoxPrintMeas->isChecked() == true ) {
             //Disabled in all modes by default
-            *saveString += "-print:meas\n";
-            *runString << "-print:meas";
-        } else {
-            //Disabled in all modes by default. No need to unset the option
-            if (WriteAllParameters==1) {
-                *saveString += "--print:meas\n";
-                *runString << "--print:meas";
+            // MEAS select measurements
+            if ( ui->radioButtonMeasSelectSpecify->isChecked() ){
+                if (!MeasSelectGNSS->getgLABOptions(errorString,warningString,saveString,runString)) {
+                    *saveString += "-print:meas\n";
+                    *runString << "-print:meas";
+                }
             }
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:meas\n";
+            *runString << "--print:meas";
         }
         // MODEL
         if ( ui->checkBoxPrintModel->isChecked() == true ) {
             //Enabled in SPP, PPP and DGNSS, but not in SBAS
-            if (ui->groupBoxSbas->isChecked()==true  || WriteAllParameters==1) {
-                *saveString += "-print:model\n";
-                *runString << "-print:model";
-            }
-        } else {
-            if (ui->groupBoxSbas->isChecked()==false  || WriteAllParameters==1) {
-                *saveString += "--print:model\n";
-                *runString << "--print:model";
-            }
+            *saveString += "-print:model\n";
+            *runString << "-print:model";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:model\n";
+            *runString << "--print:model";
         }
         // EPOCHSAT
         if ( ui->checkBoxPrintEpochsat->isChecked() == true ) {
             //Enabled in SPP, PPP and DGNSS, but not in SBAS
-            if (ui->groupBoxSbas->isChecked()==true  || WriteAllParameters==1) {
-                *saveString += "-print:satellites\n";
-                *runString << "-print:satellites";
-            }
-        } else {
-            if (ui->groupBoxSbas->isChecked()==false  || WriteAllParameters==1) {
-                *saveString += "--print:satellites\n";
-                *runString << "--print:satellites";
-            }
+            *saveString += "-print:satellites\n";
+            *runString << "-print:satellites";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:satellites\n";
+            *runString << "--print:satellites";
         }
         // PREFIT
         if ( ui->checkBoxPrintPrefit->isChecked() == true ) {
             //Enabled in SPP, PPP and DGNSS, but not in SBAS
-            if (ui->groupBoxSbas->isChecked()==true  || WriteAllParameters==1) {
-                *saveString += "-print:prefit\n";
-                *runString << "-print:prefit";
-            }
-        } else {
-            if (ui->groupBoxSbas->isChecked()==false  || WriteAllParameters==1) {
-                *saveString += "--print:prefit\n";
-                *runString << "--print:prefit";
-            }
+            *saveString += "-print:prefit\n";
+            *runString << "-print:prefit";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:prefit\n";
+            *runString << "--print:prefit";
         }
         // POSTFIT
         if ( ui->checkBoxPrintPostfit->isChecked() == true ) {
             //Enabled in SPP, PPP and DGNSS, but not in SBAS
-            if (ui->groupBoxSbas->isChecked()==true  || WriteAllParameters==1) {
-                *saveString += "-print:postfit\n";
-                *runString << "-print:postfit";
-            }
-        } else {
-            if (ui->groupBoxSbas->isChecked()==false  || WriteAllParameters==1) {
-                *saveString += "--print:postfit\n";
-                *runString << "--print:postfit";
-            }
+            *saveString += "-print:postfit\n";
+            *runString << "-print:postfit";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:postfit\n";
+            *runString << "--print:postfit";
         }
         // SATSEL
         if ( ui->checkBoxPrintSatsel->isChecked() == true ) {
             //Enabled in SBAS, but not in SPP, PPP and DGNSS
-            if (ui->groupBoxSbas->isChecked()==false  || WriteAllParameters==1) {
-                *saveString += "-print:satsel\n";
-                *runString << "-print:satsel";
-            }
-        } else {
-            if (ui->groupBoxSbas->isChecked()==true  || WriteAllParameters==1) {
-                *saveString += "--print:satsel\n";
-                *runString << "--print:satsel";
-            }
+            *saveString += "-print:satsel\n";
+            *runString << "-print:satsel";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:satsel\n";
+            *runString << "--print:satsel";
         }
         // FILTER
         if ( ui->checkBoxPrintFilter->isChecked() == true ) {
             //Enabled in SPP, PPP and DGNSS, but not in SBAS
-            if (ui->groupBoxSbas->isChecked()==true  || WriteAllParameters==1) {
-                *saveString += "-print:filter\n";
-                *runString << "-print:filter";
-            }
-        } else {
-            if (ui->groupBoxSbas->isChecked()==false  || WriteAllParameters==1) {
-                *saveString += "--print:filter\n";
-                *runString << "--print:filter";
-            }
+            *saveString += "-print:filter\n";
+            *runString << "-print:filter";
+        } else if (WriteAllParameters==1) {
+            *saveString += "--print:filter\n";
+            *runString << "--print:filter";
         }
         // OUTPUT
         if ( ui->checkBoxPrintOutput->isChecked() == true ) {
@@ -1138,7 +1205,7 @@ void gLAB_GUI::getOutputOptions(QString *errorString, QString *warningString, QS
             *runString << "--print:usererror";
         }
         // SBAS Messages
-        if ( ui->labelCurrentTemplate->text() == "SBAS" || ui->groupBoxSbas->isChecked()==true  ) {
+        if ( ui->labelCurrentTemplate->text() == "SBAS 1F" || ui->groupBoxSbas->isChecked()==true  ) {
             // SBASOUT
             if ( ui->checkBoxPrintSbasout->isChecked() == true ) {
                  if (WriteAllParameters==1) {
@@ -1206,6 +1273,42 @@ void gLAB_GUI::getOutputOptions(QString *errorString, QString *warningString, QS
                     *runString << "--print:sbasunused";
                  }
             }
+            // SBASDFMCCORR
+            if ( ui->checkBoxPrintSbasDFMCCor->isChecked() == true ) {
+                //Disabled by default in SBAS
+                *saveString += "-print:sbasdfmccor\n";
+                *runString << "-print:sbasdfmccor";
+            } else if ( ui->checkBoxPrintSbasDFMCCor->isChecked() == false ) {
+                //Disabled by default in SBAS
+                 if (WriteAllParameters==1) {
+                    *saveString += "--print:sbasdfmccor\n";
+                    *runString << "--print:sbasdfmccor";
+                 }
+            }
+            // SBASDFMCVAR
+            if ( ui->checkBoxPrintSbasDFMCVar->isChecked() == true ) {
+                //Disabled by default in SBAS
+                *saveString += "-print:sbasdfmcvar\n";
+                *runString << "-print:sbasdfmcvar";
+            } else if ( ui->checkBoxPrintSbasDFMCVar->isChecked() == false ) {
+                //Disabled by default in SBAS
+                 if (WriteAllParameters==1) {
+                    *saveString += "--print:sbasdfmcvar\n";
+                    *runString << "--print:sbasdfmcvar";
+                 }
+            }
+            // SBASDFMCUNSEL
+            if ( ui->checkBoxPrintSbasDFMCUnsel->isChecked() == true ) {
+                //Disabled by default in SBAS
+                *saveString += "-print:sbasdfmcunsel\n";
+                *runString << "-print:sbasdfmcunsel";
+            } else if ( ui->checkBoxPrintSbasDFMCUnsel->isChecked() == false ) {
+                //Disabled by default in SBAS
+                 if (WriteAllParameters==1) {
+                    *saveString += "--print:sbasdfmcunsel\n";
+                    *runString << "--print:sbasdfmcunsel";
+                 }
+            }
         }
         // DGNSS Messages
         if ( ui->labelCurrentTemplate->text() == "DGNSS" || ui->groupBoxReferenceStation->isChecked()==true ) {
@@ -1246,6 +1349,20 @@ void gLAB_GUI::getOutputOptions(QString *errorString, QString *warningString, QS
             *saveString += "--print:summary\n";
             *runString << "--print:summary";
         }
+        //V5 messages
+        if (this->v5Message>0) {
+            *saveString += "-print:v5format\n";
+            *runString << "-print:v5format";
+        }
+    }
+
+    //Clock units
+    if (ui->radioButtonNanosecondsUnitOutputClock->isChecked()==true) {
+        *saveString += "-print:clkns\n";
+        *runString << "-print:clkns";
+    } else if (WriteAllParameters==1) {
+        *saveString += "--print:clkns\n";
+        *runString << "--print:clkns";
     }
 
     //Summary options
@@ -1340,11 +1457,57 @@ void gLAB_GUI::getOutputOptions(QString *errorString, QString *warningString, QS
                 *runString << "--summary:waitfordaystart";
             }
         }
-    }
-
-    // Footer of the file
-    *saveString += "\n";
-    *saveString += "###################################################\n";
-    *saveString += "#     End of self-generated parameters\n";
-    *saveString += "###################################################\n";
+        if ( ui->labelCurrentTemplate->text() == "PPP") {
+            if ( ui->lineEditSummaryConvergenceFormalThresHor->text()!="0.4" || WriteAllParameters==1 ) {
+                *saveString += "-summary:formalerrorhor " + ui->lineEditSummaryConvergenceFormalThresHor->text() + "\n";
+                *runString << "-summary:formalerrorhor" << ui->lineEditSummaryConvergenceFormalThresHor->text();
+            }
+            if ( ui->lineEditSummaryConvergenceFormalThresVer->text()!="0.4" || WriteAllParameters==1 ) {
+                *saveString += "-summary:formalerrorver " + ui->lineEditSummaryConvergenceFormalThresVer->text() + "\n";
+                *runString << "-summary:formalerrorverc" << ui->lineEditSummaryConvergenceFormalThresVer->text();
+            }
+            if ( ui->lineEditSummaryConvergenceFormalThres3D->text()!="0.4" || WriteAllParameters==1 ) {
+                *saveString += "-summary:formalerror3d " + ui->lineEditSummaryConvergenceFormalThres3D->text() + "\n";
+                *runString << "-summary:formalerror3d" << ui->lineEditSummaryConvergenceFormalThres3D->text();
+            }
+            if ( ui->lineEditSummaryConvergenceFormalTimeThresHor->text()!="300" || WriteAllParameters==1 ) {
+                *saveString += "-summary:formalerrorperiodhor " + ui->lineEditSummaryConvergenceFormalTimeThresHor->text() + "\n";
+                *runString << "-summary:formalerrorperiodhor" << ui->lineEditSummaryConvergenceFormalTimeThresHor->text();
+            }
+            if ( ui->lineEditSummaryConvergenceFormalTimeThresVer->text()!="300" || WriteAllParameters==1 ) {
+                *saveString += "-summary:formalerrorperiodver " + ui->lineEditSummaryConvergenceFormalTimeThresVer->text() + "\n";
+                *runString << "-summary:formalerrorperiodver" << ui->lineEditSummaryConvergenceFormalTimeThresVer->text();
+            }
+            if ( ui->lineEditSummaryConvergenceFormalTimeThres3D->text()!="300" || WriteAllParameters==1 ) {
+                *saveString += "-summary:formalerrorperiod3d " + ui->lineEditSummaryConvergenceFormalTimeThres3D->text() + "\n";
+                *runString << "-summary:formalerrorperiod3d" << ui->lineEditSummaryConvergenceFormalTimeThres3D->text();
+            }
+            if (!ui->groupBoxSummaryConvergencePosition->isHidden()) {
+                if ( ui->lineEditSummaryConvergencePositionThresHor->text()!="0.4" || WriteAllParameters==1 ) {
+                    *saveString += "-summary:poserrorhor " + ui->lineEditSummaryConvergencePositionThresHor->text() + "\n";
+                    *runString << "-summary:poserrorhor" << ui->lineEditSummaryConvergencePositionThresHor->text();
+                }
+                if ( ui->lineEditSummaryConvergencePositionThresVer->text()!="0.4" || WriteAllParameters==1 ) {
+                    *saveString += "-summary:poserrorver " + ui->lineEditSummaryConvergencePositionThresVer->text() + "\n";
+                    *runString << "-summary:poserrorverc" << ui->lineEditSummaryConvergencePositionThresVer->text();
+                }
+                if ( ui->lineEditSummaryConvergencePositionThres3D->text()!="0.4" || WriteAllParameters==1 ) {
+                    *saveString += "-summary:poserror3d " + ui->lineEditSummaryConvergencePositionThres3D->text() + "\n";
+                    *runString << "-summary:poserror3d" << ui->lineEditSummaryConvergencePositionThres3D->text();
+                }
+                if ( ui->lineEditSummaryConvergencePositionTimeThresHor->text()!="300" || WriteAllParameters==1 ) {
+                    *saveString += "-summary:poserrorperiodhor " + ui->lineEditSummaryConvergencePositionTimeThresHor->text() + "\n";
+                    *runString << "-summary:poserrorperiodhor" << ui->lineEditSummaryConvergencePositionTimeThresHor->text();
+                }
+                if ( ui->lineEditSummaryConvergencePositionTimeThresVer->text()!="300" || WriteAllParameters==1 ) {
+                    *saveString += "-summary:poserrorperiodver " + ui->lineEditSummaryConvergencePositionTimeThresVer->text() + "\n";
+                    *runString << "-summary:poserrorperiodver" << ui->lineEditSummaryConvergencePositionTimeThresVer->text();
+                }
+                if ( ui->lineEditSummaryConvergencePositionTimeThres3D->text()!="300" || WriteAllParameters==1 ) {
+                    *saveString += "-summary:poserrorperiod3d " + ui->lineEditSummaryConvergencePositionTimeThres3D->text() + "\n";
+                    *runString << "-summary:poserrorperiod3d" << ui->lineEditSummaryConvergencePositionTimeThres3D->text();
+                }
+            }
+        }
+    }    
 }

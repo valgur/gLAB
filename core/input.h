@@ -2,7 +2,7 @@
    Copyright & License:
    ====================
    
-   Copyright 2009 - 2020 gAGE/UPC & ESA
+   Copyright 2009 - 2024 gAGE/UPC & ESA
    
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@
  *             Jesus Romero Sanchez ( gAGE/UPC )
  *          glab.gage @ upc.edu
  * File: input.h
- * Code Management Tool File Version: 5.5  Revision: 1
- * Date: 2020/12/11
+ * Code Management Tool File Version: 6.0  Revision: 0
+ * Date: 2024/11/22
  ***************************************************************************/
 
 /****************************************************************************
@@ -226,11 +226,22 @@
  * Release: 2020/12/11
  * Change Log: No changes in this file.
  * -----------
+ *          gLAB v6.0.0
+ * Release: 2024/11/22
+ * Change Log:   Added multi-constellation support (Galileo, GLONASS, GEO, BDS, QZSS and IRNSS).
+ *               Added multi-frequency support (all RINEX frequencies).
+ *               Added SBAS DFMC processing.
+ * -----------
  *       END_RELEASE_HISTORY
  *****************************/
 
 #ifndef INPUT_H_
 #define INPUT_H_
+
+#if defined __WIN32__
+ 	//This is to allow %lld, %llu and %n format specifiers in printf with MinGW
+	#define __USE_MINGW_ANSI_STDIO  1
+#endif
 
 /* System modules */
 #include <stdio.h>
@@ -254,42 +265,43 @@ enum fileType whatFileTypeIs (char *filename);
 
 // RINEX Observation
 int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options);
-int readRinexObsEpoch (FILE *fd, TEpoch *epoch, TConstellation *constellation, enum ProcessingDirection direction, char *Epochstr, TOptions *options);
+int readRinexObsEpoch (FILE *fd, TEpoch *epoch, char *Epochstr, TOptions *options);
 int rewindEpochRinexObs (FILE *fd, enum Source src);
 int getEpochFromObsFile (FILE *fd, enum Source src, TTime *t);
 
 // RINEX Navigation message
-int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion);
-int readRinexNavLastEpoch (FILE *fd, TTime *lastEpoch);
+int readRinexNav (FILE *fd, char *filename, TGNSSproducts *products, double *rinexNavVersion, int newDay, TOptions *options);
+int readRinexNavLastEpoch (FILE *fd, TTime *lastEpoch, char *filename, TOptions  *options);
 
 // SP3 files
 int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, int readingRefFile, TOptions *options);
 int readSP3LastEpoch (FILE *fd, TTime *lastEpoch);
 
 // RINEX Clocks
-int readRinexClocks (FILE *fd, TGNSSproducts *products);
-int readRinexClocksFile (char *filename, TGNSSproducts *products);
+int readRinexClocks (FILE *fd, TGNSSproducts *products, TOptions *options);
+int readRinexClocksFile (char *filename, TGNSSproducts *products, TOptions *options);
 
 // Troposphere
 int readGalileoTroposphericData (TTROPOGal *TropoGal, char *filename, TOptions *options);
 
 // IONEX
-int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion);
-int readIONEXFile (char *filename, TIONEX *IONEX, double *ionexVersion);
-int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion);
-int readFPPPFile (char *filename, TFPPPIONEX *FPPP, double *FPPPVersion);
+int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion, TOptions *options);
+int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion, TOptions *options);
+int readFPPPFile (char *filename, TFPPPIONEX *FPPP, double *FPPPVersion, TOptions *options);
 
 // Satellite constellation
-int readConstellation (FILE *fd, TConstellation *constellation);
-int readConstellationFile (char *filename, TConstellation *constellation);
+int readConstellation (FILE *fd, TConstellation *constellation, TOptions *options);
+int readConstellationFile (char *filename, TConstellation *constellation, TOptions *options);
 
 // ANTEX
-int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaList);
-int readAntexFile (char *filename, TConstellation *constellation, TAntennaList *antennaList);
+int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaList, int type, TOptions  *options);
+int readAntexFile (char *filename, TConstellation *constellation, TAntennaList *antennaList, int type, TOptions  *options);
 
 // DCB
-int readDCB (FILE *fd, TDCBdata *DCB);
-int readDCBFile (char *filename, TDCBdata *DCB);
+int readDCB (FILE *fd,  TTGDdata *tgdData, TOptions *options);
+int readDCBFile (char *filename,  TTGDdata *tgdData, TOptions *options);
+int readSINEXBIAS (FILE *fd, enum fileType ft, TSINEXBiasData *SINEXBias, TOptions *options);
+int readSINEXBIASFile (char *filename, enum fileType ft, TSINEXBiasData *SINEXBias, TOptions *options);
 
 // GPS Receiver types
 int readRecType (FILE *fd, TReceiverList *recList);
@@ -303,8 +315,9 @@ int readSINEXFile (char *filename, TStationList *stationList);
 int readSBASFile (char *filename, TSBASdatabox *SBASdatabox, double *rinexVersion, TTime *currentepoch, TOptions  *options);
 int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox, double *rinexVersion, int *prevday, TTime *currentepoch, TOptions  *options);
 int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox, int *prevday, TTime *currentepoch, TOptions  *options);
-int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetype, TSBASblock *sbasblock, int *messageslost, TOptions  *options);
-void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime currentepoch, int messagesmissing, TOptions  *options);
+int readSBASmessagePreamble (unsigned char *preamble, TSBASblock *sbasblock);
+int readSBASmessage (char *binarystring, unsigned char *binarymessage, unsigned char preamble, int validpreamble, int *decodedmessagetype, TSBASblock *sbasblock, int *messageslost, TOptions  *options);
+void updateSBASdata (TSBASdatabox *SBASdatabox, TSBASdata  *SBASdata, TSBASblock  *sbasblock, TOptions  *options);
 int readsigmamultipathFile (char *filename,  TSBASdata  *SBASdata, TOptions  *options);
 int readsigmamultipath (FILE *fd, char  *filename, TSBASdata  *SBASdata, TOptions *options);
 
@@ -318,7 +331,7 @@ TMSG1 *readMSG1 (TMSG1 *sc, int ns, char *body_str);
 TMSG2 *readMSG2 (TMSG2 *sc, int ns, char *body_str);
 TMSG3 *readMSG3 (TMSG3 *sc, char *body_str);
 TMSG24 *readMSG24 (TMSG24 *sc, char *body_str);
-int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *fileASCIIantenna, TEpoch *epoch, TEpoch *epochDGNSS, TOptions *options);
+int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *fileASCIIantenna, TEpoch *epochDGNSS, TOptions *options);
 
 // DGNSS RTCM v3.x
 int bitInt (char bt, int bp);
@@ -333,7 +346,7 @@ TMSG1004 *readMSG1004 (TMSG1004 *sc, int ns, char *body_str);
 TMSG1006 *readMSG1005 (TMSG1006 *sc, unsigned char *msg);
 TMSG1006 *readMSG1006 (TMSG1006 *sc, unsigned char *msg);
 TMSG1008 *readMSG1008 (TMSG1008 *sc, unsigned char *msg);
-void readRTCM3header (TEpoch *epoch, TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options);
+void readRTCM3header (TEpoch *epoch, TEpoch *epochDGNSS, TRTCM3 *rtcm3);
 int readRTCM3obs (TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options);
 int converterRTCM3 (FILE *fd, TRTCM3 *rtcm3, char *fileRINEXpointer, TEpoch *epoch, TEpoch *epochDGNSS, TOptions *options);
 

@@ -17,9 +17,11 @@
 #define COORD_CONVERTER_H
 
 #include <QDialog>
+#include <QFile>
 #include <QCloseEvent>
+#include <QMessageBox>
 #include <QDoubleValidator>
-#include <QDebug>
+//#include <QDebug>
 
 #define Pi                                      3.14159265358979
 #define d2r                                     (Pi/180.)
@@ -38,7 +40,7 @@ public:
     ~GNSS_Coord_converter();
 
 private slots:
-    void on_pushButtonCoordConvOK_clicked();
+    void on_pushButtonCoordConvClose_clicked();
     void on_lineEditCoordConvX_textEdited();
     void on_lineEditCoordConvY_textEdited();
     void on_lineEditCoordConvZ_textEdited();

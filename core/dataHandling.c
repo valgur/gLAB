@@ -2,7 +2,7 @@
    Copyright & License:
    ====================
    
-   Copyright 2009 - 2020 gAGE/UPC & ESA
+   Copyright 2009 - 2024 gAGE/UPC & ESA
    
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@
  *             Jesus Romero Sanchez ( gAGE/UPC )
  *          glab.gage @ upc.edu
  * File: dataHandling.c
- * Code Management Tool File Version: 5.5  Revision: 1
- * Date: 2020/12/11
+ * Code Management Tool File Version: 6.0  Revision: 0
+ * Date: 2024/11/22
  ***************************************************************************/
 
 /****************************************************************************
@@ -115,6 +115,7 @@
  *             Default precise orbit interpolation degree changed from 9 to 10.
  *             SIGMA_INF splitted into different SIGMA_INF_DR and SIGMA_INF_DT: receiver coordinates and clock.
  * -----------
+ *          gLAB v2.0.0
  * Release: 2012/12/31
  * Change Log: gLAB version released together with the Educational Book:
  *             "GNSS Data Processing" (Vol. 1 and Vol. 2). ESA TM-23.
@@ -344,29 +345,194 @@
  * Release: 2020/12/11
  * Change Log: No changes in this file.
  * -----------
+ *          gLAB v6.0.0
+ * Release: 2024/11/22
+ * Change Log:   Added multi-constellation support (Galileo, GLONASS, GEO, BDS, QZSS and IRNSS).
+ *               Added multi-frequency support (all RINEX frequencies).
+ *               Added SBAS DFMC processing.
+ *               Added preprocessor directive RANGECASEENABLED to select wheter switch statements
+ *                 are used with value ranges or not. Using value ranges is compiler extension
+ *                 supported by GCC, Clang and ICC, but not for Visual Studio compiler. This
+ *                 behaviour can be enabled by providing parameter '-DRANGECASE' to the compiler.
+ *               Functions "getstr" and "trim" now have the length of the input string provided
+ *                 by parameter instead of being computed inside the function. This saves lots
+ *                 of string length computation, as in nearly most of the calls to these functions
+ *                 the length of the input string had been already computed previously.
+ *               Changed default number of threads to half of the CPU cores instead of all CPU cores.
+ *               Option flexible C1-P1 removed from command line help, as it is not needed anymore.
+ *                 Previously it was hardcoded to use P1, and if not present in the header of RINEX
+ *                 observation file, to use C1 instead. Now it can automatically select the
+ *                 measurement to use.
+ * -----------
  *       END_RELEASE_HISTORY
  *****************************/
 
-/* External classes */
+ /* External classes */
 #include "dataHandling.h"
 #include "input.h"
 #include "output.h"
 #include <string.h>
 #include <ctype.h>
 #if defined _OPENMP
- #include <omp.h>
+#include <omp.h>
 #endif
 
-extern char printbufferMODEL[MAX_SATELLITES_VIEWED][MAX_INPUT_LINE];
-extern char printbufferSBASCORR[MAX_SATELLITES_VIEWED][MAX_INPUT_LINE];
-extern char printbufferSBASVAR[MAX_SATELLITES_VIEWED][MAX_INPUT_LINE];
-extern char printbufferSBASIONO[MAX_SATELLITES_VIEWED][MAX_INPUT_LINE];
-extern char printbufferSBASUNSEL[MAX_SATELLITES_VIEWED][MAX_INPUT_LINE];
-extern int  linesstoredSATSEL[MAX_SATELLITES_VIEWED];
-extern char printbufferSATSEL[MAX_SATELLITES_VIEWED][MAX_LINES_BUFFERED][MAX_INPUT_LINE];
+#if (defined RANGECASE) && ((defined __GNUC__) || (defined __clang__) || (defined __INTEL_COMPILER) || (defined __INTEL_LLVM_COMPILER))
+	 #define RANGECASEENABLED
+#endif
 
-extern int	ReadL1CAsItself;
-const double EGM96grid[181][361];
+char	messagestr[MAX_MESSAGE_STR];
+char	messagestrSwitchGEO[MAX_MESSAGE_STR];
+char	messagestrSwitchMode[MAX_MESSAGE_STR];
+
+const int       listMaxSatGNSS[MAX_GNSS]={MAX_SAT_GPS,MAX_SAT_GAL,MAX_SAT_GLO,MAX_SAT_GEO,MAX_SAT_BDS,MAX_SAT_QZS,MAX_SAT_IRN};
+
+//Variables with default configuration
+
+const enum WeightMode		defaultWeightMode=FixedWeight; //Default weight mode to use in gLAB if non set
+
+const int					attrAvail[MAXLETTERSDICTIONARY]={1,1,1,1,1,0,0,0,1,0,0,1,1,1,0,1,1,0,1,0,0,0,1,1,1,1}; //List of measurement letters available in gLAB
+														   //A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z
+
+const int					availGNSSFreq[MAX_GNSS][MAX_FREQUENCIES_PER_GNSS]={	//List of available frequencies in each constellation
+							   //0,1,2,3,4,5,6,7,8,9
+						/*GPS*/	{0,1,1,0,0,1,0,0,0,0},
+						/*GAL*/	{0,1,0,0,0,1,1,1,1,0},
+						/*GLO*/	{0,1,1,1,1,0,1,0,0,0},
+						/*GEO*/	{0,1,0,0,0,1,0,0,0,0},
+						/*BDS*/	{0,1,1,0,0,1,1,1,1,0},
+						/*QZS*/	{0,1,1,0,0,1,1,0,0,0},
+						/*IRN*/	{0,0,0,0,0,1,0,0,0,1}};
+
+const int					maxLenghtConstName=7; //Maximum size for constellation name (e.g. Galileo or GLONASS)
+
+const char					Freqname[MAX_GNSS][MAX_FREQUENCIES_PER_GNSS][6]={
+							   //0  1    2      3    4     5     6     7     8    9
+						/*GPS*/	{"","L1","L2"  ,""  ,""   ,"L5" ,""   ,""   ,""     ,"" },
+						/*GAL*/	{"","E1",""    ,""  ,""   ,"E5a","E6" ,"E5b","E5a+b","" },
+						/*GLO*/	{"","G1","G2"  ,"G3","G1a",""   ,"G2a",""   ,""     ,"" },
+						/*GEO*/	{"","L1",""    ,""  ,""   ,"L5" ,""   ,""   ,""     ,"" },
+						/*BDS*/	{"","B1","B1-2",""  ,""   ,"B2a","B3" ,"B2b","B2a+b","" },
+						/*QZS*/	{"","L1","L2"  ,""  ,""   ,"L5" ,"L6" ,""   ,""     ,"" },
+						/*IRN*/	{"",""  ,""    ,""  ,""   ,"L5" ,""   ,""   ,""     ,"S"}};
+
+const int					maxLengthFreqName=5; //Maximum size for frequency name
+
+const int					GNSS3Freq[MAX_GNSS]={1,1,1,0,1,1,0};	//Constellations that have 3 or more frequencies (GEO and IRNSS only have 2 frequencies)
+
+const int					BRDCAnyValue[MAX_GNSS]={GPSANY,GalANY,GLOANY,GEOANY,BDSANY,QZSANY,IRNANY};
+
+const int					SNRtable[10] = { 53, 11, 17, 23, 29, 35, 41, 47, 53, 60 }; //SNR table conversion from flag to dBHz
+
+const enum GNSSystem		DefaultClkRefOrder[MAX_GNSS]={GPS,Galileo,GLONASS,BDS,QZSS,IRNSS,GEO};	//Default reference constellation order to use for receiver clock
+
+const int					SBASfreqPos2freqNum[NUMPOSFREQSBASMSG]={1,5,6}; //SBAS frequency position to frequency number. The last position is for any unknown frequency, so the frequency number may be any number different from 1 and 5
+
+const int   	            FilterMeasType2PrintType[MAX_FILTER_MEASTYPE]={	//The order below follows the order declared in the definition of "enum FilterMeasType"
+															PRINT_ORDER_DOPPLER, //OTHER MEAS, not used
+															PRINT_ORDER_CODE,
+															PRINT_ORDER_CODE_SMOOTHED,
+															PRINT_ORDER_CODE,
+															PRINT_ORDER_CODE_SMOOTHED,
+															PRINT_ORDER_CODE,
+															PRINT_ORDER_CODE_SMOOTHED,
+															PRINT_ORDER_CODE,
+															PRINT_ORDER_CODE_SMOOTHED,
+															PRINT_ORDER_PHASE,
+															PRINT_ORDER_PHASE,
+															PRINT_ORDER_PHASE,
+															PRINT_ORDER_PHASE,
+															PRINT_ORDER_PHASE,
+															PRINT_ORDER_DOPPLER,    //Doppler not printed at the moment
+															PRINT_ORDER_DOPPLER,    //Doppler not printed at the moment
+															PRINT_ORDER_DOPPLER};   //Doppler not printed at the moment
+
+//Global variable for printing process (it might change with signals if process is in background). Initialized in the beginning of main function
+int printProgress;		// 0 => Do not print current epoch being processed to terminal (auto disables if stdout is not a terminal)
+						// 1 => Print current epoch being processed to terminal
+
+int printProgressWasDisabled=0; //This variable is set to 1 if printProgress was set to 1 and then set to 0 due to process was moved to the background
+int printProgressConvert=0;	//For file conversion mode only
+							// 0 => Do not print current epoch being processed to terminal (auto disables if stdout is not a terminal)
+							// 1 => Print current epoch being processed to terminal
+
+// Global variables for printing USERADDEDERROR buffer
+int		linesstoredUserError[MAX_GNSS][MAX_SATELLITES_PER_GNSS];
+char	**printbufferUserError[MAX_GNSS][MAX_SATELLITES_PER_GNSS];	//There max number of lines possible is very high, as each satellite may
+																	//have multiple errors at the same time from the same or different types
+// Global variables for printing CS buffer
+int		linesstoredCS[MAX_GNSS][MAX_SATELLITES_PER_GNSS];
+char	printbufferCS[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_LINES_BUFFEREDCS][MAX_PRINT_LINE];
+
+// Global variables for printing SFCSdata buffer
+int		linesstoredSFCSdata[MAX_GNSS][MAX_SATELLITES_PER_GNSS];
+char	printbufferSFCSdata[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_LINES_BUFFEREDCS][MAX_PRINT_LINE];
+
+// Global variables for printing MWCSdata buffer
+int		linesstoredMWCSdata[MAX_GNSS][MAX_SATELLITES_PER_GNSS];
+char	printbufferMWCSdata[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_LINES_BUFFEREDCS][MAX_PRINT_LINE];
+
+// Global variables for printing LICSdata buffer
+int		linesstoredLICSdata[MAX_GNSS][MAX_SATELLITES_PER_GNSS];
+char	printbufferLICSdata[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_LINES_BUFFEREDCS][MAX_PRINT_LINE];
+
+// Global variables for printing IGFCSdata buffer
+int		linesstoredIGFCSdata[MAX_GNSS][MAX_SATELLITES_PER_GNSS];
+char	printbufferIGFCSdata[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_LINES_BUFFEREDCS][MAX_PRINT_LINE];
+
+// Global variables for printing MODEL buffer
+int		linesstoredMODEL[MAX_GNSS][MAX_SATELLITES_PER_GNSS];
+char	printbufferMODEL[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_LINES_BUFFERED][MAX_PRINT_LINE_MODEL];
+
+// Global variables for printing SBASCORR buffer
+char	printbufferSBASCORR[MAX_SATELLITES_VIEWED][MAX_PRINT_LINE];
+
+// Global variables for printing SBASVAR buffer
+char	printbufferSBASVAR[MAX_SATELLITES_VIEWED][MAX_PRINT_LINE];
+
+// Global variables for printing SBASIONO buffer
+char	printbufferSBASIONO[MAX_SATELLITES_VIEWED][MAX_PRINT_LINE];
+
+// Global variables for printing SBASUNSEL buffer
+char	printbufferSBASUNSEL[MAX_SATELLITES_VIEWED][MAX_PRINT_LINE];
+
+// Global variables for printing SBASDFMCCORR buffer
+char	printbufferSBASDFMCCORR[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_PRINT_LINE];
+
+// Global variables for printing SBASDFMCVAR buffer
+char	printbufferSBASDFMCVAR[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_PRINT_LINE];
+
+// Global variables for printing SBASDFMCUNSEL buffer
+char	printbufferSBASDFMCUNSEL[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_PRINT_LINE];
+
+// Global variables for printing DGNSS buffer
+char	printbufferDGNSS[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_PRINT_LINE];
+
+//NOTE that PREFIT and POSTFIT buffers will not work well with multithreading, as threads with satellites 
+//with the same constellation will share the index variable! (currently they are not used in multi-threading)
+
+// Global variables for printing SATSEL buffer
+int		linesstoredSATSEL[MAX_GNSS][MAX_SATELLITES_PER_GNSS];
+char	printbufferSATSEL[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_LINES_BUFFERED][MAX_PRINT_LINE];
+
+// Global variables for printing PREFIT buffer
+int		linesstoredPREFIT[MAX_GNSS][MAX_MEASKIND_PRINT_MEASUREMENTS][MAX_FILTER_MEASUREMENTS_SAT];
+char	printbufferPREFIT[MAX_GNSS][MAX_MEASKIND_PRINT_MEASUREMENTS][MAX_FILTER_MEASUREMENTS_SAT][MAX_LINES_BUFFEREDPREFIT][MAX_PRINT_LINE];
+
+// Global variables for printing POSTFIT buffer
+int		linesstoredPOSTFIT[MAX_GNSS][MAX_MEASKIND_PRINT_MEASUREMENTS][MAX_FILTER_MEASUREMENTS_SAT];
+char	printbufferPOSTFIT[MAX_GNSS][MAX_MEASKIND_PRINT_MEASUREMENTS][MAX_FILTER_MEASUREMENTS_SAT][MAX_LINES_BUFFEREDPREFIT][MAX_PRINT_LINE];
+
+// Global variables for printing EPOCHSAT buffer
+int		linesstoredEPOCHSAT[MAX_MEASKIND_PRINT_MEASUREMENTS];
+char	printbufferEPOCHSAT[MAX_MEASKIND_PRINT_MEASUREMENTS][MAX_FILTER_MEASUREMENTS_SAT*MAX_GNSS][MAX_PRINT_LINE];
+
+// Global variables for printing FILTER buffer
+char	printbufferFILTER[MAX_PRINT_LINE_FILTER];
+
+
+//Buffer for storing the different words read from a line
+char	wordlst[MAX_WORDS][MAX_INPUT_LINE]; //Used only ion input.c Defined as a global variable it may be too big for the stack, and can be safely reused by each function reading from file
 
 /**************************************
  * Declarations of internal operations
@@ -380,7 +546,7 @@ const double EGM96grid[181][361];
  * TOptions  *options              O  N/A  TOptions structure
  *****************************************************************************/
 void initOptions (TOptions *options) {
-	int	i,j,k;
+	int	i,j,k,l,m;
 	
 	options->fdkml=NULL;
 	options->fdkml0=NULL;
@@ -406,19 +572,41 @@ void initOptions (TOptions *options) {
 	// Verbose options
 	options->printModel = -1;
 	options->printPrefit = -1;
+	options->printPrefitUnsel = 0;
 	options->printPostfit = -1;
 	options->printFilterSolution = -1;
 	options->printInfo = 1;
 	options->printCycleslips = 1;
+	options->printSFdata = 0;
+	options->printMWdata = 0;
+	options->printLIdata = 0;
+	options->printIGFdata = 0;
 	options->printSatellites = -1;
 	options->printInput = -1;
 	options->printMeas = -1;
+	options->printMeasSNR = 1;
+	options->printMeasDoppler = 0;
+	options->printMeasLLI = 0;
+	options->printMeasDopplerCurrentHeader = 0;
+	options->printMeasMaxN=0;
+	for(i=0;i<MAX_GNSS;i++) {
+		for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			options->printMeasNumMeas[i][j]=0;
+			options->printMeasStr[i][j][0]='\0';
+			options->printMeasUserDefinedMeas[i][j]=0;
+			for (k=0;k<MAX_MEASUREMENTS_PER_SATELLITE;k++) {
+				options->printMeasLLIFlag[i][j][k]=0;
+			}
+		}
+	}
 	options->printOutput = 1;
 	options->printSatSel = -1;
 	options->printSatDiff = 1;
 	options->printSatStat = 1;
 	options->printSatStatTot = 1;
 	options->printSatPvt = 1;
+	options->printV5format = 0;
+	options->ClktimeFactor = 1.;
 
 	options->printSBASOUT    = 1;
 	options->printSBASCORR   = 0;
@@ -426,10 +614,13 @@ void initOptions (TOptions *options) {
 	options->printSBASIONO   = 0;
 	options->printSBASUNSEL  = 0;
 	options->printSBASUNUSED = 0;
+	options->printSBASDFMCCORR  = 0;
+	options->printSBASDFMCVAR   = 0;
+	options->printSBASDFMCUNSEL = 0;
 	options->printInBuffer   = 0;
 	options->printUserError  = 1;
 
-	options->printDGNSS = 1;
+	options->printDGNSS = 0;
 	options->printDGNSSUNUSED = 0;
 
 	options->printSummary = 1;
@@ -446,17 +637,22 @@ void initOptions (TOptions *options) {
 	options->aprioriReceiverPositionGeod[2]=-999999; //This is an invalid value to know that user has set no input for this value
 	options->strictradome = 0;
 	options->antennaData = adNONE;
+	options->UseReferenceFile=0;
 	options->ARPData = arpUNKNOWN;
-	for (j=0;j<3;j++) {
-		options->receiverARP[j] = 0;
-		for (i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
-			options->receiverPCO[i][j] = 0;
+	for (k=0;k<3;k++) {
+		options->receiverARP[k] = 0;
+		for(i=0;i<MAX_GNSS;i++) {
+			for (j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
+				options->receiverPCO[i][j][k] = 0.;
+				options->antennaDataGNSS[i][j] = adNONE;
+				options->antennaDataGNSSsource[i][j] = adNONE;
+			}
 		}
 	}
 	options->deprecatedMode = 0;
 	options->prealignCP = 1;
-	options->flexibleC1P1 = 1;
 	options->csDataGap = -1;
+	options->csDataGapSizeMode = csDataGapSizeDefault;
 	options->csLLI = 1;
 	options->csNcon = -1;
 	options->csNconMin = -2;
@@ -466,19 +662,36 @@ void initOptions (TOptions *options) {
 	options->csLImax = 0.08;
 	options->csLIt = 60;
 	options->csLIsamples = 7;
-	options->csBW = 1;
-	options->csBWInitStd = 2.;
-	options->csBWmin = 0.8;
-	options->csBWwindow = 300;
-	options->csBWkfactor = 5;
-	options->csBWsamples = 2;
-	options->csL1C1 = 0;
+	options->csLIThreshold = options->csLImax / (1.0 + exp(-options->csDataGap/options->csLIt));
+	options->csLIenableOutlier=1;
+	options->csMW = 1;
+	options->csMWInitStd = 2.;
+	options->csMWmin = 0.8;
+	options->csMWwindow = 300;
+	options->csMWkfactor = 5;
+	options->csMWsamples = 2;
+	options->csMWenableOutlier=1;
+	options->csSF = 0;
 	options->csUnconsistencyCheck = 1;
 	options->csUnconsistencyCheckThreshold = 20.;
-	options->csL1C1kfactor = 5.0;
-	options->csL1C1window = 300;
-	options->csL1C1init = 3.0;
-	options->csL1C1samples = 2;
+	options->csSFkfactor = 5.0;
+	options->csSFwindow = 300;
+	options->csSFinit = 3.0;
+	options->csSFsamples = 2;
+	options->csIGF = 0;
+	options->csIGFminNoise = 0;
+	options->csIGFallowCodes = 0;
+	options->csIGFmaxjump = 1;
+	options->csIGFmax = -1.; 
+	options->csIGFt = 60;
+	options->csIGFsamples = 7;
+	options->csIGFThreshold = options->csIGFmax / (1.0 + exp(-options->csDataGap/options->csIGFt));
+	options->csIGFenableOutlier=1;
+	options->autoFillcsSF=1;
+	options->autoFillcsMW=1;
+	options->autoFillcsLI=1;
+	options->autoFillcsIGF=1;
+	options->allCSDetectorsOff = 0;
 	options->timeTrans = 1;
 	options->earthRotation = 1;
 	options->satellitePhaseCenter = 1;
@@ -489,53 +702,65 @@ void initOptions (TOptions *options) {
 	options->gravitationalCorrection = 1;
 	options->solidTidesCorrection = 1;
 	options->satelliteClockCorrection = 1;
-	options->ionoModel = NoIono;
+	options->ionoModel = NoIonoModel;
 	options->ionoRMS = 100000;  //High value because it is not used. A normal value is 1
 	options->troposphericCorrection = 1;
 	options->useSigmaIono = 1;
 	options->tropNominal = UNB3Nominal;
 	options->tropMapping = SimpleMapping;
-	options->p1c1dcbModel = p1c1FLEXIBLE;
-// Found: options->p1p2dcbModel = p1c1NONE;
-	options->p1p2dcbModel = p1p2NONE;
-	options->SBAScorrections = 0;
-	options->onlySBASiono = 0;
+	options->GPSp1c1DCBModel = GPSp1c1FLEXIBLE;
+	options->GPSp1p2DCBModel = DCBRINEX;
+	options->GPSISCl1caDCBModel = DCBRINEX;
+	options->GPSISCl1cpDCBModel = DCBNONE;
+	options->GPSISCl1cdDCBModel = DCBNONE;
+	options->GPSISCl2cDCBModel = DCBRINEX;
+	options->GPSISCl5i5DCBModel = DCBRINEX;
+	options->GPSISCl5q5DCBModel = DCBRINEX;
+	options->GALe1e5aDCBModel = DCBRINEX;
+	options->GALe1e5bDCBModel = DCBRINEX;
+	options->GLOp1p2DCBModel = DCBRINEX;
+	options->BDSb1b6DCBModel = DCBNONE;
+	options->BDSb2b6DCBModel = DCBRINEX;
+	options->BDSb5b6DCBModel = DCBNONE;
+	options->BDSb7b6DCBModel = DCBRINEX;
+	options->BDSSP3DCBModel = DCBRINEX;
+	options->BDSISCb1cdDCBModel = DCBNONE;
+	options->BDSISCb2adDCBModel = DCBNONE;
+	options->QZSc1cDCBModel = DCBRINEX;
+	options->QZSISCl1cpDCBModel = DCBNONE;
+	options->QZSISCl1cdDCBModel = DCBNONE;
+	options->QZSISCl2cDCBModel = DCBRINEX;
+	options->QZSISCl5i5DCBModel = DCBRINEX;
+	options->QZSISCl5q5DCBModel = DCBRINEX;
+	options->IRNc9c5DCBModel = DCBRINEX;
+	options->OSBdcbModel = OSBNONE;
+	options->DSBdcbModel = DSBNONE;
+	options->DualFreqDCBModel[GPS] = DCBRINEX;
+	options->DualFreqDCBModel[Galileo] = DCBNONE;
+	options->DualFreqDCBModel[GLONASS] = DCBNONE;
+	options->DualFreqDCBModel[GEO] = DCBNONE;
+	options->DualFreqDCBModel[BDS] = DCBRINEX;
+	options->DualFreqDCBModel[QZSS] = DCBRINEX;
+	options->DualFreqDCBModel[IRNSS] = DCBNONE;
+	options->FPPPDCBModel=DCBNONE;
+	options->SBAScorrections = NoSBASdata;
+	options->SBASmodePos = SBAS1FMODEPOS;
+	
 	options->decimate = -1.;
+	options->integerRINEXObsSeconds=0;
 	options->orbitInterpolationDegree = 10;
-	options->clockInterpolationDegree = 0;
-	options->satelliteHealth = -1;
+	options->clockInterpolationDegree = 1;
+	options->satHealthMode = BRDCUseUndefined;
+	for(i=0;i<MAX_HEALTH_TYPES;i++) {
+		options->brdcHealthSkip[i]=0;
+	}
 	options->brdcBlockTransTime = -1;
 	options->MaxURABroadcast=9999999.;
+	options->GLOintStep=30.;
 	options->discardEclipsedSatellites = 0;
 	options->maxKalmanIterations = 20;
-
-	// Filtering options
-	for (i=0;i<MAX_FILTER_MEASUREMENTS;i++) {
-		//options->fixedMeasurementWeight[i] = 1;
-		//options->elevationMeasurementWeight[i][0] = 0;
-		//options->elevationMeasurementWeight[i][1] = 10 * d2r;
-	}
-	options->totalFilterMeasurements = 2;
-	options->measurement[0] = PC;
-	options->measurement[1] = LC;
-	options->smoothMeas[0] = NA;
-	options->smoothMeas[1] = NA;
-	options->smoothEpochs = -1;
-	options->maxdr2 = 10000;
-	options->estimateTroposphere = 1;
-	options->usePhase = 1;
-	options->filterParams[PHI_PAR][DR_UNK] = 1;
-	options->filterParams[PHI_PAR][DT_UNK] = 0;
-	options->filterParams[PHI_PAR][TROP_UNK] = 1;
-	options->filterParams[PHI_PAR][BIAS_UNK] = 1;
-	options->filterParams[Q_PAR][DR_UNK] = 0;
-	options->filterParams[Q_PAR][DT_UNK] = SIGMA_INF_DT*SIGMA_INF_DT;
-	options->filterParams[Q_PAR][TROP_UNK] = 1e-4;
-	options->filterParams[Q_PAR][BIAS_UNK] = 0;
-	options->filterParams[P0_PAR][DR_UNK] = SIGMA_INF_DR*SIGMA_INF_DR;
-	options->filterParams[P0_PAR][DT_UNK] = SIGMA_INF_DT*SIGMA_INF_DT;
-	options->filterParams[P0_PAR][TROP_UNK] = 0.5 * 0.5;
-	options->filterParams[P0_PAR][BIAS_UNK] = 20 * 20;
+	options->ModelAllMeas=0;
+	options->ForcedNoModelAllMeas=0;
 	options->elevationMask = 5. * d2r;
 	options->filterIterations = 1;
 	options->NextSP3 = 0;
@@ -552,28 +777,847 @@ void initOptions (TOptions *options) {
 	options->OrbitsToTMaxDistance=-1.;
 	options->ClocksToTMaxDistance=-1.;
 	options->checkPhaseCodeJumps = 1;
-	
-	
-	for (i=0;i<MAX_GNSS;i++) {
-		for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
-			options->includeSatellite[i][j] = 1;
-			options->SNRvalues[i][j] = 33.;
-			for (k=0;k<MAX_FILTER_MEASUREMENTS;k++) {
-				options->SNRweightComb[i][j][k]=SNRWeightCombMean;
-				options->SNRweightCombVal[i][j][k][0]=0.5;
-				options->SNRweightCombVal[i][j][k][1]=0.5;
-				options->WeightConstantsValues[i][j][k][0]=1.;
-				options->WeightConstantsValues[i][j][k][1]=0.;
-				options->WeightConstantsValues[i][j][k][2]=0.;
-				options->weightMode[i][j][k]=FixedWeight;
-			}
+	options->BrdcTypeSel[GPS]=UnknownGPSBRDCPref;
+	options->BrdcTypeSel[Galileo]=UnknownGalBRDCPref;
+	options->BrdcTypeSel[GLONASS]=UnknownGLOBRDCPref; 
+	options->BrdcTypeSel[BDS]=UnknownBDSBRDCPref;
+	options->BrdcTypeSel[QZSS]=UnknownQZSSBRDCPref;
+	options->BrdcTypeSel[GEO]=UnknownGEOBRDCPref; 
+	options->BrdcTypeSel[IRNSS]=UnknownIRNSSBRDCPref;
+
+	// Filtering options
+	options->CombTypeAutoSelection = CombTypeAutoSelectionAutomatic;
+	options->numAutoMeasSatByUser=0;
+	options->numAutoMeasSmoothSatByUser=0;
+	for(i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			options->autoMeasSatByUser[i][j] = -1;
+			options->autoMeasSmoothSatByUser[i][j] = -1;
 		}
-		for (j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
-			options->usableFreq[i][j] = 1;
+	}
+	options->smoothAuto= 0;
+	options->smoothEpochs = -1;
+	options->maxdr2 = 10000;
+	options->CoordRandWalk = 0;
+	options->ClkRandWalk = 0;
+	options->ISCBRandWalk = 0;
+	options->IonoRandWalk = 0;
+	options->SatDCBRandWalk = 0;
+	options->RecDCBRandWalk = 0;
+	options->estimateTroposphere = 1;
+	options->estimateRecWindUp = 0;	//To be implemented
+	options->estimateIono = 0;	
+	options->estimateSatDCB = 0;	
+	options->estimateRecDCB = 0;
+	options->estimateAnyDCB = 0;
+	options->estimateGLOIFB = 0;	//To be implemented
+	options->usePhase = 0;
+	options->FastPPP = 0;
+	options->UncombinedPPP = 0;
+	options->estimateAmbiguities = 1;
+	options->AllowChangeReferenceGNSSClk=1;
+	options->filterParams[PHI_PAR][DR_UNK] = 1;
+	options->filterParams[PHI_PAR][DT_UNK] = 0;
+	options->filterParams[PHI_PAR][DT_IS_UNK] = 0;
+	options->filterParams[PHI_PAR][TROP_UNK] = 1;
+	options->filterParams[PHI_PAR][IONO_UNK] = 0;	
+	options->filterParams[PHI_PAR][SATDCB_UNK] = 0;	
+	options->filterParams[PHI_PAR][RECDCB_UNK] = 0;	
+	options->filterParams[PHI_PAR][GLOIFB_UNK] = 1;	
+	options->filterParams[PHI_PAR][WUP_UNK] = 1;	
+	options->filterParams[PHI_PAR][BIAS_UNK] = 1;
+	options->filterParams[Q_PAR][DR_UNK] = 0;
+	options->filterParams[Q_PAR][DT_UNK] = SIGMA_INF_DT*SIGMA_INF_DT;
+	options->filterParams[Q_PAR][DT_IS_UNK] = SIGMA_INF_DT*SIGMA_INF_DT;	//Inter clock bias default estimated as random noise in SPP, as constant in PPP
+	options->filterParams[Q_PAR][TROP_UNK] = 1e-4/3600.;
+	options->filterParams[Q_PAR][IONO_UNK] = SIGMA_INF_IONO*SIGMA_INF_IONO;	
+	options->filterParams[Q_PAR][SATDCB_UNK] = SIGMA_INF_SATDCB*SIGMA_INF_SATDCB;
+	options->filterParams[Q_PAR][RECDCB_UNK] = SIGMA_INF_RECDCB*SIGMA_INF_RECDCB;
+	options->filterParams[Q_PAR][GLOIFB_UNK] = 0;	
+	options->filterParams[Q_PAR][WUP_UNK] = 1;		//To be revised
+	options->filterParams[Q_PAR][BIAS_UNK] = 0;
+	options->filterParams[P0_PAR][DR_UNK] = SIGMA_INF_DR*SIGMA_INF_DR;
+	options->filterParams[P0_PAR][DT_UNK] = SIGMA_INF_DT*SIGMA_INF_DT;
+	options->filterParams[P0_PAR][DT_IS_UNK] = SIGMA_INF_DT*SIGMA_INF_DT;
+	options->filterParams[P0_PAR][TROP_UNK] = 0.5 * 0.5;
+	options->filterParams[P0_PAR][IONO_UNK] = SIGMA_INF_IONO*SIGMA_INF_IONO;
+	options->filterParams[P0_PAR][SATDCB_UNK] = SIGMA_INF_SATDCB*SIGMA_INF_SATDCB;	
+	options->filterParams[P0_PAR][RECDCB_UNK] = SIGMA_INF_RECDCB*SIGMA_INF_RECDCB;	
+	options->filterParams[P0_PAR][GLOIFB_UNK] = 5;	//To be revised
+	options->filterParams[P0_PAR][WUP_UNK] = SIGMA_INF_REC_WIND_UP*SIGMA_INF_REC_WIND_UP; //To be revised
+	options->filterParams[P0_PAR][BIAS_UNK] = 20 * 20;
+	for(i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<MAX_GNSS;j++) {
+			options->GNSSclockSource[i][j]=ClkSrcCalculate;
+			options->GNSSclockValue[i][j]=0.;
+		}
+		options->ClkRefPriorityList[i]=DefaultClkRefOrder[i];
+	}
+	options->numClkRefPriorityList=MAX_GNSS;
+	
+
+	const int BRDCSelOrder[MAX_GNSS][MAX_BRDC_SELECTION_TYPES][MAX_BRDC_TYPES+1]={
+
+	//The 'MAX_BRDC_SELECTION_TYPES' in options->BRDCSelOrder second dimension is due to the maximum number of possible
+	//options of selection a navigation message type in TOptions struct variables GPSbrdcOption, GalbrdcOption
+	//GLObrdcOption, BDSbrdcOption, QZSSbrdcOption, GEObrdcOptions and IRNSSbrdcOptions
+	//For each constellation, an array is done with the order of search for the navigation messages type
+	//At the moment, MAX_BRDC_TYPES=6, therefore there are six positions for each possible navigation type.
+	//The last value is the number of different navigation messages types to check. Therefore, when only check
+	//the types of navigation message types allowed. The spare positions (not used or constellations that have
+	//less navigation messages type than MAX_BRDC_TYPES) are set to 0
+
+	/*GPS*/ {/*Prefer LNAV*/ {GPSLNAV,GPSCNAV,GPSCNAV2,0,0,0,3}, /*Prefer CNAV*/ {GPSCNAV,GPSLNAV,GPSCNAV2,0,0,0,3}, /*Prefer CNAV2*/ {GPSCNAV2,GPSLNAV,GPSCNAV,0,0,0,3}, 
+			 /*LNAV*/{GPSLNAV,0,0,0,0,0,1}, /*CNAV*/{GPSCNAV,0,0,0,0,0,1},  /*CNAV2*/{GPSCNAV2,0,0,0,0,0,1}, /*Any CNAV*/ {GPSCNAV,GPSCNAV2,0,0,0,0,2},
+			 /*User defined*/ {0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}	},
+
+	/*GAL*/	{/*Prefer INAV*/ {GalINAVE1E5b,GalINAVE1,GalINAVE5b,GalFNAV,GalCNAV,GalGNAV,6}, /*Prefer FNAV*/{GalFNAV,GalINAVE1E5b,GalINAVE1,GalINAVE5b,GalCNAV,GalGNAV,6}, 
+			/*Prefer CNAV*/{GalCNAV,GalGNAV,GalINAVE1E5b,GalFNAV,GalINAVE1,GalINAVE5b,6},/*Prefer GNAV*/ {GalGNAV,GalCNAV,GalINAVE1E5b,GalFNAV,GalINAVE1,GalINAVE5b,6},
+			/*INAV*/ {GalINAVE1E5b,GalINAVE1,GalINAVE5b,0,0,0,3}, /*INAVE1*/ {GalINAVE1,0,0,0,0,0,1}, /*INAVE5b*/ {GalINAVE5b,0,0,0,0,0,1}, 
+			/*INAVE1E5b*/ {GalINAVE1E5b,0,0,0,0,0,1}, /*FNAV*/ {GalFNAV,0,0,0,0,0,1},/*CNAV*/ {GalCNAV,0,0,0,0,0,1},/*GNAV*/ {GalGNAV,0,0,0,0,0,1},
+			/*User defined*/ {0,0,0,0,0,0,0}   },
+
+	/*GLO*/	{ /*Prefer FDMA*/{GLOFDMA,GLOCDMA,0,0,0,0,2},/*Prefer CDMA*/ {GLOCDMA,GLOFDMA,0,0,0,0,2}, /*FDMA*/{GLOFDMA,0,0,0,0,0,1}, /*CDMA*/{GLOCDMA,0,0,0,0,0,1},
+			  /*User defined*/ {0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0},
+			  /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0} },
+
+	/*GEO*/	{ /*CNAV*/ {GEOCNAV,0,0,0,0,0,1}, /*User defined*/ {0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0},
+			/*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0},
+			/*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}	},
+
+	/*BDS*/	{/*Prefer D1*/ {BDSD1,BDSD2,BDSCNAV1,BDSCNAV2,0,0,4}, /*Prefer D2*/ {BDSD2,BDSD1,BDSCNAV1,BDSCNAV2,0,0,4}, 
+			/*Prefer CNAV1*/ {BDSCNAV1,BDSCNAV2,BDSD1,BDSD2,0,0,4}, /*Prefer CNAV2*/{BDSCNAV2,BDSCNAV1,BDSD1,BDSD2,0,0,4}, 
+			/*D1*/{BDSD1,0,0,0,0,0,1}, /*D2*/{BDSD2,0,0,0,0,0,1}, /*CNAV1*/{BDSCNAV1,0,0,0,0,0,1}, /*CNAV2*/{BDSCNAV2,0,0,0,0,0,1}, 
+			/*User defined*/ {0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0} },
+
+	/*QZS*/ {/*Prefer LNAV*/ {QZSLNAV,QZSCNAV,QZSCNAV2,0,0,0,3}, /*Prefer CNAV*/ {QZSCNAV,QZSLNAV,QZSCNAV2,0,0,0,3}, /*Prefer CNAV2*/ {QZSCNAV2,QZSLNAV,QZSCNAV,0,0,0,3}, 
+			 /*LNAV*/{QZSLNAV,0,0,0,0,0,1}, /*CNAV*/{QZSCNAV,0,0,0,0,0,1}, /*CNAV2*/{QZSCNAV2,0,0,0,0,0,1}, /*Any CNAV*/ {QZSCNAV,QZSCNAV2,0,0,0,0,2}, 
+			  /*User defined*/ {0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}  },
+
+	/*IRN*/	{ /*CNAV*/ {IRNCNAV,0,0,0,0,0,1}, /*User defined*/ {0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0},
+			/*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0},/*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0},
+			/*Not used*/{0,0,0,0,0,0,0}, /*Not used*/{0,0,0,0,0,0,0}  }      };
+
+	memcpy(&options->BRDCSelOrder,&BRDCSelOrder,sizeof(int)*MAX_GNSS*MAX_BRDC_SELECTION_TYPES*(MAX_BRDC_TYPES+1));
+
+	//Initialize Avail BRDC packages
+	for (l=0;l<MAXNAVSOURCES;l++) {
+		for (i=0;i<MAX_GNSS;i++) {
+			for(j=0;j<MAX_BRDC_SELECTION_TYPES;j++) {
+				for(k=0;k<=MAX_BRDC_TYPES;k++) {
+					options->BRDCAvailSelOrder[l][i][j][k]=0;
+				}
+			}
 		}
 	}
 
+	options->maxBRDCFreshTimeDiffToc=3600.; //Default to 1h
+
+	options->numConstellationUsed=MAX_GNSS;
+
+	for (i=0;i<MAX_GNSS;i++) {
+		options->ConstellationUsed[i]=1; //This variable will be filled later in setDefaultMeasurements function
+		for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			options->includeSatellite[i][j] = 1;
+			options->filterMeasFreqMissng[i][j] = 0;
+			for (k=0;k<MAX_FILTER_MEASUREMENTS_SAT;k++) {
+				//Set invalid values so defaut values can be set for not user defined values
+				options->SNRweightComb[i][j][k]=SNRWeightUnknown;
+				options->SNRweightCombVal[i][j][k][0]=-1.;
+				options->SNRweightCombVal[i][j][k][1]=-1.;
+				options->SNRweightCombVal[i][j][k][2]=-1.;
+				options->SNRweightCombVal[i][j][k][3]=-1.;
+				options->WeightConstantsValues[i][j][k][0]=-999.;
+				options->WeightConstantsValues[i][j][k][1]=-999.;
+				options->WeightConstantsValues[i][j][k][2]=-999.;
+				options->weightMode[i][j][k]=UnknownWeight;
+			}
+			for (k=0;k<MAX_MEASUREMENTS_NO_COMBINATIONS;k++) {
+				options->SNRminvalues[i][j][k] = -9999.; //If min SNR not enabled, this value is always met
+				options->SNRmaxvalues[i][j][k] = 9999.;  //If max SNR not enabled, this value is always met
+			}
+			for (k=0;k<MAX_FREQUENCIES_PER_GNSS;k++) {
+				options->usableFreq[i][j][k] = 1;
+				options->GLOsatFDMAdisabled[i][j][k]=0;
+			}
+		}
+		for (j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
+			options->unselUnavailGNSSFreqCS[i][j]=0;
+			options->unselUnavailGNSSFreqFilter[i][j]=0;
+		}
+	}
+
+	//Unselect all GEO satellites by default
+	for (i=0;i<MAX_SATELLITES_PER_GNSS;i++) {
+		options->includeSatellite[GEO][i] = 0;
+	}
+
+
+	for(i=0;i<NUM_OBSRINEX;i++) {
+		for (j=0;j<MAX_GNSS;j++) {
+			for (k=0;k<MAX_SATELLITES_PER_GNSS;k++) {
+				for (l=0;l<MAX_FILTER_MEASUREMENTS_SAT;l++) {
+					options->numCombfilterMeas[i][j][k][l]=0; //Set number of combinations per measurements to 0
+					options->numCombfilterSmoothMeas[i][j][k][l]=0; //Set number of combinations per smoothed measurements to 0
+					options->filterListWithMeas[i][j][k][l]=0; //Set measurements to use not filled
+					options->filterMeasSmoothed[i][j][k][l]=NONSMOOTHED;	//Set all measurements as not smoothed
+					options->DopplerListWithMeas[i][j][k][l]=0;  //Set Doppler measurements to use not filled
+					options->filterListAllMeasSelected[i][j][k][l]=MEASUNSELECTED;
+					options->filterListMeasSelected[i][j][k][l]=MEASUNSELECTED;
+					options->filterSmoothListMeasSelected[i][j][k][l]=MEASUNSELECTED;
+					options->filterMeasText[i][j][k][l][0]='\0';
+					options->filterSmoothMeasText[i][j][k][l][0]='\0';
+					options->filterSmoothAutoMeasType[i][j][k][l]=0;
+					for (m=0;m<5;m++) {
+						options->filterMeasList[i][j][k][l][m]=NA;
+						options->filterSmoothMeasList[i][j][k][l][m]=NA;
+						options->DopplerMeasList[i][j][k][l][m]=NA;
+					}
+					for (m=0;m<4;m++) {
+						options->filterMeasfreq[i][j][k][l][m]=0;
+						options->filterSmoothMeasfreq[i][j][k][l][m]=0;
+						options->DopplerMeasfreq[i][j][k][l][m]=0;
+					}
+				}
+				for (l=0;l<MAX_CS_LIST;l++) {
+					options->csSFMeasText[i][j][k][l][0]='\0';
+					options->csMWMeasText[i][j][k][l][0]='\0';
+					options->csLIMeasText[i][j][k][l][0]='\0';
+					options->csIGFMeasText[i][j][k][l][0]='\0';
+				}
+				options->numfilterMeasList[i][j][k]=0; //Set filter measurements to empty
+				options->numDopplerMeasList[i][j][k]=0; //Set Doppler measurements to empty
+				options->numcsSFMeasList[i][j][k]=0; //Set SF detector to empty
+				options->numcsMWMeasList[i][j][k]=0; //Set MW detector to empty
+				options->numcsLIMeasList[i][j][k]=0; //Set LI detector to empty
+				options->numcsIGFMeasList[i][j][k]=0; //Set IGF detector to empty
+				options->numfilterMeasWithSmoothing[i][j][k]=0;	//Set number of measurements smoothed to 0
+				options->C1CfilterMeasPos[i][j][k]=-1;	//Set C1C measurement as not found
+				options->numfilterCarrierPhaseMeas[i][j][k]=0; //Set number of carrier phases to 0
+
+				options->numcsSFfreq[i][j][k]=0;	//Set number of pair of frequencies to check for SF to 0
+				options->numcsMWfreq[i][j][k]=0;	//Set number of pair of frequencies to check for MW to 0
+				options->numcsLIfreq[i][j][k]=0;	//Set number of pair of frequencies to check for LI to 0
+				options->numcsIGFfreq[i][j][k]=0;	//Set number of pair of frequencies to check for IGF to 0
+
+				//Set CS frequencies to use to 0
+				for (l=0;l<MAX_FREQUENCIES_PER_GNSS;l++) {
+					options->csSFfreq[i][j][k][l]=0;
+					for(m=0;m<2;m++) {
+						options->csSFfreqAutoChecked[i][j][k][l][m]=0;
+						options->csMWfreqAutoChecked[i][j][k][l][m]=0;
+						options->csLIfreqAutoChecked[i][j][k][l][m]=0;
+						options->csIGFfreqAutoChecked[i][j][k][l][m]=0;
+					}
+				}
+			}
+		}
+	}
+
+
+	//Table of preferences for measurements per constellation, frequency and measurement type (code or phase)
+	const enum MeasurementType defaultMeasOrder[MAX_GNSS][MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]={
+
+	/*GPS*/{
+	/*f0 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1P,C1W,C1C,C1Y,C1L,C1S,C1X,C1M,NA,NA,NA,NA,NA,NA,NA,NA},	/*f1 phase*/ {L1P,L1W,L1C,L1Y,L1L,L1S,L1X,L1M,L1N,NA,NA,NA,NA,NA,NA,NA},	/*f1 doppler*/ {D1P,D1W,D1C,D1Y,D1L,D1S,D1X,D1M,D1N,NA,NA,NA,NA,NA,NA,NA}},
+	/*f2 code*/ {{C2P,C2W,C2C,C2Y,C2L,C2S,C2X,C2D,C2M,NA,NA,NA,NA,NA,NA,NA},/*f2 phase*/ {L2P,L2W,L2C,L2Y,L2L,L2S,L2X,L2D,L2M,L2N,NA,NA,NA,NA,NA,NA}, 	/*f2 doppler*/ {D2P,D2W,D2C,D2Y,D2M,D2X,D2S,D2L,D2D,D2N,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5Q,C5I,C5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {L5Q,L5I,L5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f5 doppler*/ {D5Q,D5I,D5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f6 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}},
+
+	/*GAL*/{
+	/*f0 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},				/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1C,C1X,C1Z,C1B,C1A,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},	/*f1 phase*/ {L1C,L1X,L1Z,L1B,L1A,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f1 doppler*/ {D1C,D1X,D1Z,D1B,D1A,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f2 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5Q,C5I,C5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {L5Q,L5I,L5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f5 doppler*/ {D5Q,D5I,D5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/ {{C6C,C6X,C6Z,C6B,C6A,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},	/*f6 phase*/ {L6C,L6X,L6Z,L6B,L6A,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {D6C,D6X,D6Z,D6B,D6A,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/ {{C7Q,C7I,C7X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 phase*/ {L7Q,L7I,L7X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f7 doppler*/ {D7Q,D7I,D7X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/ {{C8Q,C8I,C8X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 phase*/ {L8Q,L8I,L8X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f8 doppler*/ {D8Q,D8I,D8X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}},
+
+	/*GLO*/{
+	/*f0 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},				/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1P,C1C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 phase*/ {L1P,L1C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f1 doppler*/ {D1P,D1C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f2 code*/ {{C2P,C2C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f2 phase*/ {L2P,L2C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f2 doppler*/ {D2P,D2C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/ {{C3Q,C3I,C3X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 phase*/ {L3Q,L3I,L3X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f3 doppler*/ {D3Q,D3I,D3X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/ {{C4A,C4B,C4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 phase*/ {L4A,L4B,L4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f4 doppler*/ {D4A,D4B,D4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},	 		/*f5 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f5 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/ {{C6A,C6B,C6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 phase*/ {L6A,L6B,L6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f6 doppler*/ {D6A,D6B,D6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}},
+			
+	/*GEO*/{
+	/*f0 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 phase*/ {L1C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f1 doppler*/ {D1C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f2 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5Q,C5I,C5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {L5Q,L5I,L5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f5 doppler*/ {D5Q,D5I,D5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},	 		/*f6 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f6 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}},
+
+	/*BDS*/{
+	/*f0 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1P,C1D,C1L,C1S,C1X,C1Z,C1A,NA,NA,NA,NA,NA,NA,NA,NA,NA},	/*f1 phase*/ {L1P,L1D,L1L,L1S,L1X,L1Z,L1A,L1N,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 doppler*/ {D1P,D1D,D1L,D1S,D1X,D1Z,D1A,D1N,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f2 code*/ {{C2Q,C2I,C2X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f2 phase*/ {L2Q,L2I,L2X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f2 doppler*/ {D2Q,D2I,D2X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5P,C5D,C5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {L5P,L5D,L5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f5 doppler*/ {D5P,D5D,D5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/ {{C6Q,C6I,C6P,C6D,C6X,C6Z,C6A,NA,NA,NA,NA,NA,NA,NA,NA,NA},	/*f6 phase*/ {L6Q,L6I,L6P,L6D,L6X,L6Z,L6A,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {D6Q,D6I,D6P,D6D,D6X,D6Z,D6A,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/ {{C7Q,C7I,C7P,C7D,C7X,C7Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 	/*f7 phase*/ {L7Q,L7I,L7P,L7D,L7X,L7Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {D7Q,D7I,D7P,D7D,D7X,D7Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/ {{C8P,C8D,C8X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 phase*/ {L8P,L8D,L8X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f8 doppler*/ {D8P,D8D,D8X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}},
+
+	/*QZS*/{
+	/*f0 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},				/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1C,C1L,C1S,C1X,C1Z,C1B,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},	/*f1 phase*/ {L1C,L1L,L1S,L1X,L1Z,L1B,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f1 doppler*/ {D1C,D1L,D1S,D1X,D1Z,D1B,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f2 code*/ {{C2L,C2S,C2X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f2 phase*/ {L2L,L2S,L2X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f2 doppler*/ {D2L,D2S,D2X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5Q,C5I,C5P,C5D,C5X,C5Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 	/*f5 phase*/ {L5Q,L5I,L5P,L5D,L5X,L5Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {D5Q,D5I,D5P,D5D,D5X,D5Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/ {{C6L,C6S,C6X,C6E,C6Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},	/*f6 phase*/ {L6L,L6S,L6X,L6E,L6Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {D6L,D6S,D6X,D6E,D6Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}},
+
+	/*IRN*/{
+	/*f0 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},				/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f1 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f1 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f2 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5A,C5C,C5B,C5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 	/*f5 phase*/ {L5A,L5C,L5B,L5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {D5A,D5C,D5B,D5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},	 		/*f6 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f6 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 			/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/ {{C9A,C9C,C9B,C9X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 	/*f9 phase*/ {L9A,L9C,L9B,L9X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {D9A,D9C,D9B,D9X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}} };
+
+	for(i=0;i<NUM_OBSRINEX;i++) {
+		for(j=0;j<MAX_GNSS;j++) {
+			for(k=0;k<MAX_SATELLITES_PER_GNSS;k++) {
+				memcpy(&options->MeasOrder[i][j][k],&defaultMeasOrder[j],sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+			}
+		}
+	}
+
+	for(i=0;i<NUM_OBSRINEX;i++) {
+		for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			options->numMeasOrder[i][GPS][j][0][CODEMEAS]=0; options->numMeasOrder[i][GPS][j][0][PHASEMEAS]=0;  options->numMeasOrder[i][GPS][j][0][DOPPLERMEAS]=0; 
+			options->numMeasOrder[i][GPS][j][1][CODEMEAS]=8; options->numMeasOrder[i][GPS][j][1][PHASEMEAS]=9;  options->numMeasOrder[i][GPS][j][1][DOPPLERMEAS]=9; 
+			options->numMeasOrder[i][GPS][j][2][CODEMEAS]=9; options->numMeasOrder[i][GPS][j][2][PHASEMEAS]=10; options->numMeasOrder[i][GPS][j][2][DOPPLERMEAS]=10;
+			options->numMeasOrder[i][GPS][j][3][CODEMEAS]=0; options->numMeasOrder[i][GPS][j][3][PHASEMEAS]=0;  options->numMeasOrder[i][GPS][j][3][DOPPLERMEAS]=0; 
+			options->numMeasOrder[i][GPS][j][4][CODEMEAS]=0; options->numMeasOrder[i][GPS][j][4][PHASEMEAS]=0;  options->numMeasOrder[i][GPS][j][4][DOPPLERMEAS]=0; 
+			options->numMeasOrder[i][GPS][j][5][CODEMEAS]=3; options->numMeasOrder[i][GPS][j][5][PHASEMEAS]=3;  options->numMeasOrder[i][GPS][j][5][DOPPLERMEAS]=3; 
+			options->numMeasOrder[i][GPS][j][6][CODEMEAS]=0; options->numMeasOrder[i][GPS][j][6][PHASEMEAS]=0;  options->numMeasOrder[i][GPS][j][6][DOPPLERMEAS]=0; 
+			options->numMeasOrder[i][GPS][j][7][CODEMEAS]=0; options->numMeasOrder[i][GPS][j][7][PHASEMEAS]=0;  options->numMeasOrder[i][GPS][j][7][DOPPLERMEAS]=0; 
+			options->numMeasOrder[i][GPS][j][8][CODEMEAS]=0; options->numMeasOrder[i][GPS][j][8][PHASEMEAS]=0;  options->numMeasOrder[i][GPS][j][8][DOPPLERMEAS]=0; 
+			options->numMeasOrder[i][GPS][j][9][CODEMEAS]=0; options->numMeasOrder[i][GPS][j][9][PHASEMEAS]=0;  options->numMeasOrder[i][GPS][j][9][DOPPLERMEAS]=0; 
+
+			options->numMeasOrder[i][Galileo][j][0][CODEMEAS]=0; options->numMeasOrder[i][Galileo][j][0][PHASEMEAS]=0;  options->numMeasOrder[i][Galileo][j][0][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][Galileo][j][1][CODEMEAS]=5; options->numMeasOrder[i][Galileo][j][1][PHASEMEAS]=5;  options->numMeasOrder[i][Galileo][j][1][DOPPLERMEAS]=5;
+			options->numMeasOrder[i][Galileo][j][2][CODEMEAS]=0; options->numMeasOrder[i][Galileo][j][2][PHASEMEAS]=0;  options->numMeasOrder[i][Galileo][j][2][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][Galileo][j][3][CODEMEAS]=0; options->numMeasOrder[i][Galileo][j][3][PHASEMEAS]=0;  options->numMeasOrder[i][Galileo][j][3][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][Galileo][j][4][CODEMEAS]=0; options->numMeasOrder[i][Galileo][j][4][PHASEMEAS]=0;  options->numMeasOrder[i][Galileo][j][4][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][Galileo][j][5][CODEMEAS]=3; options->numMeasOrder[i][Galileo][j][5][PHASEMEAS]=3;  options->numMeasOrder[i][Galileo][j][5][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][Galileo][j][6][CODEMEAS]=5; options->numMeasOrder[i][Galileo][j][6][PHASEMEAS]=5;  options->numMeasOrder[i][Galileo][j][6][DOPPLERMEAS]=5;
+			options->numMeasOrder[i][Galileo][j][7][CODEMEAS]=3; options->numMeasOrder[i][Galileo][j][7][PHASEMEAS]=3;  options->numMeasOrder[i][Galileo][j][7][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][Galileo][j][8][CODEMEAS]=3; options->numMeasOrder[i][Galileo][j][8][PHASEMEAS]=3;  options->numMeasOrder[i][Galileo][j][8][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][Galileo][j][9][CODEMEAS]=0; options->numMeasOrder[i][Galileo][j][9][PHASEMEAS]=0;  options->numMeasOrder[i][Galileo][j][9][DOPPLERMEAS]=0;
+
+			options->numMeasOrder[i][GLONASS][j][0][CODEMEAS]=0; options->numMeasOrder[i][GLONASS][j][0][PHASEMEAS]=0;  options->numMeasOrder[i][GLONASS][j][0][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GLONASS][j][1][CODEMEAS]=2; options->numMeasOrder[i][GLONASS][j][1][PHASEMEAS]=2;  options->numMeasOrder[i][GLONASS][j][1][DOPPLERMEAS]=2;
+			options->numMeasOrder[i][GLONASS][j][2][CODEMEAS]=2; options->numMeasOrder[i][GLONASS][j][2][PHASEMEAS]=2;  options->numMeasOrder[i][GLONASS][j][2][DOPPLERMEAS]=2;
+			options->numMeasOrder[i][GLONASS][j][3][CODEMEAS]=3; options->numMeasOrder[i][GLONASS][j][3][PHASEMEAS]=3;  options->numMeasOrder[i][GLONASS][j][3][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][GLONASS][j][4][CODEMEAS]=3; options->numMeasOrder[i][GLONASS][j][4][PHASEMEAS]=3;  options->numMeasOrder[i][GLONASS][j][4][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][GLONASS][j][5][CODEMEAS]=0; options->numMeasOrder[i][GLONASS][j][5][PHASEMEAS]=0;  options->numMeasOrder[i][GLONASS][j][5][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GLONASS][j][6][CODEMEAS]=3; options->numMeasOrder[i][GLONASS][j][6][PHASEMEAS]=3;  options->numMeasOrder[i][GLONASS][j][6][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][GLONASS][j][7][CODEMEAS]=0; options->numMeasOrder[i][GLONASS][j][7][PHASEMEAS]=0;  options->numMeasOrder[i][GLONASS][j][7][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GLONASS][j][8][CODEMEAS]=0; options->numMeasOrder[i][GLONASS][j][8][PHASEMEAS]=0;  options->numMeasOrder[i][GLONASS][j][8][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GLONASS][j][9][CODEMEAS]=0; options->numMeasOrder[i][GLONASS][j][9][PHASEMEAS]=0;  options->numMeasOrder[i][GLONASS][j][9][DOPPLERMEAS]=0;
+
+			options->numMeasOrder[i][GEO][j][0][CODEMEAS]=0; options->numMeasOrder[i][GEO][j][0][PHASEMEAS]=0;  options->numMeasOrder[i][GEO][j][0][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GEO][j][1][CODEMEAS]=1; options->numMeasOrder[i][GEO][j][1][PHASEMEAS]=1;  options->numMeasOrder[i][GEO][j][1][DOPPLERMEAS]=1;
+			options->numMeasOrder[i][GEO][j][2][CODEMEAS]=0; options->numMeasOrder[i][GEO][j][2][PHASEMEAS]=0;  options->numMeasOrder[i][GEO][j][2][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GEO][j][3][CODEMEAS]=0; options->numMeasOrder[i][GEO][j][3][PHASEMEAS]=0;  options->numMeasOrder[i][GEO][j][3][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GEO][j][4][CODEMEAS]=0; options->numMeasOrder[i][GEO][j][4][PHASEMEAS]=0;  options->numMeasOrder[i][GEO][j][4][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GEO][j][5][CODEMEAS]=3; options->numMeasOrder[i][GEO][j][5][PHASEMEAS]=3;  options->numMeasOrder[i][GEO][j][5][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][GEO][j][6][CODEMEAS]=0; options->numMeasOrder[i][GEO][j][6][PHASEMEAS]=0;  options->numMeasOrder[i][GEO][j][6][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GEO][j][7][CODEMEAS]=0; options->numMeasOrder[i][GEO][j][7][PHASEMEAS]=0;  options->numMeasOrder[i][GEO][j][7][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GEO][j][8][CODEMEAS]=0; options->numMeasOrder[i][GEO][j][8][PHASEMEAS]=0;  options->numMeasOrder[i][GEO][j][8][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][GEO][j][9][CODEMEAS]=0; options->numMeasOrder[i][GEO][j][9][PHASEMEAS]=0;  options->numMeasOrder[i][GEO][j][9][DOPPLERMEAS]=0;
+
+			options->numMeasOrder[i][BDS][j][0][CODEMEAS]=0; options->numMeasOrder[i][BDS][j][0][PHASEMEAS]=0;  options->numMeasOrder[i][BDS][j][0][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][BDS][j][1][CODEMEAS]=7; options->numMeasOrder[i][BDS][j][1][PHASEMEAS]=8;  options->numMeasOrder[i][BDS][j][1][DOPPLERMEAS]=8;
+			options->numMeasOrder[i][BDS][j][2][CODEMEAS]=3; options->numMeasOrder[i][BDS][j][2][PHASEMEAS]=3;  options->numMeasOrder[i][BDS][j][2][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][BDS][j][3][CODEMEAS]=0; options->numMeasOrder[i][BDS][j][3][PHASEMEAS]=0;  options->numMeasOrder[i][BDS][j][3][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][BDS][j][4][CODEMEAS]=0; options->numMeasOrder[i][BDS][j][4][PHASEMEAS]=0;  options->numMeasOrder[i][BDS][j][4][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][BDS][j][5][CODEMEAS]=3; options->numMeasOrder[i][BDS][j][5][PHASEMEAS]=3;  options->numMeasOrder[i][BDS][j][5][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][BDS][j][6][CODEMEAS]=7; options->numMeasOrder[i][BDS][j][6][PHASEMEAS]=7;  options->numMeasOrder[i][BDS][j][6][DOPPLERMEAS]=7;
+			options->numMeasOrder[i][BDS][j][7][CODEMEAS]=6; options->numMeasOrder[i][BDS][j][7][PHASEMEAS]=6;  options->numMeasOrder[i][BDS][j][7][DOPPLERMEAS]=6;
+			options->numMeasOrder[i][BDS][j][8][CODEMEAS]=3; options->numMeasOrder[i][BDS][j][8][PHASEMEAS]=3;  options->numMeasOrder[i][BDS][j][8][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][BDS][j][9][CODEMEAS]=0; options->numMeasOrder[i][BDS][j][9][PHASEMEAS]=0;  options->numMeasOrder[i][BDS][j][9][DOPPLERMEAS]=0;
+
+			options->numMeasOrder[i][QZSS][j][0][CODEMEAS]=0; options->numMeasOrder[i][QZSS][j][0][PHASEMEAS]=0;  options->numMeasOrder[i][QZSS][j][0][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][QZSS][j][1][CODEMEAS]=6; options->numMeasOrder[i][QZSS][j][1][PHASEMEAS]=6;  options->numMeasOrder[i][QZSS][j][1][DOPPLERMEAS]=6;
+			options->numMeasOrder[i][QZSS][j][2][CODEMEAS]=3; options->numMeasOrder[i][QZSS][j][2][PHASEMEAS]=3;  options->numMeasOrder[i][QZSS][j][2][DOPPLERMEAS]=3;
+			options->numMeasOrder[i][QZSS][j][3][CODEMEAS]=0; options->numMeasOrder[i][QZSS][j][3][PHASEMEAS]=0;  options->numMeasOrder[i][QZSS][j][3][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][QZSS][j][4][CODEMEAS]=0; options->numMeasOrder[i][QZSS][j][4][PHASEMEAS]=0;  options->numMeasOrder[i][QZSS][j][4][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][QZSS][j][5][CODEMEAS]=6; options->numMeasOrder[i][QZSS][j][5][PHASEMEAS]=6;  options->numMeasOrder[i][QZSS][j][5][DOPPLERMEAS]=6;
+			options->numMeasOrder[i][QZSS][j][6][CODEMEAS]=5; options->numMeasOrder[i][QZSS][j][6][PHASEMEAS]=5;  options->numMeasOrder[i][QZSS][j][6][DOPPLERMEAS]=5;
+			options->numMeasOrder[i][QZSS][j][7][CODEMEAS]=0; options->numMeasOrder[i][QZSS][j][7][PHASEMEAS]=0;  options->numMeasOrder[i][QZSS][j][7][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][QZSS][j][8][CODEMEAS]=0; options->numMeasOrder[i][QZSS][j][8][PHASEMEAS]=0;  options->numMeasOrder[i][QZSS][j][8][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][QZSS][j][9][CODEMEAS]=0; options->numMeasOrder[i][QZSS][j][9][PHASEMEAS]=0;  options->numMeasOrder[i][QZSS][j][9][DOPPLERMEAS]=0;
+
+			options->numMeasOrder[i][IRNSS][j][0][CODEMEAS]=0; options->numMeasOrder[i][IRNSS][j][0][PHASEMEAS]=0;  options->numMeasOrder[i][IRNSS][j][0][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][IRNSS][j][1][CODEMEAS]=0; options->numMeasOrder[i][IRNSS][j][1][PHASEMEAS]=0;  options->numMeasOrder[i][IRNSS][j][1][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][IRNSS][j][2][CODEMEAS]=0; options->numMeasOrder[i][IRNSS][j][2][PHASEMEAS]=0;  options->numMeasOrder[i][IRNSS][j][2][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][IRNSS][j][3][CODEMEAS]=0; options->numMeasOrder[i][IRNSS][j][3][PHASEMEAS]=0;  options->numMeasOrder[i][IRNSS][j][3][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][IRNSS][j][4][CODEMEAS]=0; options->numMeasOrder[i][IRNSS][j][4][PHASEMEAS]=0;  options->numMeasOrder[i][IRNSS][j][4][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][IRNSS][j][5][CODEMEAS]=4; options->numMeasOrder[i][IRNSS][j][5][PHASEMEAS]=4;  options->numMeasOrder[i][IRNSS][j][5][DOPPLERMEAS]=4;
+			options->numMeasOrder[i][IRNSS][j][6][CODEMEAS]=0; options->numMeasOrder[i][IRNSS][j][6][PHASEMEAS]=0;  options->numMeasOrder[i][IRNSS][j][6][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][IRNSS][j][7][CODEMEAS]=0; options->numMeasOrder[i][IRNSS][j][7][PHASEMEAS]=0;  options->numMeasOrder[i][IRNSS][j][7][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][IRNSS][j][8][CODEMEAS]=0; options->numMeasOrder[i][IRNSS][j][8][PHASEMEAS]=0;  options->numMeasOrder[i][IRNSS][j][8][DOPPLERMEAS]=0;
+			options->numMeasOrder[i][IRNSS][j][9][CODEMEAS]=4; options->numMeasOrder[i][IRNSS][j][9][PHASEMEAS]=4;  options->numMeasOrder[i][IRNSS][j][9][DOPPLERMEAS]=4;
+		}
+	}
+
+	const int	defaultFreq[MAX_GNSS][MAX_FREQUENCIES_PER_GNSS]={	//Order of preference for selecting default frequencies
+							/*GPS*/	{1,2, 5,-1,-1,-1,-1,-1,-1,-1},
+							/*GAL*/	{1,5, 6, 7, 8,-1,-1,-1,-1,-1},
+							/*GLO*/	{1,2, 3, 4, 6,-1,-1,-1,-1,-1},
+							/*GEO*/	{1,5,-1,-1,-1,-1,-1,-1,-1,-1},
+							/*BDS*/	{2,7, 6, 5, 1, 8,-1,-1,-1,-1},
+							/*QZS*/	{1,2, 5, 6,-1,-1,-1,-1,-1,-1},
+							/*IRN*/	{5,9,-1,-1,-1,-1,-1,-1,-1,-1}}; 
+
+	for(i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			memcpy(options->defaultFreq[i][j],defaultFreq[i],sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+		}
+	}
+
+	const int	availFreq_NoMissingMeas[MAX_GNSS][MAX_FREQUENCIES_PER_GNSS]={	//Flag to indicate if frequency is available or not for each constellation when satellite block is unknown
+								   /*0  1  2  3  4  5  6  7  8  9*/
+							/*GPS*/	{0, 1, 1, 0, 0, 1, 0, 0, 0, 0},				
+							/*GAL*/	{0, 1, 0, 0, 0, 1, 1, 1, 1, 0},
+							/*GLO*/	{0, 1, 1, 1, 1, 0, 1, 0, 0, 0},
+							/*GEO*/	{0, 1, 0, 0, 0, 1, 0, 0, 0, 0},
+							/*BDS*/	{0, 1, 1, 0, 0, 1, 1, 1, 1, 0},
+							/*QZS*/	{0, 1, 1, 0, 0, 1, 1, 0, 0, 0},
+							/*IRN*/	{0, 0, 0, 0, 0, 1, 0, 0, 0, 1}}; 
+
+	for(i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			memcpy(options->availFreq[i][j],availFreq_NoMissingMeas[i],sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+		}
+	}
+
+	//Table of frequencies available/unavailable per satellite block
+
+	/*UNKNOWN_BLOCK*/ //The Unknown block type. Set all frequencies defined in RINEX available
+	const int	availFreq_UNKNOWN_BLOCK[MAX_FREQUENCIES_PER_GNSS]={0, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+																 /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*GPS_BLOCK_I*/ /*GPS_BLOCK_II*/ /*GPS_BLOCK_IIA*/ /*GPS_BLOCK_IIR*/ /*GPS_BLOCK_IIRA*/ /*GPS_BLOCK_IIRB*/ /*GPS_BLOCK_IIRM*/ 
+	const int	availFreq_GPS_BLOCK_I_II[MAX_FREQUENCIES_PER_GNSS]={0, 1, 1, 0, 0, 0, 0, 0, 0, 0};
+																  /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*GPS_BLOCK_IIF*/ /*GPS_BLOCK_III*/
+	const int	availFreq_GPS_BLOCK_IIF_III[MAX_FREQUENCIES_PER_GNSS]={0, 1, 1, 0, 0, 1, 0, 0, 0, 0};
+																	 /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*Galileo_Block*/
+	const int	availFreq_GAL_BLOCK[MAX_FREQUENCIES_PER_GNSS]={0, 1, 0, 0, 0, 1, 1, 1, 1, 0};
+															 /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*GLONASS_BLOCK*/ /*GLONASS_BLOCK_M*/ 
+	const int	availFreq_GLO_BLOCK[MAX_FREQUENCIES_PER_GNSS]={0, 1, 1, 0, 0, 0, 0, 0, 0, 0};
+															 /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*GLONASS_BLOCK_M2*/ /*GLONASS_BLOCK_K1*/
+	const int	availFreq_GLO_BLOCK_M2_K1[MAX_FREQUENCIES_PER_GNSS]={0, 1, 1, 1, 0, 0, 0, 0, 0, 0};
+																   /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*GLONASS_BLOCK_K2*/
+	const int	availFreq_GLO_BLOCK_K2[MAX_FREQUENCIES_PER_GNSS]={0, 1, 1, 1, 1, 0, 1, 0, 0, 0};
+																/*0  1  2  3  4  5  6  7  8  9*/
+
+	/*GLONASS_BLOCK_V*/
+	const int	availFreq_GLO_BLOCK_V[MAX_FREQUENCIES_PER_GNSS]={0, 0, 0, 1, 1, 0, 1, 0, 0, 0};
+															   /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*BEIDOU_BLOCK_2M*/ /*BEIDOU_BLOCK_2I*/ /*BEIDOU_BLOCK_2G*/
+	const int	availFreq_BDS_BLOCK_2[MAX_FREQUENCIES_PER_GNSS]={0, 0, 1, 0, 0, 0, 1, 1, 0, 0};
+															   /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*BEIDOU_BLOCK_3*/
+	const int	availFreq_BDS_BLOCK_3[MAX_FREQUENCIES_PER_GNSS]={0, 1, 1, 0, 0, 1, 1, 1, 1, 0};
+															   /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*QZSS_BLOCK*/
+	const int	availFreq_QZS_BLOCK[MAX_FREQUENCIES_PER_GNSS]={0, 1, 1, 0, 0, 1, 1, 0, 0, 0};
+															 /*0  1  2  3  4  5  6  7  8  9*/
+
+	/*IRNSS_BLOCK*/
+	const int	availFreq_IRN_BLOCK[MAX_FREQUENCIES_PER_GNSS]={0, 0, 0, 0, 0, 1, 0, 0, 0, 1};
+															 /*0  1  2  3  4  5  6  7  8  9*/
+
+
+	//Copy data to Toptions structure
+	memcpy(options->FreqAvailSatBlock[UNKNOWN_BLOCK],availFreq_UNKNOWN_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_I],availFreq_GPS_BLOCK_I_II,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_II],availFreq_GPS_BLOCK_I_II,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_IIA],availFreq_GPS_BLOCK_I_II,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_IIR],availFreq_GPS_BLOCK_I_II,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_IIRA],availFreq_GPS_BLOCK_I_II,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_IIRB],availFreq_GPS_BLOCK_I_II,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_IIRM],availFreq_GPS_BLOCK_I_II,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_IIF],availFreq_GPS_BLOCK_IIF_III,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_IIIA],availFreq_GPS_BLOCK_IIF_III,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GPS_BLOCK_IIIF],availFreq_GPS_BLOCK_IIF_III,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GLONASS_BLOCK],availFreq_GLO_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GLONASS_BLOCK_M],availFreq_GLO_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GLONASS_BLOCK_M2],availFreq_GLO_BLOCK_M2_K1,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GLONASS_BLOCK_K1],availFreq_GLO_BLOCK_M2_K1,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GLONASS_BLOCK_K2],availFreq_GLO_BLOCK_K2,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GLONASS_BLOCK_V],availFreq_GLO_BLOCK_V,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GALILEO_BLOCK_0A],availFreq_GAL_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GALILEO_BLOCK_0B],availFreq_GAL_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GALILEO_BLOCK_1],availFreq_GAL_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[GALILEO_BLOCK_2],availFreq_GAL_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_2M],availFreq_BDS_BLOCK_2,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_2I],availFreq_BDS_BLOCK_2,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_2G],availFreq_BDS_BLOCK_2,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_3SI_CAST],availFreq_BDS_BLOCK_3,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_3SI_SECM],availFreq_BDS_BLOCK_3,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_3SM_CAST],availFreq_BDS_BLOCK_3,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_3SM_SECM],availFreq_BDS_BLOCK_3,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_3M_CAST],availFreq_BDS_BLOCK_3,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_3M_SECM],availFreq_BDS_BLOCK_3,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_3G_CAST],availFreq_BDS_BLOCK_3,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[BEIDOU_BLOCK_3I],availFreq_BDS_BLOCK_3,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[QZSS_BLOCK],availFreq_QZS_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[QZSS_BLOCK_2G],availFreq_QZS_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[QZSS_BLOCK_2I],availFreq_QZS_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[IRNSS_BLOCK_1IGSO],availFreq_IRN_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	memcpy(options->FreqAvailSatBlock[IRNSS_BLOCK_1GEO],availFreq_IRN_BLOCK,sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+	
+
+	//Table of measurements unavailable per satellite block
+
+	/*Block no missing measurements: GPS_BLOCK_IIIA, GPS_BLOCK_IIIF, GALILEO_BLOCK_0A, GALILEO_BLOCK_0B, GALILEO_BLOCK_1, GALILEO_BLOCK_2, GLONASS_BLOCK_K2, BEIDOU_BLOCK_3SI_CAST, BEIDOU_BLOCK_3SI_SECM,
+	 BEIDOU_BLOCK_3SM_CAST, BEIDOU_BLOCK_3SM_SECM, BEIDOU_BLOCK_3M_CAST, BEIDOU_BLOCK_3M_SECM, BEIDOU_BLOCK_3G_CAST, BEIDOU_BLOCK_3I, QZSS_BLOCK_2G, QZSS_BLOCK_2I, IRNSS_BLOCK_1IGSO, IRNSS_BLOCK_1GEO*/
+	const enum MeasurementType MeasNotAvailSatBlock_NoMissingMeas[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f6 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	/*GPS_BLOCK_I*/ /*GPS_BLOCK_II*/ /*GPS_BLOCK_IIA*/ /*GPS_BLOCK_IIR*/ /*GPS_BLOCK_IIRA*/ /*GPS_BLOCK_IIRB*/
+	const enum MeasurementType MeasNotAvailSatBlock_GPS_BLOCK_I[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1S,C1L,C1X,C1M,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 phase*/ {L1S,L1L,L1X,L1M,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 doppler*/ {D1S,D1L,D1X,D1M,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C2S,C2L,C2X,C2M,C2C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},	/*f2 phase*/ {L2S,L2L,L2X,L2M,L2C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},	/*f2 doppler*/ {D2S,D2L,D2X,D2M,D2C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5Q,C5I,C5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {L5Q,L5I,L5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {D5Q,D5I,D5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f6 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	/*GPS_BLOCK_IIRM*/ 
+	const enum MeasurementType MeasNotAvailSatBlock_GPS_BLOCK_IIRM[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1S,C1L,C1X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 phase*/ {L1S,L1L,L1X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 doppler*/ {D1S,D1L,D1X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5Q,C5I,C5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {L5Q,L5I,L5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {D5Q,D5I,D5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f6 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	/*GPS_BLOCK_IIF*/ 
+	const enum MeasurementType MeasNotAvailSatBlock_GPS_BLOCK_IIF[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1S,C1L,C1X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 phase*/ {L1S,L1L,L1X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 doppler*/ {D1S,D1L,D1X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f6 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	/*GLONASS_BLOCK*/ 
+	const enum MeasurementType MeasNotAvailSatBlock_GLONASS_BLOCK[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C2C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f2 phase*/ {L2C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f2 doppler*/ {D2C,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{C3Q,C3I,C3X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f3 phase*/ {L3Q,L3I,L3X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {D3Q,D3I,D3X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{C4A,C4B,C4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f4 phase*/ {L4A,L4B,L4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {D4A,D4B,D4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{C6A,C6B,C6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f6 phase*/ {L6A,L6B,L6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {D6A,D6B,D6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	/*GLONASS_BLOCK_M*/
+	const enum MeasurementType MeasNotAvailSatBlock_GLONASS_BLOCK_M[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{C3Q,C3I,C3X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f3 phase*/ {L3Q,L3I,L3X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {D3Q,D3I,D3X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{C4A,C4B,C4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f4 phase*/ {L4A,L4B,L4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {D4A,D4B,D4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{C6A,C6B,C6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f6 phase*/ {L6A,L6B,L6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {D6A,D6B,D6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	/*GLONASS_BLOCK_M2*/ /*GLONASS_BLOCK_K1*/
+	const enum MeasurementType MeasNotAvailSatBlock_GLONASS_BLOCK_M2_K1[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{C4A,C4B,C4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f4 phase*/ {L4A,L4B,L4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {D4A,D4B,D4X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{C6A,C6B,C6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f6 phase*/ {L6A,L6B,L6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {D6A,D6B,D6X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	/*GLONASS_BLOCK_V*/
+	const enum MeasurementType MeasNotAvailSatBlock_GLONASS_BLOCK_V[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/	{{C1C,C1P,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f1 phase*/ {L1C,L1P,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f1 doppler*/ {D1C,D1P,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C2C,C2P,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f2 phase*/ {L2C,L2P,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f2 doppler*/ {D2C,D2P,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f6 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	/*BEIDOU_BLOCK_2M*/ /*BEIDOU_BLOCK_2I*/ /*BEIDOU_BLOCK_2G*/
+	const enum MeasurementType MeasNotAvailSatBlock_BEIDOU_BLOCK_2[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{C1P,C1D,C1L,C1S,C1X,C1Z,C1A,NA,NA,NA,NA,NA,NA,NA,NA,NA},	/*f1 phase*/ {L1P,L1D,L1L,L1S,L1X,L1Z,L1A,L1N,NA,NA,NA,NA,NA,NA,NA,NA},	/*f1 doppler*/ {D1P,D1D,D1L,D1S,D1X,D1Z,D1A,D1N,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5P,C5D,C5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {L5P,L5D,L5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {D5P,D5D,D5X,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{C6P,C6D,C6Z,C6A,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f6 phase*/ {L6P,L6D,L6Z,L6A,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 	/*f6 doppler*/ {D6P,D6D,D6Z,D6A,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{C7P,C7D,C7Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f7 phase*/ {L7P,L7D,L7Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {D7P,D7D,D7Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{C8P,C8D,C8Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f8 phase*/ {L8P,L8D,L8Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {D8P,D8D,D8Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	/*QZSS_BLOCK*/
+	const enum MeasurementType MeasNotAvailSatBlock_QZSS_BLOCK[MAX_FREQUENCIES_PER_GNSS][MEASTYPELISTS][MAX_MEAS_TYPES_PER_FREQUENCY]= {
+	/*f0 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f0 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f0 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f1 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f1 code*/ {{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f2 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f3 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f3 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f3 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f4 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f4 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f4 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f5 code*/ {{C5P,C5D,C5Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 phase*/ {L5P,L5D,L5Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f5 doppler*/ {D5P,D5D,D5Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f6 code*/	{{C6E,C6Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},		/*f6 phase*/ {L6E,L6Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f6 doppler*/ {D6E,D6Z,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f7 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f7 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f7 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f8 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f8 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f8 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}},
+	/*f9 code*/	{{NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA},			/*f9 phase*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}, 		/*f9 doppler*/ {NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA}}};
+
+	//This constant are just to be able to cycle in a for loop with all blocks with no missing measurements
+	const enum SatelliteBlock	blocksWithAllMeas[NUMBLOCKSWITHALLMEAS]={UNKNOWN_BLOCK,
+		GPS_BLOCK_IIIA,GPS_BLOCK_IIIF,
+		GALILEO_BLOCK_0A,GALILEO_BLOCK_0B,GALILEO_BLOCK_1,GALILEO_BLOCK_2,
+		GLONASS_BLOCK_K2,
+		BEIDOU_BLOCK_3SI_CAST,BEIDOU_BLOCK_3SI_SECM,BEIDOU_BLOCK_3SM_CAST,BEIDOU_BLOCK_3SM_SECM,BEIDOU_BLOCK_3M_CAST,BEIDOU_BLOCK_3M_SECM,BEIDOU_BLOCK_3G_CAST,BEIDOU_BLOCK_3I,
+		QZSS_BLOCK_2G,QZSS_BLOCK_2I,
+		IRNSS_BLOCK_1IGSO,IRNSS_BLOCK_1GEO};
+
+	//Constant for looping through all GPS blocks with the same missing measurements
+	const enum SatelliteBlock 	GPSblocksI_to_IIRB[NUMGPSBLOCKSI_TO_IIRB]={GPS_BLOCK_I,GPS_BLOCK_II,GPS_BLOCK_IIA,GPS_BLOCK_IIR,GPS_BLOCK_IIRA,GPS_BLOCK_IIRB};
+	const enum SatelliteBlock 	GLONASSblocksM2_to_K1[NUMGLONASSBLOCKSM2_TO_K1]={GLONASS_BLOCK_M2,GLONASS_BLOCK_K1};
+	const enum SatelliteBlock 	BDSblocks_type2[NUMBDSBLOCKS_TYPE2]={BEIDOU_BLOCK_2M,BEIDOU_BLOCK_2I,BEIDOU_BLOCK_2G};
+
+	//Copy measurement lists for blocks without missing measurements
+	for(i=0;i<NUMBLOCKSWITHALLMEAS;i++) {
+		memcpy(options->MeasNotAvailSatBlock[blocksWithAllMeas[i]],MeasNotAvailSatBlock_NoMissingMeas,sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+	}
+
+	//Copy measurement lists for blocks with missing measurements
+	for(i=0;i<NUMGPSBLOCKSI_TO_IIRB;i++) {
+		memcpy(options->MeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]],MeasNotAvailSatBlock_GPS_BLOCK_I,sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+	}
+	memcpy(options->MeasNotAvailSatBlock[GPS_BLOCK_IIRM],MeasNotAvailSatBlock_GPS_BLOCK_IIRM,sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+	memcpy(options->MeasNotAvailSatBlock[GPS_BLOCK_IIF],MeasNotAvailSatBlock_GPS_BLOCK_IIF,	sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+
+	memcpy(options->MeasNotAvailSatBlock[GLONASS_BLOCK],MeasNotAvailSatBlock_GLONASS_BLOCK,sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+	memcpy(options->MeasNotAvailSatBlock[GLONASS_BLOCK_M],MeasNotAvailSatBlock_GLONASS_BLOCK_M,sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+	for(i=0;i<NUMGLONASSBLOCKSM2_TO_K1;i++) {
+		memcpy(options->MeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]],	MeasNotAvailSatBlock_GLONASS_BLOCK_M2_K1,sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+	}
+	memcpy(options->MeasNotAvailSatBlock[GLONASS_BLOCK_V],MeasNotAvailSatBlock_GLONASS_BLOCK_V,sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+
+	for(i=0;i<NUMBDSBLOCKS_TYPE2;i++) {
+		memcpy(options->MeasNotAvailSatBlock[BDSblocks_type2[i]],MeasNotAvailSatBlock_BEIDOU_BLOCK_2,sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+	}
+
+	memcpy(options->MeasNotAvailSatBlock[QZSS_BLOCK],MeasNotAvailSatBlock_QZSS_BLOCK,sizeof(enum MeasurementType)*MAX_FREQUENCIES_PER_GNSS*MEASTYPELISTS*MAX_MEAS_TYPES_PER_FREQUENCY);
+
+	//Initialize number of missing measurements in blocks without missing measurements
+	for(i=0;i<NUMBLOCKSWITHALLMEAS;i++) {
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][0][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][1][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][1][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][1][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][2][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][2][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][2][DOPPLERMEAS]=0;
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][3][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][3][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][3][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][4][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][4][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][4][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][5][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][5][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][5][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][6][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][6][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][6][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][7][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][7][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][7][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][8][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][8][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][8][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[blocksWithAllMeas[i]][9][DOPPLERMEAS]=0; 
+	}
+
+	//Initialize number of missing measurements in blocks with missing measurements
+	for(i=0;i<NUMGPSBLOCKSI_TO_IIRB;i++) {
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][0][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][1][CODEMEAS]=4;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][1][PHASEMEAS]=4;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][1][DOPPLERMEAS]=4; 
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][2][CODEMEAS]=5;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][2][PHASEMEAS]=5;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][2][DOPPLERMEAS]=5;
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][3][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][3][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][3][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][4][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][4][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][4][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][5][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][5][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][5][DOPPLERMEAS]=3; 
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][6][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][6][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][6][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][7][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][7][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][7][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][8][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][8][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][8][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPSblocksI_to_IIRB[i]][9][DOPPLERMEAS]=0; 
+	}
+
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][0][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][1][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][1][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][1][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][2][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][2][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][2][DOPPLERMEAS]=0;
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][3][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][3][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][3][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][4][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][4][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][4][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][5][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][5][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][5][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][6][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][6][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][6][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][7][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][7][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][7][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][8][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][8][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][8][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIRM][9][DOPPLERMEAS]=0; 
+
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][0][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][1][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][1][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][1][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][2][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][2][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][2][DOPPLERMEAS]=0;
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][3][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][3][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][3][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][4][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][4][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][4][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][5][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][5][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][5][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][6][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][6][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][6][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][7][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][7][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][7][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][8][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][8][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][8][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GPS_BLOCK_IIF][9][DOPPLERMEAS]=0; 
+
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][0][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][1][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][1][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][1][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][2][CODEMEAS]=1;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][2][PHASEMEAS]=1;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][2][DOPPLERMEAS]=1;
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][3][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][3][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][3][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][4][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][4][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][4][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][5][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][5][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][5][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][6][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][6][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][6][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][7][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][7][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][7][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][8][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][8][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][8][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK][9][DOPPLERMEAS]=0; 
+
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][0][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][1][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][1][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][1][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][2][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][2][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][2][DOPPLERMEAS]=0;
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][3][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][3][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][3][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][4][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][4][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][4][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][5][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][5][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][5][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][6][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][6][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][6][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][7][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][7][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][7][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][8][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][8][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][8][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_M][9][DOPPLERMEAS]=0; 
+
+	for(i=0;i<NUMGLONASSBLOCKSM2_TO_K1;i++) {
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][0][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][1][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][1][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][1][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][2][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][2][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][2][DOPPLERMEAS]=0;
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][3][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][3][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][3][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][4][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][4][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][4][DOPPLERMEAS]=3; 
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][5][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][5][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][5][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][6][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][6][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][6][DOPPLERMEAS]=3; 
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][7][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][7][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][7][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][8][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][8][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][8][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASSblocksM2_to_K1[i]][9][DOPPLERMEAS]=0; 
+	}
+
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][0][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][1][CODEMEAS]=2;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][1][PHASEMEAS]=2;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][1][DOPPLERMEAS]=2; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][2][CODEMEAS]=2;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][2][PHASEMEAS]=2;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][2][DOPPLERMEAS]=2;
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][3][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][3][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][3][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][4][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][4][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][4][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][5][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][5][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][5][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][6][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][6][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][6][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][7][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][7][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][7][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][8][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][8][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][8][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[GLONASS_BLOCK_V][9][DOPPLERMEAS]=0; 
+
+	for(i=0;i<NUMBDSBLOCKS_TYPE2;i++) {
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][0][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][1][CODEMEAS]=7;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][1][PHASEMEAS]=8;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][1][DOPPLERMEAS]=8; 
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][2][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][2][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][2][DOPPLERMEAS]=0;
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][3][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][3][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][3][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][4][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][4][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][4][DOPPLERMEAS]=0; 
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][5][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][5][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][5][DOPPLERMEAS]=3; 
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][6][CODEMEAS]=4;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][6][PHASEMEAS]=4;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][6][DOPPLERMEAS]=4; 
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][7][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][7][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][7][DOPPLERMEAS]=3; 
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][8][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][8][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][8][DOPPLERMEAS]=3; 
+		options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[BDSblocks_type2[i]][9][DOPPLERMEAS]=0; 
+	}
+
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][0][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][0][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][0][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][1][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][1][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][1][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][2][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][2][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][2][DOPPLERMEAS]=0;
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][3][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][3][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][3][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][4][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][4][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][4][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][5][CODEMEAS]=3;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][5][PHASEMEAS]=3;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][5][DOPPLERMEAS]=3; 
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][6][CODEMEAS]=2;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][6][PHASEMEAS]=2;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][6][DOPPLERMEAS]=2; 
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][7][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][7][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][7][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][8][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][8][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][8][DOPPLERMEAS]=0; 
+	options->numMeasNotAvailSatBlock[QZSS_BLOCK][9][CODEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][9][PHASEMEAS]=0;	options->numMeasNotAvailSatBlock[QZSS_BLOCK][9][DOPPLERMEAS]=0; 
+
+
+	
+
+
+	for(i=0;i<NUM_OBSRINEX;i++) {
+		options->DiscardUnpairedMeas[i]=-1;
+		options->ForcedDiscardUnpairedMeas[i]=0;
+	}
+
+	options->SatBlockMeasDiscard = 1;
 	options->SNRfilter = -1;
+	options->SNRminfilter = -1;
+	options->SNRmaxfilter = -1;
 	options->useraddednoise = 0;
 	options->useraddednoisepreprocess = 0;
 
@@ -581,7 +1625,6 @@ void initOptions (TOptions *options) {
 	options->writeEMSfile = 0;
 	options->writePegasusfile = 0;
 	options->onlyconvertSBAS = 0;
-	options->onlySBASplots = 0;
 	options->pegasuspurerinex = 0;
 	options->pegasusaligned = 0;
 	options->pegasusfs = ';';
@@ -589,7 +1632,7 @@ void initOptions (TOptions *options) {
 
 
 	options->usetype0messages = 1;
-	options->alarmmessageastype2 = 0;
+	options->useAlarmmessageForCorrections = 0;
 	options->precisionapproach = PAMODE;
 	options->UserForcedNPA = 0;
 	options->excludeSmoothingConvergence = -1;
@@ -604,6 +1647,7 @@ void initOptions (TOptions *options) {
 	options->switchGEO = -1;
 	options->selectBestGEO = -1;
 	options->mixedGEOdata = -1;
+	options->noMixedGEOdata = 1; //Default mixed GEO disabled
 	options->initcoordNPA = 1;
 	options->UDREIthreshold = 999999;
 	options->SigmaOffsetNoMT10 = 8.;
@@ -611,9 +1655,9 @@ void initOptions (TOptions *options) {
 	options->stepdetector = -1;
 	options->SBASmaritime=0;
 	options->prefitOutlierDetectorAbs = 0;
-	options->prefitOutlierDetectorAbsThreshold= 30.;
-	options->prefitOutlierDetectorMedian = 0;
-	options->prefitOutlierDetectorMedianThreshold = 30.;
+	options->prefitOutlierDetectorAbsThreshold= 40.;
+	options->prefitOutlierDetectorMedian = 1;
+	options->prefitOutlierDetectorMedianThreshold = 40.;
 	options->FCtmout[0] = options->FCtmout[1] = -1;
 	options->RRCtmout[0] = options->RRCtmout[1] = -1;
 	options->usersigmamultipath = 0;
@@ -627,10 +1671,41 @@ void initOptions (TOptions *options) {
 	options->kfactor[PAMODE][KVERPOS] = KV;
 	options->stanfordesa = 0;
 	options->stanfordesaLOI = 1;
+	options->stanfordesaMaxNumSat = 999999;
 	options->WIRHorThreshold = 0.7;
 	options->WIRVerThreshold = 0.7;
+	options->noRRCwith1PRC = 0;
+	options->SBASmsgFlightTime = SBASMSGFLIGHTTIME;
+	options->SBASmsg1MinusFlightTime = 1.-options->SBASmsgFlightTime;
+	options->SBASmsg1PlusFlightTime = 1.+options->SBASmsgFlightTime;
+	options->SBASFreqPosToProcess = SBAS1FFREQPOS;
 	options->waitForNextDay = 1;
 	options->useDatasummary = 1;
+	options->computeConvergenceTime = 0;
+	options->computeConvTimeFormalErrHor = 0;
+	options->computeConvTimeFormalErrVer = 0;
+	options->computeConvTimeFormalErr3D = 0;
+	options->computeConvTimePosErrHor = 0;
+	options->computeConvTimePosErrVer = 0;
+	options->computeConvTimePosErr3D = 0;
+	options->computeConvTimePeriodFormalErrHor = 0;
+	options->computeConvTimePeriodFormalErrVer = 0;
+	options->computeConvTimePeriodFormalErr3D = 0;
+	options->computeConvTimePeriodPosErrHor = 0;
+	options->computeConvTimePeriodPosErrVer = 0;
+	options->computeConvTimePeriodPosErr3D = 0;
+	options->formalErrorThresholdHor = .2;
+	options->formalErrorThresholdVer = .4;
+	options->formalErrorThreshold3D = .4;
+	options->positionErrorThresholdHor = .2;
+	options->positionErrorThresholdVer = .4;
+	options->positionErrorThreshold3D = .4;
+	options->minTimeConvergedFormalErrHor = 300.;
+	options->minTimeConvergedFormalErrVer = 300.;
+	options->minTimeConvergedFormalErr3D = 300.;
+	options->minTimeConvergedPosErrHor = 300.;
+	options->minTimeConvergedPosErrVer = 300.;
+	options->minTimeConvergedPosErr3D = 300.;
 	options->SBASHourlyMaps = 0;
 	options->NoAvailabilityPlot = 0;
 	options->NoContRiskPlot = 0;
@@ -647,12 +1722,17 @@ void initOptions (TOptions *options) {
 	options->minLonplots = -30.0;
 	options->maxLonplots = 40.0;
 	options->AvailabilityPlotStep = 1.0;
+	options->AvailPlotTimeStep = 1;
+	options->AvailPlotTimeStepDec = (double)options->AvailPlotTimeStep;
+	options->AvailPlotTimeStepCmp = options->AvailPlotTimeStep +.1;
+	options->SBASPlotsMinGEOElev = 5.*d2r;
 	options->IonoPlotStep = 0.3;
 	options->IonoPlotTimeStep = 300;
+	options->UseGEOsatsAvailsMaps = 0;
 	options->ContRiskWindowSize = 15;
 	options->ContRiskWindowSizeMar = 15;
- 	options->VerAlarmLimit = 50.0;
- 	options->HorAlarmLimit = 40.0;
+	options->VerAlarmLimit = 50.0;
+	options->HorAlarmLimit = 40.0;
 	options->percentile=95.;
 	options->SBASPlotsRecHeight = 0;
 	options->NumSBASPlotsExclusionArea=0;
@@ -672,6 +1752,139 @@ void initOptions (TOptions *options) {
 	options->NoTropoSigma = 0;
 	options->NoEnRouteSigma = 0;
 	options->NoMT10=0;
+
+	options->SBASmodePos=SBAS1FMODEPOS; //Set to this mode even if SBAS not enabled
+
+	for(i=0;i<MAX_SAT_GEO;i++) {
+		options->SBASConstUsed[i][SBAS1FMODEPOS][GPS]=1;
+		options->SBASConstUsed[i][SBAS1FMODEPOS][Galileo]=0;
+		options->SBASConstUsed[i][SBAS1FMODEPOS][GLONASS]=1;
+		options->SBASConstUsed[i][SBAS1FMODEPOS][GEO]=1;
+		options->SBASConstUsed[i][SBASDFMCMODEPOS][GPS]=1;
+		options->SBASConstUsed[i][SBASDFMCMODEPOS][Galileo]=1;
+		options->SBASConstUsed[i][SBASDFMCMODEPOS][GLONASS]=1;
+		options->SBASConstUsed[i][SBASDFMCMODEPOS][GEO]=1;
+		options->SBASConstUsed[i][SBASDFMCMODEPOS][BDS]=1;
+		for(j=BDS;j<MAX_GNSS;j++) {
+			options->SBASConstUsed[i][SBAS1FMODEPOS][j]=0;
+		}
+		for(j=QZSS;j<MAX_GNSS;j++) {
+			options->SBASConstUsed[i][SBASDFMCMODEPOS][j]=0;
+		}
+		options->SBASConstList[i][SBAS1FMODEPOS][0]=GPS;
+		options->SBASConstList[i][SBAS1FMODEPOS][1]=GLONASS;
+		options->SBASConstList[i][SBAS1FMODEPOS][2]=GEO;
+		options->SBASConstList[i][SBASDFMCMODEPOS][0]=GPS;
+		options->SBASConstList[i][SBASDFMCMODEPOS][1]=Galileo;
+		options->SBASConstList[i][SBASDFMCMODEPOS][2]=GLONASS;
+		options->SBASConstList[i][SBASDFMCMODEPOS][3]=GEO;
+		options->SBASConstList[i][SBASDFMCMODEPOS][4]=BDS;
+		for(j=3;j<MAX_GNSS;j++) {
+			options->SBASConstList[i][SBAS1FMODEPOS][j]=-1;
+		}
+		for(j=5;j<MAX_GNSS;j++) {
+			options->SBASConstList[i][SBASDFMCMODEPOS][j]=-1;
+		}
+	
+		options->numSBASConstList[i][SBAS1FMODEPOS]=3;
+		options->numSBASConstList[i][SBASDFMCMODEPOS]=5;
+	}
+
+	//Set reference Ionosphere free measurements
+	options->IFRefMeas[GPS][0]=C1P;
+	options->IFRefMeas[GPS][1]=C2P;
+	options->IFRefMeas[Galileo][0]=C1C;
+	options->IFRefMeas[Galileo][1]=C5Q;
+	options->IFRefMeas[GLONASS][0]=C1P;
+	options->IFRefMeas[GLONASS][1]=C2P;
+	options->IFRefMeas[GEO][0]=C1C;
+	options->IFRefMeas[GEO][1]=C5Q;
+	options->IFRefMeas[BDS][0]=C2Q;
+	options->IFRefMeas[BDS][1]=C7Q;
+	options->IFRefMeas[QZSS][0]=C1C;
+	options->IFRefMeas[QZSS][1]=C2L;
+	options->IFRefMeas[IRNSS][0]=C5A;
+	options->IFRefMeas[IRNSS][1]=C9A;
+
+	options->IFRefMeasFreq[GPS][0]=1;
+	options->IFRefMeasFreq[GPS][1]=2;
+	options->IFRefMeasFreq[Galileo][0]=1;
+	options->IFRefMeasFreq[Galileo][1]=5;
+	options->IFRefMeasFreq[GLONASS][0]=1;
+	options->IFRefMeasFreq[GLONASS][1]=2;
+	options->IFRefMeasFreq[GEO][0]=1;
+	options->IFRefMeasFreq[GEO][1]=5;
+	options->IFRefMeasFreq[BDS][0]=2;
+	options->IFRefMeasFreq[BDS][1]=7;
+	options->IFRefMeasFreq[QZSS][0]=1;
+	options->IFRefMeasFreq[QZSS][1]=2;
+	options->IFRefMeasFreq[IRNSS][0]=5;
+	options->IFRefMeasFreq[IRNSS][1]=9;
+
+	for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+		options->IFRefMeasUsed[GPS][j][0]=C1P;
+		options->IFRefMeasUsed[GPS][j][1]=C2P;
+		options->IFRefMeasUsed[Galileo][j][0]=C1C;
+		options->IFRefMeasUsed[Galileo][j][1]=C5Q;
+		options->IFRefMeasUsed[GLONASS][j][0]=C1P;
+		options->IFRefMeasUsed[GLONASS][j][1]=C2P;
+		options->IFRefMeasUsed[GEO][j][0]=C1C;
+		options->IFRefMeasUsed[GEO][j][1]=C5Q;
+		options->IFRefMeasUsed[BDS][j][0]=C2Q;
+		options->IFRefMeasUsed[BDS][j][1]=C7Q;
+		options->IFRefMeasUsed[QZSS][j][0]=C1C;
+		options->IFRefMeasUsed[QZSS][j][1]=C2L;
+		options->IFRefMeasUsed[IRNSS][j][0]=C5A;
+		options->IFRefMeasUsed[IRNSS][j][1]=C9A;
+
+		options->IFRefMeasFreqUsed[GPS][j][0]=1;
+		options->IFRefMeasFreqUsed[GPS][j][1]=2;
+		options->IFRefMeasFreqUsed[Galileo][j][0]=1;
+		options->IFRefMeasFreqUsed[Galileo][j][1]=5;
+		options->IFRefMeasFreqUsed[GLONASS][j][0]=1;
+		options->IFRefMeasFreqUsed[GLONASS][j][1]=2;
+		options->IFRefMeasFreqUsed[GEO][j][0]=1;
+		options->IFRefMeasFreqUsed[GEO][j][1]=5;
+		options->IFRefMeasFreqUsed[BDS][j][0]=2;
+		options->IFRefMeasFreqUsed[BDS][j][1]=7;
+		options->IFRefMeasFreqUsed[QZSS][j][0]=1;
+		options->IFRefMeasFreqUsed[QZSS][j][1]=2;
+		options->IFRefMeasFreqUsed[IRNSS][j][0]=5;
+		options->IFRefMeasFreqUsed[IRNSS][j][1]=9;
+	}
+
+
+	for(i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			options->IFRefMeasPos[i][j][0]=-1;
+			options->IFRefMeasPos[i][j][1]=-1;
+		}
+	}
+
+	//SBAS DFMC only
+	options->useAnyMeasSBASDFMC = 0;
+	options->SBASDFMCuseGPSL2 = 0;
+	options->SBASDFMCMT37version=MT37V1;
+	options->SBASDFMCMT3940version = MT3940V1;
+	options->SBASDFMCMT42version = MT42V1;
+	options->SBASDFMCMT47version = MT47V1;
+	options->SBASDFMCcer = -1.;
+	options->SBASDFMCccovariance = -1.;
+	for(i=0;i<MAX_GNSS;i++) {
+		options->SBASDFMCicorr[i] = -1.;
+		options->SBASDFMCccorr[i] = -1.;
+		options->SBASDFMCrcorr[i] = -1.;
+	}
+	for(i=0;i<15;i++) {
+		options->SBASDFMCdfreiTable[i] = -1.;
+	}
+	options->SBASDFMCdeltaRcorr = -1.;
+	options->SBASDFMCdeltaDFRE = -1.;
+	options->SBASDFMCsigmauire = -1.;
+	options->SBASDFMCsigmatropo = -1.;
+	options->SBASDFMCsigmaMultipathFactor = -1.;
+	options->DFREIthreshold = 999999;
+
 	// DGNSS
 	options->DGNSS = 0;
 	options->dgnssMaxEph = 4.0 * 3600.0; // seconds
@@ -680,7 +1893,7 @@ void initOptions (TOptions *options) {
 	options->epsURA3o = 0.01;
 	options->sigmaInflation = 1;
 	options->maxAgeDGNSS = 31.0; // seconds
-	options->maxDGNSSPRC = 500.; // meters
+	options->maxDGNSSPRC = 500.; // metres
 	options->excludeSmoothingConvergenceUser = 0;
 	options->excludeSmoothingConvergenceRef = 1;
 	options->rtcmYear = 0;
@@ -698,8 +1911,8 @@ void initOptions (TOptions *options) {
 	options->maxGDOP = 30.0; 
 	options->maxHDOP = 4.0; 
 	options->maxPDOP = 6.0; 
-	options->excludeSmoothingConvergenceTime = 360; // sec
-	options->DF = 0;
+	options->computeVelocity = 0;
+	options->excludeSmoothingConvergenceDGNSS = 360; // sec
 
 	for (i=0;i<MAX_SBAS_PRN;i++) {
 		options->GEOPRNunsel[i] = 0;
@@ -723,10 +1936,75 @@ void initOptions (TOptions *options) {
 
 	options->RefDegInterp=0;
 
+	//Initialize date conversion mode to 1/1/2000 at 00:00:00, although any value is fine
+	options->dateConversionMode=DateConversionModeNone;
+	options->dateConversionYear=2000;
+	options->dateConversionMonth=1;
+	options->dateConversionDay=1;
+	options->dateConversionHour=0;
+	options->dateConversionMinute=0;
+	options->dateConversionDoY=1;
+	options->dateConversionGPSWeek=1042;
+	options->dateConversionMJDN=51544;
+	options->dateConversionSoD=0.;
+	options->dateConversionSoW=518400.;
+	options->dateConversionSeconds=0.;
+	//Initialize coordinate conversion mode to (6378137,0,0), although any value is fine
+	options->coordConversionMode=CoordConversionModeNone;
+	options->coordConversionX=6378137.;
+	options->coordConversionY=0.;
+	options->coordConversionZ=0.;
+	options->coordConversionLat=0.;
+	options->coordConversionLon=0.;
+	options->coordConversionHgt=0.;
+	options->coordConversionRadius=6378137.;
+
 	#if defined _OPENMP
+		//Set default number of threads to half the CPU cores
+		omp_set_dynamic(0);     // Explicitly disable dynamic teams
 		options->numthreads=omp_get_num_procs();
+		if(options->numthreads>1) {
+			options->numthreads/=2;
+		}
+		omp_set_num_threads(options->numthreads);
 	#endif
 
+}
+
+/*****************************************************************************
+ * Name        : freeOptions
+ * Description : Frees elemensts in TOptions structure
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TOptions  *options              O  N/A  TOptions structure
+ *****************************************************************************/
+void freeOptions (TOptions *options) {
+
+	int i;
+
+	//Free KML time ranges
+	if (options->KMLtimeranges!=NULL) {
+		for(i=0;i<options->numKMLTimeRanges;i++) {
+			free(options->KMLtimeranges[i]);
+		}
+		free(options->KMLtimeranges);
+	}
+
+	//Free SBAS Inclusion areas
+	if (options->SBASPlotsInclusionAreaDelimeters!=NULL) {
+		for(i=0;i<options->NumSBASPlotsInclusionArea;i++) {
+			free(options->SBASPlotsInclusionAreaDelimeters[i]);
+		}
+		free(options->SBASPlotsInclusionAreaDelimeters);
+	}
+
+	//Free SBAS exclusion areas
+	if (options->SBASPlotsExclusionAreaDelimeters!=NULL) {
+		for(i=0;i<options->NumSBASPlotsExclusionArea;i++) {
+			free(options->SBASPlotsExclusionAreaDelimeters[i]);
+		}
+		free(options->SBASPlotsExclusionAreaDelimeters);
+	}
 }
 
 /*****************************************************************************
@@ -740,24 +2018,28 @@ void initOptions (TOptions *options) {
  *                                         initialised
  * int  satCSindex                 I  N/A  Pointing to the sat[satCSIndex] 
  *                                         TCS structure that should be initialised
+ * TOptions  *options              O  N/A  TOptions structure
  *****************************************************************************/
-void initSatellite (TEpoch *epoch, int satIndex, int satCSindex) {
-	int	i;
+void initSatellite (TEpoch *epoch, int satIndex, int satCSindex, TOptions  *options) {
+	int	i,j;
 
 	epoch->cycleslip.arcLength[satCSindex] = 1;
 	epoch->cycleslip.outlierLI[satCSindex] = 0;
-	epoch->cycleslip.outlierBw[satCSindex] = 0;
+	epoch->cycleslip.outlierIGF[satCSindex] = 0;
+	epoch->cycleslip.outlierMW[satCSindex] = 0;
+	epoch->cycleslip.anyOutlier[satCSindex] = 0;
 	epoch->cycleslip.CS[satCSindex] = 1;
 	epoch->cycleslip.CSPrealignFlag[satCSindex] = 1;
 	epoch->cycleslip.narc[satCSindex]++;
 	epoch->cycleslip.hasBeenCycleslip[satCSindex] = 1;
 	epoch->cycleslip.windUpRadAccumReceiver[satCSindex] = 0.0;
+	epoch->cycleslip.windUpRadAccumReceiverPrev[satCSindex] = 0.0;
 	epoch->cycleslip.windUpRadAccumSatellite[satCSindex] = 0.0;
-	epoch->sat[satIndex].ionoSigma = 0;
+	epoch->cycleslip.windUpRadAccumSatellitePrev[satCSindex] = 0.0;
 	epoch->sat[satIndex].hasSBAScor = 1;
 	epoch->sat[satIndex].hasSNR = 1;
 	
-	for (i=0;i<MAX_FILTER_MEASUREMENTS;i++) {
+	for (i=0;i<MAX_FILTER_MEASUREMENTS_SAT;i++) {
 		epoch->cycleslip.smoothedMeas[satCSindex][i] = 0.0;
 	}
 
@@ -765,11 +2047,19 @@ void initSatellite (TEpoch *epoch, int satIndex, int satCSindex) {
 		epoch->cycleslip.preAlign[satCSindex][i] = 0.0;
 	}
 
-	for (i=0;i<MAX_SLIDING_WINDOW;i++) {
-		epoch->cycleslip.windowMW[satCSindex][i] = 0.0;
-		epoch->cycleslip.windowMWtime[satCSindex][i] = 0.0;
-		epoch->cycleslip.windowL1C1[satCSindex][i] = 0.0;
-		epoch->cycleslip.windowL1C1time[satCSindex][i] = 0.0;
+	for(i=0;i<MAX_CS_LIST;i++) {
+		for (j=0;j<MAX_SLIDING_WINDOW;j++) {
+			epoch->cycleslip.windowMW[satCSindex][i][j] = 0.0;
+			epoch->cycleslip.windowMWtime[satCSindex][i][j] = 0.0;
+			epoch->cycleslip.windowSF[satCSindex][i][j] = 0.0;
+			epoch->cycleslip.windowSFtime[satCSindex][i][j] = 0.0;
+		}
+	}
+
+	epoch->satHasBeenUsedInFilter[epoch->sat[satIndex].GNSS][epoch->sat[satIndex].PRN]=0;
+	for(i=0;i<MAX_AMBIGUITIES_FILTER;i++) {
+		epoch->lastAmbValEstimatedNotInFilter[epoch->sat[satIndex].GNSS][epoch->sat[satIndex].PRN][i]=0.;
+		epoch->lastAmbCorEstimatedNotInFilter[epoch->sat[satIndex].GNSS][epoch->sat[satIndex].PRN][i]=options->filterParams[P0_PAR][BIAS_UNK];
 	}
 }
 
@@ -782,25 +2072,59 @@ void initSatellite (TEpoch *epoch, int satIndex, int satCSindex) {
  * TOptions  *options              O  N/A  TOptions structure
  *****************************************************************************/
 void initEpoch (TEpoch *epoch, TOptions  *options) {
-	int i,j,k;
+	int i,j,k,l;
 
-	epoch->firstepoch.SoD=-1.;
-	epoch->secondepoch.SoD=-1.;
+	epoch->FirstEpochHeader.MJDN=-1;
+	epoch->FirstEpochHeader.SoD=-1.;
+	epoch->firstEpochFile.MJDN=-1;
+	epoch->firstEpochFile.SoD=-1.;
+	epoch->secondEpochFile.MJDN=-1;
+	epoch->secondEpochFile.SoD=-1.;
 	epoch->PreviousEpoch.MJDN = -1;
 	epoch->PreviousEpoch.SoD = -1;
 	epoch->t.MJDN=-1;
 	epoch->t.SoD=-1.;
+	epoch->GPSweek=-1;
+	epoch->SoW=-1.;
+	epoch->tStr[0]='\0';
+	epoch->tSoDHourStr[0]='\0';
 	epoch->numEpochsfile=1.;
 	epoch->numEpochsprocessed=-1.;
 	epoch->PreviousPercentage=0;
 	epoch->CurrentPercentage=0.;
 	epoch->NewPercentage=0;
+	epoch->MeasToBeDuplicated=0;
+	epoch->ObsTimeToGPSTime=0.;
+	epoch->leapSeconds=0;
+	epoch->leapSecondsAvail=0;
+	epoch->numPrintGNSS=0;
+	epoch->numGNSSHeader = 0;
+	epoch->direction=pFORWARD;
+	epoch->numEpochReadFilePos=0;
+	epoch->maxNumEpochReadFilePos=0;
+	epoch->epochReadFilePos=NULL;
+	epoch->SystemTime=GPS;
+	epoch->source=UNKNOWN_SOURCE;
+	epoch->RINEXobsVersion=0.;
+	epoch->usableSatellites=0;
+	epoch->numsatdiscardedSBAS=0;
+	epoch->TryGEOChange=0;
+	epoch->SwitchPossible=1;	
 
 	epoch->numSatellites = 0;
+	epoch->CurrentDataGapSize=0;
+	epoch->IterationInSameEpoch=0;
 	epoch->numAproxPosRead = 0;
-	epoch->lastSBASindex = 0;
-	epoch->prevNumSatellites = 0;
-	epoch->numGNSS = 0;
+	for(i=0;i<MAX_SAT_GEO;i++) {
+		epoch->lastSBASindex[i] = 0;
+	}
+	epoch->numSBASsatellites=0;
+	epoch->numsatdiscardedSBAS=0;
+	epoch->ReferenceGNSSClock=options->ClkRefPriorityList[0];
+	epoch->prevNumInterSystemClocksFilter=0;
+	epoch->numInterSystemClocksFilter=0;
+	epoch->lastRecWindUpEstimated=0.;
+	epoch->lastRecWindUpAutoCorrel=options->filterParams[P0_PAR][WUP_UNK];
 	epoch->receiver.recType = rtUNKNOWN;
 	epoch->receiver.interval = -1;
 	epoch->receiver.intervalEstimate= -1;
@@ -812,11 +2136,13 @@ void initEpoch (TEpoch *epoch, TOptions  *options) {
 	epoch->receiver.aproxPosition[1] = 0;
 	epoch->receiver.aproxPosition[2] = 0;
 	epoch->receiver.aproxPositionError = 1e10;
-	epoch->receiver.equivalentC1P1 = 0;
 	epoch->receiver.receiverSolConverged = 1;
 	epoch->receiver.aproxPositionRover[0] = 0.;
 	epoch->receiver.aproxPositionRover[1] = 0.;
 	epoch->receiver.aproxPositionRover[2] = 0.;
+	epoch->receiver.antenna.type[0] = '\0';
+	epoch->receiver.antenna.type_ant[0] = '\0';
+	epoch->receiver.antenna.type_radome[0] = '\0';
 
 	epoch->prealign = 0;
 	epoch->ZTD = 0;
@@ -826,54 +2152,104 @@ void initEpoch (TEpoch *epoch, TOptions  *options) {
 	epoch->dgnss.Nref = 0;
 	epoch->dgnss.CLKref = 0.0;
 	epoch->dgnss.epsURA = 0.01;
+
+	epoch->bufferHeaderLine[0]='\0';
+	epoch->bufferHeaderLineLen=0;
 	
-	for (i=0;i<3;i++) {
-		epoch->solidTideDisplacement[i] = 0;
-		epoch->receiver.ARP[i] = 0;
-		for (k=0;k<MAX_GNSS;k++) {
+	epoch->IGFminNoise=options->csIGFminNoise;
+
+	for (k=0;k<3;k++) {
+		epoch->solidTideDisplacement[k] = 0;
+		epoch->receiver.ARP[k] = 0;
+		for(i=0;i<MAX_GNSS;i++) {
 			for (j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
-				epoch->receiver.antenna.PCO[k][j][i] = 0.;
+				epoch->receiver.antenna.PCO[i][j][k] = 0.;
 			}
+		}
+	}
+	for (i=0;i<3;i++) {
+		for(j=0;j<3;j++) {
+			epoch->receiver.orientation[i][j]=-9999.;
 		}
 	}
 
 	for (i=0;i<MAX_SATELLITES_VIEWED;i++) {
-		epoch->satsviewed[i] = 0;
+		epoch->sat2Printpos[i]=-1;
 		epoch->sat[i].azimuth = 0.0;
 		epoch->sat[i].elevation = 0.0;
+		epoch->sat[i].ionoCorr = 0.0;
+		epoch->sat[i].ionoSigma = 0.0;
+		epoch->sat[i].DCBSigma = 0.0;
+		epoch->sat[i].validIono = 1;
+		epoch->sat[i].LoS[0] = 0.0;
+		epoch->sat[i].LoS[1] = 0.0;
+		epoch->sat[i].LoS[2] = 0.0;
+		epoch->sat[i].tropWetMap = 0.0;
+		epoch->sat[i].available = 0;
+		epoch->sat[i].URAValue = 0;
+		epoch->sat[i].hasSBAScor = 1;
+		epoch->sat[i].hasSNR = 1;
 		epoch->cycleslip.hasBeenCycleslip[i] = 0;
 		epoch->cycleslip.use4smooth[i] = 1;
 		epoch->cycleslip.preCheck[i] = 0;
 		epoch->cycleslip.outlierLI[i] = 0;
-		epoch->cycleslip.outlierBw[i] = 0;
+		epoch->cycleslip.outlierIGF[i] = 0;
+		epoch->cycleslip.outlierMW[i] = 0;
+		epoch->cycleslip.anyOutlier[i] = 0;
 		epoch->cycleslip.consistency[i] = 0;
 		epoch->cycleslip.CS[i] = 0;
 		epoch->cycleslip.CSPrealignFlag[i] = 0;
-		epoch->cycleslip.narc[i] = 0;
+		epoch->cycleslip.narc[i] = 1;
 		epoch->cycleslip.arcLength[i] = 0;
 		epoch->cycleslip.Nconsecutive[i] = 0;
-		epoch->cycleslip.initialLi[i] = 0.0;
-		epoch->cycleslip.BWmean[i] = 0.0;
-		epoch->cycleslip.BWmean300[i] = 0.0;
-		epoch->cycleslip.BWsigma[i] = options->csBWInitStd*options->csBWInitStd;
-		epoch->cycleslip.L1C1mean[i] = 0.0;
-		epoch->cycleslip.L1C1sigma[i] = 0.0;
-		epoch->cycleslip.L1Prev[i] = 0.0;
-		epoch->cycleslip.C1Prev[i] = 0.0;
 		epoch->cycleslip.lastModelledEpoch[i].MJDN=-1;
 		epoch->cycleslip.lastModelledEpoch[i].SoD=0.;
-		epoch->sat[i].ionoSigma = 0.0;
+		epoch->cycleslip.previousEpochNconsecutive[i].MJDN=44244; //First day of GPS, to avoid inital tdiff too big
+		epoch->cycleslip.previousEpochNconsecutive[i].SoD=0.;
+		epoch->cycleslip.previousEpoch[i].MJDN=44244; //First day of GPS, to avoid inital tdiff too big
+		epoch->cycleslip.previousEpoch[i].SoD=0.;
+		epoch->cycleslip.windUpRadAccumReceiver[i] = 0.0;
+		epoch->cycleslip.windUpRadAccumReceiverPrev[i] = 0.0;
+		epoch->cycleslip.windUpRadAccumSatellite[i] = 0.0;
+		epoch->cycleslip.windUpRadAccumSatellitePrev[i] = 0.0;
 		for (j=0;j<MAX_MEASUREMENTS_PER_SATELLITE;j++) {
 			epoch->cycleslip.preAlign[i][j] = 0.0;
+			epoch->sat[i].meas[j].value=0.0;
+			epoch->sat[i].meas[j].rawvalue=0.0;
+			epoch->sat[i].meas[j].totalnoise=0.0;
+			epoch->sat[i].meas[j].SNRvalue=0.0;
+			epoch->sat[i].meas[j].SNRflag=0;
+			epoch->sat[i].meas[j].SNRflagdBHz=0.0;
+			epoch->sat[i].meas[j].hasSNRflag=0;
+			epoch->sat[i].meas[j].dataFlag=0;
+			epoch->sat[i].meas[j].SNRvalue=SNRtable[0];
+			epoch->sat[i].meas[j].model=0.0;
+			for (k=0;k<MAX_FILTER_MEASUREMENTS_SAT;k++) {
+				epoch->sat[i].meas[j].modelAll[k] = 0.0;
+			}
 		}
-		for (j=0;j<MAX_FILTER_MEASUREMENTS;j++) {
+		for (j=0;j<MAX_FILTER_MEASUREMENTS_SAT;j++) {
 			epoch->cycleslip.smoothedMeas[i][j] = 0.0;
+			epoch->sat[i].measurementWeights[j] = 1.0;  // We assigned 1.0 instead of 0.0 to avoid divisions per 0
 		}
-		for (j=0;j<MAX_SLIDING_WINDOW;j++) {
-			epoch->cycleslip.windowMW[i][j] = 0.0;
-			epoch->cycleslip.windowMWtime[i][j] = 0.0;
-			epoch->cycleslip.windowL1C1[i][j] = 0.0;
-			epoch->cycleslip.windowL1C1time[i][j] = 0.0;
+		for(j=0;j<MAX_CS_LIST;j++) {
+			for (k=0;k<MAX_SLIDING_WINDOW;k++) {
+				epoch->cycleslip.windowSF[i][j][k] = 0.0;
+				epoch->cycleslip.windowSFtime[i][j][k] = 0.0;
+				epoch->cycleslip.windowMW[i][j][k] = 0.0;
+				epoch->cycleslip.windowMWtime[i][j][k] = 0.0;
+			}
+		}
+		for(j=0;j<MAX_CS_LIST;j++) {
+			epoch->cycleslip.SFmean[i][j] = 0.0;
+			epoch->cycleslip.SFsigma[i][j] = 0.0;
+			epoch->cycleslip.SFPhasePrev[i][j] = 0.0;
+			epoch->cycleslip.SFCodePrev[i][j] = 0.0;
+			epoch->cycleslip.MWmean[i][j] = 0.0;
+			epoch->cycleslip.MWmean300[i][j] = 0.0;
+			epoch->cycleslip.MWsigma[i][j] = options->csMWInitStd*options->csMWInitStd;
+			epoch->cycleslip.initialLI[i][j] = 0.0;
+			epoch->cycleslip.initialIGF[i][j] = 0.0;
 		}
 		// DGNSS
 		epoch->dgnss.msg[i] = 0;
@@ -895,26 +2271,537 @@ void initEpoch (TEpoch *epoch, TOptions  *options) {
 		epoch->DGNSSstruct=0;
 	}
 
+	for (j=0;j<MAX_GNSS+FIRST_POS_IS_CLK;j++) {
+		epoch->InterSystemClocksUnk2GNSS[j]=-1;
+		epoch->prevInterSystemClocksUnk2GNSS[j]=-1;
+	}
+
 	for (j=0;j<MAX_GNSS;j++) {
-		for (i=0;i<MAX_MEASUREMENTS;i++) {
+		
+		epoch->GNSS2PrintPos[j]=-1;
+		epoch->PrintPos2GNSS[j]=-1;
+
+		epoch->InterSystemClocksUnk[j]=0;
+		epoch->hasInterSystemClocksUnk[j]=0;
+		epoch->prevInterSystemClocksUnk[j]=0;
+
+		for (i=0;i<MAX_MEASUREMENTS_NO_COMBINATIONS;i++) {
 			epoch->measOrder[j].meas2Ind[i] = -1;
+			epoch->measOrder[j].meas2SNRInd[i] = -1;
 			epoch->measOrder[j].conversionFactor[i] = 0;
-			epoch->measOrder[j].usable[i] = 1;
 		}
 		for (i=0;i<MAX_SATELLITES_PER_GNSS;i++) {
 			epoch->satInfo[j][i].lastEclipse.SoD = 0;
 			epoch->satInfo[j][i].lastEclipse.MJDN = 0;
 			epoch->satIndex[j][i]=-1;
 			epoch->satCSIndex[j][i]=-1;
+			epoch->measOrder[j].numMeasListToCheckSNR[i]=0;
+			epoch->measOrder[j].numMeasListToBeModelled[i]=0;
+			epoch->measOrder[j].numPhaseMeasListToBeModelled[i]=0;
+			epoch->measOrder[j].numMeasListToCheckLLI[i]=0;
+			epoch->measOrder[j].numMeasListDataGap[i]=0;
+			epoch->measOrder[j].numDualFreqDCBFreqList[i]=0;
+			epoch->satHasBeenUsedInFilter[j][i]=0;
+			epoch->dualFreqSingleMeasUnavail[j][i]=0;
+			epoch->dualFreqSingleMeasUnavailText[j][i][0]='\0';
+			epoch->dualFreqIFRefMeasUnavail[j][i]=0;
+			epoch->dualFreqIFRefMeasUnavailText[j][i][0]='\0';
+			for(k=0;k<MAX_FREQUENCIES_PER_GNSS;k++) {
+				epoch->measOrder[j].numPhaseMeasFilterToCSSF[i][k]=0;
+				epoch->measOrder[j].numPhaseMeasFilterToCSMW[i][k]=0;
+				epoch->measOrder[j].numPhaseMeasFilterToCSLI[i][k]=0;
+				epoch->measOrder[j].numPhaseMeasFilterToCSIGF[i][k]=0;
+			}
+			for(k=0;k<MAX_CODE_MEASUREMENTS_NO_COMBINATIONS;k++) {
+				epoch->measOrder[j].numMeasPosToFilterPos[i][k]=0;
+			}
+			for(k=0;k<MAX_FILTER_MEASUREMENTS_SAT;k++) {
+				epoch->measOrder[j].MeasPos2PrintPos[i][k]=-1;
+				epoch->MeasPosAllGNSS2PrintPos[j][i][k]=-1;
+				epoch->measOrder[j].filterMeaslambda[i][k]=1.0;
+			}
+			for(k=0;k<MAX_AMBIGUITIES_FILTER;k++) {
+				epoch->lastAmbValEstimatedNotInFilter[j][i][k]=0.;
+				epoch->lastAmbCorEstimatedNotInFilter[j][i][k]=options->filterParams[P0_PAR][BIAS_UNK];
+			}
 		}
-		epoch->measOrder[j].hasSNRmeas=0;
+		epoch->measOrder[j].hasGlonassSlotsFreq=0;
+		epoch->measOrder[j].numFreqOffsetRead=0;
+		epoch->measOrder[j].numMeasToCopy=0;
+		epoch->measOrder[j].numCodeMeasurements=0;
+		epoch->measOrder[j].numCarrierPhaseMeasurements=0;
+		epoch->measOrder[j].nDiffMeasurements=0;
+		epoch->measOrder[j].nDiffMeasurementsRINEXHeader=0;
 		for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
 			epoch->measOrder[j].SNRmeaspos[i]=-1;
+			epoch->measOrder[j].availFreq[i]=0;
+		}
+		for(i=0;i<MAX_MEASKIND_PRINT_MEASUREMENTS;i++) {
+			epoch->measOrder[j].numMeasIndexed[i]=0;
+			for(k=0;k<MAX_FILTER_MEASUREMENTS_SAT;k++) {
+				epoch->measOrder[j].MeasCodeIndexed[i][k]=(long long int)(-1);
+			}
+		}
+		for(i=0;i<MAX_FILTER_MEASUREMENTS_SAT;i++) {
+			epoch->measOrder[j].numMeasSmoothIndexed[i]=0;
+			for(k=0;k<MAX_FILTER_MEASUREMENTS_SAT;k++) {
+				epoch->measOrder[j].SmoothMeasCodeIndexed[i][k]=(long long int)(-1);
+			}
 		}
 	}
 
+	epoch->numMeasAllGNSSIndexed=0;
+	epoch->numMeasSmoothAllGNSSIndexed=NULL;
+	epoch->MeasCodeAllGNSSIndexed=NULL;
+	epoch->SmoothMeasCodeAllGNSSIndexed=NULL;
+	epoch->PosSmoothCodeAllGNSS2Index=NULL;
+	epoch->MeasStrAllGNSSIndexed=NULL;
+	epoch->MeasStrSmoothAllGNSSIndexed=NULL;
+	epoch->printTypeAllGNSSAllIndexed=NULL;
+
+	epoch->totalNumSatDCBEpoch=0;
+	epoch->totalNumRecDCBEpoch=0;
+	for(i=0;i<MAX_FILTER_SATELLITE_DCB;i++) {
+		epoch->satDCBlist[i]=0;
+		epoch->satDCBpos2usableSatPos[i]=0;
+	}
+	for(i=0;i<MAX_FILTER_RECEIVER_DCB;i++) {
+		epoch->recDCBlist[i]=0;
+	}
+	for(i=0;i<MAX_GNSS;i++) {
+		epoch->RecDCBPosToLink[i][0]=0;
+		epoch->RecDCBPosToLink[i][1]=0;
+	}
+	for (i=0;i<MAX_GNSS;i++) {
+		for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			epoch->numSatDCBEpoch[i][j]=0;
+			for(k=0;k<MAX_FILTER_MEASUREMENTS_SAT;k++) {
+				epoch->filterMeasPosToSatDCBlistPos[i][j][k]=-1;
+				epoch->filterMeasPosToRecDCBlistPos[i][j][k]=-1;
+			}
+		}
+	}
+
+	//Initialize frequency, lambda and frequency factors
+	for (i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+		switch (i) {
+			case 1:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=GPSl1;
+					epoch->measOrder[GPS].freqMeas[i][j]=GPSf1;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=GPSmf1;
+					epoch->measOrder[GPS].TECU2metres[i][j]=40.3*1E16/(GPSf1*GPSf1);
+
+					//GLONASS FDMA will be filled later
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=GALl1;
+					epoch->measOrder[Galileo].freqMeas[i][j]=GALf1;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=GALmf1;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=40.3*1E16/(GALf1*GALf1);
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=SBASl1;
+					epoch->measOrder[GEO].freqMeas[i][j]=SBASf1;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=SBASmf1;
+					epoch->measOrder[GEO].TECU2metres[i][j]=40.3*1E16/(SBASf1*SBASf1);
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=BDSl1;
+					epoch->measOrder[BDS].freqMeas[i][j]=BDSf1;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=BDSmf1;
+					epoch->measOrder[BDS].TECU2metres[i][j]=40.3*1E16/(BDSf1*BDSf1);
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=QZSl1;
+					epoch->measOrder[QZSS].freqMeas[i][j]=QZSf1;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=QZSmf1;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=40.3*1E16/(QZSf1*QZSf1);
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=1.;
+				}
+				break;
+			case 2:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=GPSl2;
+					epoch->measOrder[GPS].freqMeas[i][j]=GPSf2;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=GPSmf2;
+					epoch->measOrder[GPS].TECU2metres[i][j]=40.3*1E16/(GPSf2*GPSf2);
+
+					//GLONASS FDMA will be filled later
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=1.;
+					epoch->measOrder[Galileo].freqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GEO].freqMeas[i][j]=1.;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GEO].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=BDSl1_2;
+					epoch->measOrder[BDS].freqMeas[i][j]=BDSf1_2;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=BDSmf1_2;
+					epoch->measOrder[BDS].TECU2metres[i][j]=40.3*1E16/(BDSf1_2*BDSf1_2);
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=QZSl2;
+					epoch->measOrder[QZSS].freqMeas[i][j]=QZSf2;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=QZSmf2;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=40.3*1E16/(QZSf2*QZSf2);
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=1.;
+				}
+				break;
+			case 3:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GPS].freqMeas[i][j]=1.;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GPS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=GLOl3;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=GLOf3;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=GLOmf3;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=40.3*1E16/(GLOf3*GLOf3);
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=1.;
+					epoch->measOrder[Galileo].freqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GEO].freqMeas[i][j]=1.;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GEO].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[BDS].freqMeas[i][j]=1.;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[BDS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[QZSS].freqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=1.;
+				}
+				break;
+			case 4:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GPS].freqMeas[i][j]=1.;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GPS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=GLOl1a;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=GLOf1a;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=GLOmf1a;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=40.3*1E16/(GLOf1a*GLOf1a);
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=1.;
+					epoch->measOrder[Galileo].freqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GEO].freqMeas[i][j]=1.;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GEO].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[BDS].freqMeas[i][j]=1.;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[BDS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[QZSS].freqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=1.;
+				}
+				break;
+			case 5:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=GPSl5;
+					epoch->measOrder[GPS].freqMeas[i][j]=GPSf5;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=GPSmf5;
+					epoch->measOrder[GPS].TECU2metres[i][j]=40.3*1E16/(GPSf5*GPSf5);
+
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=GALl5a;
+					epoch->measOrder[Galileo].freqMeas[i][j]=GALf5a;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=GALmf5a;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=40.3*1E16/(GALf5a*GALf5a);
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=SBASl5;
+					epoch->measOrder[GEO].freqMeas[i][j]=SBASf5;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=SBASmf5;
+					epoch->measOrder[GEO].TECU2metres[i][j]=40.3*1E16/(SBASf5*SBASf5);
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=BDSl2a;
+					epoch->measOrder[BDS].freqMeas[i][j]=BDSf2a;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=BDSmf2a;
+					epoch->measOrder[BDS].TECU2metres[i][j]=40.3*1E16/(BDSf2a*BDSf2a);
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=QZSl5;
+					epoch->measOrder[QZSS].freqMeas[i][j]=QZSf5;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=QZSmf5;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=40.3*1E16/(QZSf5*QZSf5);
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=IRNl5;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=IRNf5;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=IRNmf5;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=40.3*1E16/(IRNf5*IRNf5);
+				}
+				break;
+			case 6:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GPS].freqMeas[i][j]=1.;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GPS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=GLOl2a;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=GLOf2a;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=GLOmf2a;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=40.3*1E16/(GLOf2a*GLOf2a);
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=GALl6;
+					epoch->measOrder[Galileo].freqMeas[i][j]=GALf6;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=GALmf6;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=40.3*1E16/(GALf6*GALf6);
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GEO].freqMeas[i][j]=1.;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GEO].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=BDSl3;
+					epoch->measOrder[BDS].freqMeas[i][j]=BDSf3;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=BDSmf3;
+					epoch->measOrder[BDS].TECU2metres[i][j]=40.3*1E16/(BDSf3*BDSf3);
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=QZSl6;
+					epoch->measOrder[QZSS].freqMeas[i][j]=QZSf6;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=QZSmf6;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=40.3*1E16/(QZSf6*QZSf6);
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=1.;
+				}
+				break;
+			case 7:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GPS].freqMeas[i][j]=1.;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GPS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=GALl5b;
+					epoch->measOrder[Galileo].freqMeas[i][j]=GALf5b;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=GALmf5b;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=40.3*1E16/(GALf5b*GALf5b);
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GEO].freqMeas[i][j]=1.;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GEO].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=BDSl2b;
+					epoch->measOrder[BDS].freqMeas[i][j]=BDSf2b;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=BDSmf2b;
+					epoch->measOrder[BDS].TECU2metres[i][j]=40.3*1E16/(BDSf2b*BDSf2b);
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[QZSS].freqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=1.;
+				}
+				break;
+			case 8:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GPS].freqMeas[i][j]=1.;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GPS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=GALl5;
+					epoch->measOrder[Galileo].freqMeas[i][j]=GALf5;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=GALmf5;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=40.3*1E16/(GALf5*GALf5);
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GEO].freqMeas[i][j]=1.;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GEO].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=BDSl2;
+					epoch->measOrder[BDS].freqMeas[i][j]=BDSf2;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=BDSmf2;
+					epoch->measOrder[BDS].TECU2metres[i][j]=40.3*1E16/(BDSf2*BDSf2);
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[QZSS].freqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=1.;
+				}
+				break;
+			case 9:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GPS].freqMeas[i][j]=1.;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GPS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=1.;
+					epoch->measOrder[Galileo].freqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GEO].freqMeas[i][j]=1.;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GEO].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[BDS].freqMeas[i][j]=1.;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[BDS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[QZSS].freqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=IRNl9;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=IRNf9;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=IRNmf9;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=40.3*1E16/(IRNf9*IRNf9);
+				}
+				break;
+			case 0:
+				for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					epoch->measOrder[GPS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GPS].freqMeas[i][j]=1.;
+					epoch->measOrder[GPS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GPS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GLONASS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].freqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GLONASS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[Galileo].lambdaMeas[i][j]=1.;
+					epoch->measOrder[Galileo].freqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].mfreqMeas[i][j]=1.;
+					epoch->measOrder[Galileo].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[GEO].lambdaMeas[i][j]=1.;
+					epoch->measOrder[GEO].freqMeas[i][j]=1.;
+					epoch->measOrder[GEO].mfreqMeas[i][j]=1.;
+					epoch->measOrder[GEO].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[BDS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[BDS].freqMeas[i][j]=1.;
+					epoch->measOrder[BDS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[BDS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[QZSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[QZSS].freqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[QZSS].TECU2metres[i][j]=1.;
+
+					epoch->measOrder[IRNSS].lambdaMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].freqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].mfreqMeas[i][j]=1.;
+					epoch->measOrder[IRNSS].TECU2metres[i][j]=1.;
+				}
+				break;
+			default:
+				break;
+		}
+	}
+
+	//Initialize GLONASS frequency numbers to 99
+	for(i=0;i<MAX_SATELLITES_PER_GNSS;i++) {
+		epoch->GLOfreqnumber[i]=99;
+	}
+
+	//Initialize IGF combination factors to 0
+	for (i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			for(k=0;k<MAX_TRIPLE_FREQUENCIES_COMBINATIONS;k++) {
+				for(l=0;l<NUM_COMB_IGF_MIN_NOISE;l++) {
+					epoch->measOrder[i].IGFcombFactors[j][k][l]=0.;
+				}
+			}
+		}
+	}
+
+	//Initialize measListToBeModelled
+	for (i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			for(k=0;k<MAX_MEASUREMENTS_NO_COMBINATIONS_NO_SNR;k++) {
+				epoch->measOrder[i].measListToBeModelled[j][k]=NA;
+			}
+		}
+	}
+
+		
 	epoch->ResetNumSwitch=0;
 	epoch->currentGEOPRN=0;
+	epoch->SBASUsedGEO=0;
+	epoch->SBASUsedGEOindex=0;
 
 	epoch->KMLData=NULL;
 	epoch->KMLTime=NULL;
@@ -924,6 +2811,28 @@ void initEpoch (TEpoch *epoch, TOptions  *options) {
 	epoch->receiver.ChangedStaEpoch=NULL;
 	epoch->receiver.look4interval = 1;
 	epoch->receiver.RefPositionAvail=1;
+
+	for(i=0;i<3;i++) {
+		epoch->SolErrorXYZ[i] = 0.;
+		epoch->SolErrorNEU[i] = 0.;
+		epoch->FormalErrorNEU[i] = 0.;
+	}
+
+	epoch->SolError3DNEU = 0.;
+	epoch->SolHError = 0.;
+	epoch->SolVError = 0.;
+	epoch->FormalErrorHor = 0.;
+	epoch->FormalErrorVer = 0.;
+	epoch->FormalError3DNEU = 0.;
+
+	//Set values for any broadcast type
+	epoch->BRDCAnyType[GPS]=GPSANY;
+	epoch->BRDCAnyType[Galileo]=GalANY;
+	epoch->BRDCAnyType[GLONASS]=GLOANY;
+	epoch->BRDCAnyType[GEO]=GEOANY;
+	epoch->BRDCAnyType[BDS]=BDSANY;
+	epoch->BRDCAnyType[QZSS]=QZSANY;
+	epoch->BRDCAnyType[IRNSS]=IRNANY;
 
 	//Summary variables
 	epoch->TotalEpochs=0;
@@ -937,6 +2846,7 @@ void initEpoch (TEpoch *epoch, TOptions  *options) {
 	epoch->TotalEpochsRef=0;
 	epoch->NumNoRefSumSkipped=0;
 	epoch->NumNoRefSolSkipped=0;
+	epoch->NumNoRefGNSSSkipped=0;
 	epoch->NumDOPSkipped  = 0;
 	epoch->NumHDOPSkipped = 0;
 	epoch->NumPDOPSkipped = 0;
@@ -957,15 +2867,117 @@ void initEpoch (TEpoch *epoch, TOptions  *options) {
 	epoch->VDOPPercentileSamples = -1.;
 	epoch->HPEPercentileSamples = -1.;
 	epoch->VPEPercentileSamples = -1.;
+	epoch->NPEPercentileSamples = -1.;
+	epoch->EPEPercentileSamples = -1.;
+	epoch->PE3DPercentileSamples = -1;
+	epoch->MaxNError = -1.;
+	epoch->MaxEError = -1.;
 	epoch->MaxHError = -1.;
 	epoch->MaxVError = -1.;
+	epoch->Max3DError = -1.;
 	epoch->MaxHDOP = -1.;
 	epoch->MaxPDOP = -1.;
 	epoch->MaxGDOP = -1.;
 	epoch->MaxVDOP = -1.;
 	epoch->MaxTDOP = -1.;
+	epoch->MinNumSatUsed = 9999;
+	epoch->MinNumSatNotUsed = 9999;
+	epoch->MaxNumSatUsed = -1;
+	epoch->MaxNumSatNotUsed = -1;
+	epoch->MinNumConstUsed = 9999;
+	epoch->MinNumConstNotUsed = 9999;
+	epoch->MaxNumConstUsed = -1;
+	epoch->MaxNumConstNotUsed = -1;
+	epoch->NumSatUsedPercentSamples = 0;
+	epoch->NumSatNotUsedPercentSamples = 0;
+	epoch->NumSatUsed50PercentSamples = 0;
+	epoch->NumSatNotUsed50PercentSamples = 0;
+	epoch->MinHDOP = 9999.;
+	epoch->MinPDOP = 9999.;
+	epoch->MinGDOP = 9999.;
+	epoch->MinVDOP = 9999.;
+	epoch->MinTDOP = 9999.;
+	epoch->NumSatMaxHDOP = 0;
+	epoch->NumSatMinHDOP = 0;
+	epoch->NumSatMaxPDOP = 0;
+	epoch->NumSatMinPDOP = 0;
+	epoch->NumSatMaxGDOP = 0;
+	epoch->NumSatMinGDOP = 0;
+	epoch->NumSatMaxVDOP = 0;
+	epoch->NumSatMinVDOP = 0;
+	epoch->NumSatMaxTDOP = 0;
+	epoch->NumSatMinTDOP = 0;
+	epoch->NumSatMaxNError = 0;
+	epoch->NumSatMaxEError = 0;
+	epoch->NumSatMaxHError = 0;
+	epoch->NumSatMaxVError = 0;
+	epoch->NumSatMax3DError = 0;
+	epoch->NumSatHWIR = 0;
+	epoch->NumSatHBIR = 0;
+	epoch->NumSatVWIR = 0;
+	epoch->NumSatVBIR = 0;
+	epoch->NumSatMaxHPL = 0;
+	epoch->NumSatMinHPL = 0;
+	epoch->NumSatMaxVPL = 0;
+	epoch->NumSatMinVPL = 0;
+	for(i=0;i<MAX_GNSS;i++) {
+		epoch->NumSatUsedPercentSamplesGNSS[i] = 0;
+		epoch->NumSatNotUsedPercentSamplesGNSS[i] = 0;
+		epoch->NumSatUsed50PercentSamplesGNSS[i] = 0;
+		epoch->NumSatNotUsed50PercentSamplesGNSS[i] = 0;
+		epoch->NumSatMaxHDOPGNSS[i] = 0;
+		epoch->NumSatMinHDOPGNSS[i] = 0;
+		epoch->NumSatMaxPDOPGNSS[i] = 0;
+		epoch->NumSatMinPDOPGNSS[i] = 0;
+		epoch->NumSatMaxGDOPGNSS[i] = 0;
+		epoch->NumSatMinGDOPGNSS[i] = 0;
+		epoch->NumSatMaxVDOPGNSS[i] = 0;
+		epoch->NumSatMinVDOPGNSS[i] = 0;
+		epoch->NumSatMaxTDOPGNSS[i] = 0;
+		epoch->NumSatMinTDOPGNSS[i] = 0;
+		epoch->NumSatMaxNErrorGNSS[i] = 0;
+		epoch->NumSatMaxEErrorGNSS[i] = 0;
+		epoch->NumSatMaxHErrorGNSS[i] = 0;
+		epoch->NumSatMaxVErrorGNSS[i] = 0;
+		epoch->NumSatMax3DErrorGNSS[i] = 0;
+		epoch->NumSatHWIRGNSS[i] = 0;
+		epoch->NumSatHBIRGNSS[i] = 0;
+		epoch->NumSatVWIRGNSS[i] = 0;
+		epoch->NumSatVBIRGNSS[i] = 0;
+		epoch->NumSatMaxHPLGNSS[i] = 0;
+		epoch->NumSatMinHPLGNSS[i] = 0;
+		epoch->NumSatMaxVPLGNSS[i] = 0;
+		epoch->NumSatMinVPLGNSS[i] = 0;
+	}
+	epoch->MeanNumSatUsed=0.;
+	epoch->MeanNumSatNotUsed=0.;
+	for(i=0;i<MAX_GNSS;i++) {
+		epoch->MeanNumSatUsedGNSS[i]=0.;
+		epoch->MeanNumSatNotUsedGNSS[i]=0.;
+		epoch->MaxNumSatUsedGNSS[i] = -1;
+		epoch->MaxNumAllSatUsedGNSS[i] = 0;
+		epoch->MaxNumSatNotUsedGNSS[i] = -1;
+		epoch->MaxNumAllSatNotUsedGNSS[i] = 0;
+		epoch->MinNumSatUsedGNSS[i] = 9999;
+		epoch->MinNumAllSatUsedGNSS[i] = 0;
+		epoch->MinNumSatNotUsedGNSS[i] = 9999;
+		epoch->MinNumAllSatNotUsedGNSS[i] = 0;
+	}
+	epoch->MeanNumConstUsed=0.;
+	epoch->MeanNumConstNotUsed=0.;
+	epoch->NumSatUsed = NULL;
+	epoch->NumSatNotUsed = NULL;
+	for(i=0;i<MAX_GNSS;i++) {
+		epoch->NumSatUsedGNSS[i] = NULL;
+		epoch->NumSatNotUsedGNSS[i] = NULL;
+	}
+	epoch->NumConstUsed = NULL;
+	epoch->NumConstNotUsed = NULL;
+	epoch->NError = NULL;
+	epoch->EError = NULL;
 	epoch->HError = NULL;
 	epoch->VError = NULL;
+	epoch->Error3D = NULL;
 	epoch->HDOP = NULL;
 	epoch->PDOP = NULL;
 	epoch->GDOP = NULL;
@@ -979,8 +2991,51 @@ void initEpoch (TEpoch *epoch, TOptions  *options) {
 	epoch->StartSummaryPercentileEpoch.SoD=0.;
 	epoch->LastSummaryPercentileEpoch.MJDN=-1;
 	epoch->LastSummaryPercentileEpoch.SoD=0.;
+	epoch->FirstEpochSolution.MJDN=-1;
+	epoch->FirstEpochSolution.SoD=0.;
+	epoch->FirstEpochConvergedFormalErrHor.MJDN=-1;
+	epoch->FirstEpochConvergedFormalErrHor.SoD=0.;
+	epoch->FirstEpochConvergedFormalErrVer.MJDN=-1;
+	epoch->FirstEpochConvergedFormalErrVer.SoD=0.;
+	epoch->FirstEpochConvergedFormalErr3D.MJDN=-1;
+	epoch->FirstEpochConvergedFormalErr3D.SoD=0.;
+	epoch->FirstEpochConvergedPosErrHor.MJDN=-1;
+	epoch->FirstEpochConvergedPosErrHor.SoD=0.;
+	epoch->FirstEpochConvergedPosErrVer.MJDN=-1;
+	epoch->FirstEpochConvergedPosErrVer.SoD=0.;
+	epoch->FirstEpochConvergedPosErr3D.MJDN=-1;
+	epoch->FirstEpochConvergedPosErr3D.SoD=0.;
+	epoch->FirstEpochConvergedPeriodFormalErrHor.MJDN=-1;
+	epoch->FirstEpochConvergedPeriodFormalErrHor.SoD=0.;
+	epoch->FirstEpochConvergedPeriodFormalErrVer.MJDN=-1;
+	epoch->FirstEpochConvergedPeriodFormalErrVer.SoD=0.;
+	epoch->FirstEpochConvergedPeriodFormalErr3D.MJDN=-1;
+	epoch->FirstEpochConvergedPeriodFormalErr3D.SoD=0.;
+	epoch->FirstEpochConvergedPeriodPosErrHor.MJDN=-1;
+	epoch->FirstEpochConvergedPeriodPosErrHor.SoD=0.;
+	epoch->FirstEpochConvergedPeriodPosErrVer.MJDN=-1;
+	epoch->FirstEpochConvergedPeriodPosErrVer.SoD=0.;
+	epoch->FirstEpochConvergedPeriodPosErr3D.MJDN=-1;
+	epoch->FirstEpochConvergedPeriodPosErr3D.SoD=0.;
+	epoch->constCombination=NULL;
+	epoch->numEpochsconstCombination=NULL;
+	epoch->numconstCombUsed=0;
+	epoch->constNotUsedCombination=NULL;
+	epoch->numEpochsconstNotUsedCombination=NULL;
+	epoch->numconstCombNotUsed=0;
+	epoch->constCombinationText=NULL;
+	epoch->constNotUsedCombinationText=NULL;
+	for(i=0;i<MAX_GNSS;i++) {
+		epoch->numEpochsRefClock[i]=0;
+	}
 
 	//Variables for backing up data when selecting the GEO with smallest protection levels
+	epoch->Buffer_NumDataStoredAlloc=0;
+	epoch->Buffer_numSatellitesAlloc=0;
+	epoch->Buffer_numSatellitesGNSSAlloc=0;
+	epoch->Buffer_numPrintGNSSAlloc=0;
+	epoch->Buffer_linesstoredMODELAlloc=0;
+	epoch->Buffer_linesstoredSATSELAlloc=0;
 	epoch->Buffer_NumDataStored=0;
 	epoch->Buffer_NumDataStoredUnderAlarmLimitsPA=0;
 	epoch->Buffer_NumDataStoredPA=0;
@@ -988,25 +3043,123 @@ void initEpoch (TEpoch *epoch, TOptions  *options) {
 	epoch->Buffer_PosDataStoredUnderAlarmLimitsPA=NULL;
 	epoch->Buffer_PosDataStoredPA=NULL;
 	epoch->Buffer_PosDataStoredNPA=NULL;
-	epoch->Buffer_numsatdiscardedSBAS=NULL;
-	epoch->Buffer_usableSatellites=NULL;
-	epoch->Buffer_HPL=NULL;
-	epoch->Buffer_VPL=NULL;
-	epoch->Buffer_HDOP=NULL;
-	epoch->Buffer_VDOP=NULL;
-	epoch->Buffer_PDOP=NULL;
-	epoch->Buffer_GDOP=NULL;
-	epoch->Buffer_TDOP=NULL;
-	epoch->Buffer_printMODEL=NULL;
-	epoch->Buffer_printSBASIONO=NULL;
-	epoch->Buffer_printSBASCORR=NULL;
-	epoch->Buffer_printSBASVAR=NULL;
-	epoch->Buffer_printSBASUNSEL=NULL;
-	epoch->Buffer_printSATSEL=NULL;
-	epoch->Buffer_NumSatSel=NULL;
-	epoch->Buffer_SBASMode=NULL;
-	epoch->Buffer_GEOindex=NULL;
-	epoch->Buffer_sat=NULL;
+	epoch->BufferBestGEO=NULL;
+
+	//Variables for EPOCHSAT print
+	epoch->maxNumMeasAllGNSSIndexed=0;
+	epoch->numSatsMeasUsed=NULL;
+	epoch->numSatsMeasUnused=NULL;
+	epoch->PRNMeasUsed=NULL;
+	epoch->PRNMeasUnused=NULL;
+	
+
+
+	/////////////////////////////////
+	////////////Init Hard-coded data
+
+	//////First epoch with S/A turned off 2 May 2000 at 00:00:00
+	epoch->FirstEpochSAoff.MJDN=51666;
+	epoch->FirstEpochSAoff.SoD=0.0;
+
+	//////Epochs without AS
+	//From initial GPS time until 30/01/1994 23:59:59.999 (both inclusive)
+	epoch->EpochsWithoutAS[0][0].MJDN=44244;	epoch->EpochsWithoutAS[0][1].MJDN=49382; 
+	epoch->EpochsWithoutAS[0][0].SoD=0.0;		epoch->EpochsWithoutAS[0][1].SoD=86399.999;
+	//From 19/04/1995 21:00:00 until 10/05/1995 20:00:00.000 (both inclusive)
+	epoch->EpochsWithoutAS[1][0].MJDN=49826;	epoch->EpochsWithoutAS[1][1].MJDN=49847; 
+	epoch->EpochsWithoutAS[1][0].SoD=75600.0;	epoch->EpochsWithoutAS[1][1].SoD=72000.0;
+	//From 19/06/1995 00:00:00.000 until 10/07/1995 23:59:59.999 (both inclusive)
+	epoch->EpochsWithoutAS[2][0].MJDN=49887;	epoch->EpochsWithoutAS[2][1].MJDN=49908; 
+	epoch->EpochsWithoutAS[2][0].SoD=0.0;		epoch->EpochsWithoutAS[2][1].SoD=86399.999;
+	//From 10/10/1995 00:00:00.000 until 31/10/1995 23:59:59.999 (both inclusive)
+	epoch->EpochsWithoutAS[3][0].MJDN=50000;	epoch->EpochsWithoutAS[3][1].MJDN=50021; 
+	epoch->EpochsWithoutAS[3][0].SoD=0.0;		epoch->EpochsWithoutAS[3][1].SoD=86399.999;
+	//From 02/02/1997 00:00:00.000 until 23/02/1997 23:59:59.999 (both inclusive)
+	epoch->EpochsWithoutAS[4][0].MJDN=50481;	epoch->EpochsWithoutAS[4][1].MJDN=50502; 
+	epoch->EpochsWithoutAS[4][0].SoD=0.0;		epoch->EpochsWithoutAS[4][1].SoD=86399.999;
+
+	//////Start time of constellations
+	//GPS Time starts on 06/01/1980
+	epoch->GNSSTimeReferences[GPS].MJDN=44244;
+	epoch->GNSSTimeReferences[GPS].SoD=0.;
+	//Galileo Time starts on 22/08/1999
+	epoch->GNSSTimeReferences[Galileo].MJDN=51412;
+	epoch->GNSSTimeReferences[Galileo].SoD=0.;
+	//GLONASS has no start time reference as it follows UTC 
+	epoch->GNSSTimeReferences[GLONASS].MJDN=0;
+	epoch->GNSSTimeReferences[GLONASS].SoD=0.;
+	//SBAS GEO use GPS time
+	epoch->GNSSTimeReferences[GEO].MJDN=44244;
+	epoch->GNSSTimeReferences[GEO].SoD=0.;
+	//BeiDou Time starts on 1/1/2006
+	epoch->GNSSTimeReferences[BDS].MJDN=53736;
+	epoch->GNSSTimeReferences[BDS].SoD=0.;
+	//QZSS uses its own UTC time, but it is aligned to GPS time
+	epoch->GNSSTimeReferences[QZSS].MJDN=44244;
+	epoch->GNSSTimeReferences[QZSS].SoD=0.;
+	//IRNSS Time starts on 22/08/1999 (same as Galileo)
+	epoch->GNSSTimeReferences[IRNSS].MJDN=51412;
+	epoch->GNSSTimeReferences[IRNSS].SoD=0.;
+
+
+	//////UTC Leap seconds list
+	//Start of GPS time in 06/01/1980 (DoY 006) . No leap seconds.
+	epoch->LeapSecondsTimeList[0].MJDN=44244;	epoch->LeapSecondsTimeList[0].SoD=0.0;
+	epoch->LeapSecondsNumList[0]=0;
+	//Leap second introduced on 1/7/1981 (DoY 182)
+	epoch->LeapSecondsTimeList[1].MJDN=44786;	epoch->LeapSecondsTimeList[1].SoD=0.0;
+	epoch->LeapSecondsNumList[1]=1;
+	//Leap second introduced on 1/7/1982 (DoY 182)
+	epoch->LeapSecondsTimeList[2].MJDN=45151;	epoch->LeapSecondsTimeList[2].SoD=0.0;
+	epoch->LeapSecondsNumList[2]=2;
+	//Leap second introduced on 1/7/1983 (DoY 182)
+	epoch->LeapSecondsTimeList[3].MJDN=45516;	epoch->LeapSecondsTimeList[3].SoD=0.0;
+	epoch->LeapSecondsNumList[3]=3;
+	//Leap second introduced on 1/7/1985 (DoY 182)
+	epoch->LeapSecondsTimeList[4].MJDN=46247;	epoch->LeapSecondsTimeList[4].SoD=0.0;
+	epoch->LeapSecondsNumList[4]=4;
+	//Leap second introduced on 1/1/1988 (DoY 001)
+	epoch->LeapSecondsTimeList[5].MJDN=47161;	epoch->LeapSecondsTimeList[5].SoD=0.0;
+	epoch->LeapSecondsNumList[5]=5;
+	//Leap second introduced on 1/1/1990 (DoY 001)
+	epoch->LeapSecondsTimeList[6].MJDN=47892;	epoch->LeapSecondsTimeList[6].SoD=0.0;
+	epoch->LeapSecondsNumList[6]=6;
+	//Leap second introduced on 1/1/1991 (DoY 001)
+	epoch->LeapSecondsTimeList[7].MJDN=48257;	epoch->LeapSecondsTimeList[7].SoD=0.0;
+	epoch->LeapSecondsNumList[7]=7;
+	//Leap second introduced on 1/7/1992 (DoY 183)
+	epoch->LeapSecondsTimeList[8].MJDN=48804;	epoch->LeapSecondsTimeList[8].SoD=0.0;
+	epoch->LeapSecondsNumList[8]=8;
+	//Leap second introduced on 1/7/1993 (DoY 182)
+	epoch->LeapSecondsTimeList[9].MJDN=48257;	epoch->LeapSecondsTimeList[9].SoD=0.0;
+	epoch->LeapSecondsNumList[9]=9;
+	//Leap second introduced on 1/7/1994 (DoY 182)
+	epoch->LeapSecondsTimeList[10].MJDN=49534;	epoch->LeapSecondsTimeList[10].SoD=0.0;
+	epoch->LeapSecondsNumList[10]=10;
+	//Leap second introduced on 1/1/1996 (DoY 001)
+	epoch->LeapSecondsTimeList[11].MJDN=48257;	epoch->LeapSecondsTimeList[11].SoD=0.0;
+	epoch->LeapSecondsNumList[11]=11;
+	//Leap second introduced on 1/7/1997 (DoY 182)
+	epoch->LeapSecondsTimeList[12].MJDN=50630;	epoch->LeapSecondsTimeList[12].SoD=0.0;
+	epoch->LeapSecondsNumList[12]=12;
+	//Leap second introduced on 1/1/1999 (DoY 001)
+	epoch->LeapSecondsTimeList[13].MJDN=48257;	epoch->LeapSecondsTimeList[13].SoD=0.0;
+	epoch->LeapSecondsNumList[13]=13;
+	//Leap second introduced on 1/1/2006 (DoY 001)
+	epoch->LeapSecondsTimeList[14].MJDN=53736;	epoch->LeapSecondsTimeList[14].SoD=0.0;
+	epoch->LeapSecondsNumList[14]=14;
+	//Leap second introduced on 1/1/2009 (DoY 001)
+	epoch->LeapSecondsTimeList[15].MJDN=54832;	epoch->LeapSecondsTimeList[15].SoD=0.0;
+	epoch->LeapSecondsNumList[15]=15;
+	//Leap second introduced on 1/7/2012 (DoY 183)
+	epoch->LeapSecondsTimeList[16].MJDN=56109;	epoch->LeapSecondsTimeList[16].SoD=0.0;
+	epoch->LeapSecondsNumList[16]=16;
+	//Leap second introduced on 1/7/2015 (DoY 182)
+	epoch->LeapSecondsTimeList[17].MJDN=57204;	epoch->LeapSecondsTimeList[17].SoD=0.0;
+	epoch->LeapSecondsNumList[17]=17;
+	//Leap second introduced on 1/1/2017 (DoY 001)
+	epoch->LeapSecondsTimeList[18].MJDN=57754;	epoch->LeapSecondsTimeList[18].SoD=0.0;
+	epoch->LeapSecondsNumList[18]=18;
 }
 
 /*****************************************************************************
@@ -1019,6 +3172,7 @@ void initEpoch (TEpoch *epoch, TOptions  *options) {
 void initGNSSproducts (TGNSSproducts *products) {
 	products->BRDC = NULL;
 	products->SP3 = NULL;
+	products->type = UnknownProductType;
 }
 
 /*****************************************************************************
@@ -1026,46 +3180,136 @@ void initGNSSproducts (TGNSSproducts *products) {
  * Description : Initialise a TBRDCproducts struct
  * Parameters  :
  * Name                           |Da|Unit|Description
- * TBRDCproducts  *BRDC            O  N/A  TBRDCproducts struct
+ * TBRDCproducts  *BRDCprod        O  N/A  TBRDCproducts struct
+ * double GLOintStep               I    s  Runge-Kutta integration time step
  *****************************************************************************/
-void initBRDCproducts (TBRDCproducts *BRDC) {
+void initBRDCproducts (TBRDCproducts *BRDCprod, double GLOintStep) {
 	int i,j;
 
-	BRDC->numsats = 0;
-	BRDC->numsatsPast = 0;
-	BRDC->block = NULL;
-	BRDC->blockPast = NULL;
-	BRDC->numblocks = NULL;
-	BRDC->numblocksPast = NULL;
+	BRDCprod->numsats = 0;
+	BRDCprod->numsatsPast = 0;
+	BRDCprod->block = NULL;
+	BRDCprod->blockPast = NULL;
+	BRDCprod->blockPointer = NULL;
+	BRDCprod->blockPastPointer = NULL;
+	BRDCprod->blockIOD = NULL;
+	BRDCprod->blockPastIOD = NULL;
+	BRDCprod->numblocks = NULL;
+	BRDCprod->numblocksPast = NULL;
+	BRDCprod->numblocksIOD = NULL;
+	BRDCprod->numblocksPastIOD = NULL;
 
 	for (i=0;i<4;i++) {
-		BRDC->ionA[i] = 0;	//Rinex v2
-		BRDC->ionB[i] = 0;	//Rinex v2
-		BRDC->ai[i] = 0;	//Rinex v3
-		BRDC->bdsA[i] = 0;	//Rinex v3
-		BRDC->bdsB[i] = 0;	//Rinex v3
+		BRDCprod->ionA[i] = 0;	//Rinex v2
+		BRDCprod->ionB[i] = 0;	//Rinex v2
+		BRDCprod->ai[i] = 0;	//Rinex v3
+		BRDCprod->bdsA[i] = 0;	//Rinex v3
+		BRDCprod->bdsB[i] = 0;	//Rinex v3
 	}
 
 	for (i=0;i<MAX_GNSS;i++) {
 		for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
-			BRDC->index[i][j] = -1;
-			BRDC->indexPast[i][j] = -1;
+			BRDCprod->index[i][j] = -1;
+			BRDCprod->indexPast[i][j] = -1;
+		}
+		for (j=0;j<MAX_BRDC_TYPES;j++) {
+			BRDCprod->AvailBRDCType[i][j]=0;
+			BRDCprod->AvailBRDCTypePast[i][j]=0;
 		}
 	}
 
-	BRDC->LeapSecondsAvail=0;
-	BRDC->AT_LS  = 0;
-	BRDC->AT_LSF = 0;
-	BRDC->WN_LSF = 0;
-	BRDC->DN     = 0;
+	BRDCprod->LeapSecondsAvail=0;
+	BRDCprod->LeapSecondsAvailPast=0;
+	BRDCprod->AT_LS  = 0;
+	BRDCprod->AT_LSF = 0;
+	BRDCprod->WN_LSF = 0;
+	BRDCprod->leapSeconds = -1;
+	BRDCprod->AT_LSpast  = 0;
+	BRDCprod->AT_LSFpast = 0;
+	BRDCprod->WN_LSFpast = 0;
+	BRDCprod->leapSecondsPast = 0;
+	BRDCprod->DN     = 0;
+	BRDCprod->GLOintStep = GLOintStep;
 
 	//Rinex v3
-	for(i=0;i<6;i++) {
-		BRDC->timeSysCorr[i].acoff[0] = 0;
-		BRDC->timeSysCorr[i].acoff[1] = 0;
-		BRDC->timeSysCorr[i].timeref = 0;
-		BRDC->timeSysCorr[i].weekref = 0;
+	for(i=0;i<NUMTIMESYSTEMCORRECTIONTYPES;i++) {
+		BRDCprod->timeSysCorr[i].acoff[0] = 0;
+		BRDCprod->timeSysCorr[i].acoff[1] = 0;
+		BRDCprod->timeSysCorr[i].timeref = 0;
+		BRDCprod->timeSysCorr[i].weekref = 0;
 	} 
+
+	//GLONASS saved data
+	for(i=0;i<(MAX_SAT_GLO+1);i++) {
+		BRDCprod->lastPosIODE[i]=-1; //Initial value to -1 so it does match with any other valid IODE
+		BRDCprod->lastEpoch[i].MJDN=0;
+		BRDCprod->lastEpoch[i].SoD=0.;
+		BRDCprod->lastSid[i]=-99999.; //Initial value to -99999. to indicate that no previous sid has been computed
+		for(j=0;j<3;j++) {
+			BRDCprod->lastPosXYZ[i][j]=0.;
+			BRDCprod->lastVelXYZ[i][j]=0.;
+			BRDCprod->lastAccXYZ[i][j]=0.;
+		}
+	}
+
+	//////UTC Leap seconds list
+	//Start of GPS time in 06/01/1980 (DoY 006) . No leap seconds.
+	BRDCprod->LeapSecondsTimeList[0].MJDN=44244;	BRDCprod->LeapSecondsTimeList[0].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[0]=0;
+	//Leap second introduced on 1/7/1981 (DoY 182)
+	BRDCprod->LeapSecondsTimeList[1].MJDN=44786;	BRDCprod->LeapSecondsTimeList[1].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[1]=1;
+	//Leap second introduced on 1/7/1982 (DoY 182)
+	BRDCprod->LeapSecondsTimeList[2].MJDN=45151;	BRDCprod->LeapSecondsTimeList[2].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[2]=2;
+	//Leap second introduced on 1/7/1983 (DoY 182)
+	BRDCprod->LeapSecondsTimeList[3].MJDN=45516;	BRDCprod->LeapSecondsTimeList[3].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[3]=3;
+	//Leap second introduced on 1/7/1985 (DoY 182)
+	BRDCprod->LeapSecondsTimeList[4].MJDN=46247;	BRDCprod->LeapSecondsTimeList[4].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[4]=4;
+	//Leap second introduced on 1/1/1988 (DoY 001)
+	BRDCprod->LeapSecondsTimeList[5].MJDN=47161;	BRDCprod->LeapSecondsTimeList[5].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[5]=5;
+	//Leap second introduced on 1/1/1990 (DoY 001)
+	BRDCprod->LeapSecondsTimeList[6].MJDN=47892;	BRDCprod->LeapSecondsTimeList[6].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[6]=6;
+	//Leap second introduced on 1/1/1991 (DoY 001)
+	BRDCprod->LeapSecondsTimeList[7].MJDN=48257;	BRDCprod->LeapSecondsTimeList[7].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[7]=7;
+	//Leap second introduced on 1/7/1992 (DoY 183)
+	BRDCprod->LeapSecondsTimeList[8].MJDN=48804;	BRDCprod->LeapSecondsTimeList[8].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[8]=8;
+	//Leap second introduced on 1/7/1993 (DoY 182)
+	BRDCprod->LeapSecondsTimeList[9].MJDN=48257;	BRDCprod->LeapSecondsTimeList[9].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[9]=9;
+	//Leap second introduced on 1/7/1994 (DoY 182)
+	BRDCprod->LeapSecondsTimeList[10].MJDN=49534;	BRDCprod->LeapSecondsTimeList[10].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[10]=10;
+	//Leap second introduced on 1/1/1996 (DoY 001)
+	BRDCprod->LeapSecondsTimeList[11].MJDN=48257;	BRDCprod->LeapSecondsTimeList[11].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[11]=11;
+	//Leap second introduced on 1/7/1997 (DoY 182)
+	BRDCprod->LeapSecondsTimeList[12].MJDN=50630;	BRDCprod->LeapSecondsTimeList[12].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[12]=12;
+	//Leap second introduced on 1/1/1999 (DoY 001)
+	BRDCprod->LeapSecondsTimeList[13].MJDN=48257;	BRDCprod->LeapSecondsTimeList[13].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[13]=13;
+	//Leap second introduced on 1/1/2006 (DoY 001)
+	BRDCprod->LeapSecondsTimeList[14].MJDN=53736;	BRDCprod->LeapSecondsTimeList[14].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[14]=14;
+	//Leap second introduced on 1/1/2009 (DoY 001)
+	BRDCprod->LeapSecondsTimeList[15].MJDN=54832;	BRDCprod->LeapSecondsTimeList[15].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[15]=15;
+	//Leap second introduced on 1/7/2012 (DoY 183)
+	BRDCprod->LeapSecondsTimeList[16].MJDN=56109;	BRDCprod->LeapSecondsTimeList[16].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[16]=16;
+	//Leap second introduced on 1/7/2015 (DoY 182)
+	BRDCprod->LeapSecondsTimeList[17].MJDN=57204;	BRDCprod->LeapSecondsTimeList[17].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[17]=17;
+	//Leap second introduced on 1/1/2017 (DoY 001)
+	BRDCprod->LeapSecondsTimeList[18].MJDN=57754;	BRDCprod->LeapSecondsTimeList[18].SoD=0.0;
+	BRDCprod->LeapSecondsNumList[18]=18;
 }
 
 /*****************************************************************************
@@ -1076,12 +3320,26 @@ void initBRDCproducts (TBRDCproducts *BRDC) {
  * TBRDCblock  *BRDCblock          O  N/A  TBRDCblock struct
  *****************************************************************************/
 void initBRDCblock (TBRDCblock *BRDCblock) {
+
+	int i;
+
+	BRDCblock->Ttoc.MJDN= -1;
+	BRDCblock->Ttoc.SoD= 0.;
+	BRDCblock->TtocUTC.MJDN= -1;
+	BRDCblock->TtocUTC.SoD= 0.;
+	BRDCblock->Ttoe.MJDN= -1;
+	BRDCblock->Ttoe.SoD= 0.;
+	BRDCblock->TtoeUTC.MJDN= -1;
+	BRDCblock->TtoeUTC.SoD= 0.;
+	BRDCblock->TtransTime.MJDN= -1;
+	BRDCblock->TtransTime.SoD= 0.;
+	BRDCblock->TframeTime.MJDN= -1;
+	BRDCblock->TframeTime.SoD= 0.;
 	BRDCblock->PRN = 0;
 	BRDCblock->clockbias = 0;
 	BRDCblock->clockdrift = 0;
 	BRDCblock->clockdriftrate = 0;
 	BRDCblock->IODE = 0;
-	BRDCblock->IODNav = 0;
 	BRDCblock->crs = 0;
 	BRDCblock->deltan = 0;
 	BRDCblock->M0 = 0;
@@ -1107,7 +3365,16 @@ void initBRDCblock (TBRDCblock *BRDCblock) {
 	BRDCblock->SVaccuracy = 0;
 	BRDCblock->SVhealth = 0;
 	BRDCblock->TGD = 0;
-	BRDCblock->TGD2 = 0;
+	BRDCblock->ISCL1CA = 0;
+	BRDCblock->ISCL2C = 0;
+	BRDCblock->ISCL5I5 = 0;
+	BRDCblock->ISCL5Q5 = 0;
+	BRDCblock->TGD16 = 0;
+	BRDCblock->TGD26 = 0;
+	BRDCblock->TGD56 = 0;
+	BRDCblock->TGD76 = 0;
+	BRDCblock->ISCB1Cd = 0;
+	BRDCblock->ISCB2ad = 0;
 	BRDCblock->IODC = 0;
 	BRDCblock->SISASignal = 0;
 	BRDCblock->BGDE5a = 0;
@@ -1115,18 +3382,29 @@ void initBRDCblock (TBRDCblock *BRDCblock) {
 	BRDCblock->transTime = 0;
 	BRDCblock->fitInterval = 0;
 	BRDCblock->transTimeGAL = 0;
-	BRDCblock->satposX = 0;
-	BRDCblock->satvelX = 0;
-	BRDCblock->sataccX = 0;
-	BRDCblock->satposY = 0;
-	BRDCblock->satvelY = 0;
-	BRDCblock->sataccY = 0;
+	for(i=0;i<3;i++) {
+		BRDCblock->satPos[i]= 0;
+		BRDCblock->satVel[i]= 0;
+		BRDCblock->satPos[i]= 0;
+	}
 	BRDCblock->freqnumber = 0;
-	BRDCblock->satposZ = 0;
-	BRDCblock->satvelZ = 0;
 	BRDCblock->ageofoperation = 0;
+	BRDCblock->GLOfifthLineAvail = 0;
+	BRDCblock->GLOstatusflags = 0;
+	BRDCblock->GLOextraHealthFlags = 0;
 	BRDCblock->IODNGEO = 0;
+	BRDCblock->IODG = -1;	//If it is not -1, data is from SBAS DFMC MT39/40 messages
+	BRDCblock->SBASDFMCdatatype = NOSBASDFMCGEODATA;	//Not from SBAS DFMC data
 	BRDCblock->URAGEO = 0;
+	BRDCblock->URANED0 = 0;
+	BRDCblock->URANED1 = 0;
+	BRDCblock->URANED2 = 0;
+	BRDCblock->URAIndexED = 0;
+	BRDCblock->IRNURA = 0;
+	BRDCblock->GlobalHealth = BRDCHealthy;
+	for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+		BRDCblock->FreqHealth[i] = BRDCHealthy;
+	}
 }
 
 /*****************************************************************************
@@ -1134,48 +3412,47 @@ void initBRDCblock (TBRDCblock *BRDCblock) {
  * Description : Initialise a TSP3products struct
  * Parameters  :
  * Name                           |Da|Unit|Description
- * TSP3products  *SP3              O  N/A  TSP3products struct
+ * TSP3products  *SP3prod          O  N/A  TSP3products struct
  *****************************************************************************/
-void initSP3products (TSP3products *SP3) {
+void initSP3products (TSP3products *SP3prod) {
 	int i,j;
 
-	SP3->orbits.numSatellites = 0;
-	SP3->orbits.numSatellitesRead = 0;
-	SP3->orbits.block = NULL;
-	SP3->orbits.accuracy = NULL;
-	SP3->orbits.numRecords = 0;
-	SP3->orbits.interval = 0.;
-	SP3->orbits.velocityAvailable = 0;
-	SP3->orbits.startTime.MJDN = 0;
-	SP3->orbits.startTime.SoD = 0.;
-	SP3->orbits.startTimeConcat.MJDN = 0;
-	SP3->orbits.startTimeConcat.SoD = 0.;
+	SP3prod->orbits.numSatellites = 0;
+	SP3prod->orbits.numSatellitesRead = 0;
+	SP3prod->orbits.block = NULL;
+	SP3prod->orbits.accuracy = NULL;
+	SP3prod->orbits.numRecords = 0;
+	SP3prod->orbits.interval = 0.;
+	SP3prod->orbits.velocityAvailable = 0;
+	SP3prod->orbits.startTime.MJDN = 0;
+	SP3prod->orbits.startTime.SoD = 0.;
+	SP3prod->orbits.startTimeConcat.MJDN = 0;
+	SP3prod->orbits.startTimeConcat.SoD = 0.;
 
-	SP3->clocks.numSatellites = 0;
-	SP3->clocks.numSatellitesRead = 0;
-	SP3->clocks.block = NULL;
-	SP3->clocks.numRecords = 0;
-	SP3->clocks.vsizeblock = 0;
-	SP3->clocks.interval = 0.;
-	SP3->clocks.startTime.MJDN = 0;
-	SP3->clocks.startTime.SoD = 0.;
-	SP3->clocks.startTimeConcat.MJDN = 0;
-	SP3->clocks.startTimeConcat.SoD = 0.;
+	SP3prod->clocks.numSatellites = 0;
+	SP3prod->clocks.numSatellitesRead = 0;
+	SP3prod->clocks.block = NULL;
+	SP3prod->clocks.numRecords = 0;
+	SP3prod->clocks.interval = 0.;
+	SP3prod->clocks.startTime.MJDN = 0;
+	SP3prod->clocks.startTime.SoD = 0.;
+	SP3prod->clocks.startTimeConcat.MJDN = 0;
+	SP3prod->clocks.startTimeConcat.SoD = 0.;
 
 	for (i=0;i<MAX_GNSS;i++) {
 		for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
-			SP3->clocks.index[i][j] = -1;
-			SP3->orbits.index[i][j] = -1;
-			SP3->orbits.numblocsConcat[i][j]=0;
-			SP3->clocks.numblocsConcat[i][j]=0;
-			SP3->orbits.numblocsValidConcat[i][j]=0;
-			SP3->clocks.numblocsValidConcat[i][j]=0;
+			SP3prod->clocks.index[i][j] = -1;
+			SP3prod->orbits.index[i][j] = -1;
+			SP3prod->orbits.numblocsConcat[i][j]=0;
+			SP3prod->clocks.numblocsConcat[i][j]=0;
+			SP3prod->orbits.numblocsValidConcat[i][j]=0;
+			SP3prod->clocks.numblocsValidConcat[i][j]=0;
 		}
 	}
 
 	for(i=0;i<MAX_GNSS*MAX_SATELLITES_PER_GNSS;i++) {
-		SP3->orbits.Concatblock[i] = NULL;
-		SP3->clocks.Concatblock[i] = NULL;
+		SP3prod->orbits.Concatblock[i] = NULL;
+		SP3prod->clocks.Concatblock[i] = NULL;
 	}
 }
 
@@ -1198,6 +3475,8 @@ void initSP3orbitblock (TSP3orbitblock *SP3orbitblock) {
 	SP3orbitblock->xsigma[2] = 0.;
 	SP3orbitblock->orbitflags[0] = '\0';
 	SP3orbitblock->validSample=0;
+	SP3orbitblock->t.MJDN=0;
+	SP3orbitblock->t.SoD=0.;
 }
 
 /*****************************************************************************
@@ -1214,6 +3493,8 @@ void initSP3clockblock (TSP3clockblock *SP3clockblock) {
 	SP3clockblock->clockflags[0] = '\0';
 	SP3clockblock->clocksigma = 0.;
 	SP3clockblock->validSample=0;
+	SP3clockblock->t.MJDN=0;
+	SP3clockblock->t.SoD=0.;
 }
 
 /*****************************************************************************
@@ -1233,7 +3514,7 @@ void initIONEXDCB (TIonexDCB *IonexDCB){
 	for (i=0;i<MAX_GNSS;i++) {
 		for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
 			IonexDCB->DCB[i][j] = -999999.;
-			IonexDCB->DCBRMS[i][j] = 1e6;
+			IonexDCB->DCBRMS[i][j] = 1e9;
 		}
 	}
 }
@@ -1259,7 +3540,7 @@ void initIONEX (TIONEX *IONEX) {
 	IONEX->numStationData = 0;
 	IONEX->baseRadius = EARTH_RADIUS;
 	IONEX->ionexStation = NULL;
-	strcpy(IONEX->mappingFunction,"COSZ");
+	IONEX->mappingFunctionType=MappingFunctionCOSZ;
 
 	initIONEXDCB(&IONEX->ionexDCB);
 }
@@ -1272,13 +3553,28 @@ void initIONEX (TIONEX *IONEX) {
  * TIonoMap  *ionoMap              O  N/A  TIonoMap struct
  *****************************************************************************/
 void initIonoMap (TIonoMap *ionoMap) {
-	ionoMap->dhgt = -1;
-	ionoMap->dlat = -1;
-	ionoMap->dlon = -1;
+
+	ionoMap->hgt1 = 0.;
+	ionoMap->hgt2 = 0.;
+	ionoMap->dhgt = 0.;
+	ionoMap->nhgt = 0;
+
+	ionoMap->lat1 = 0.;
+	ionoMap->lat2 = 0.;
+	ionoMap->dlat = 0.;
+	ionoMap->nlat = 0;
+
+	ionoMap->lon1 = 0.;
+	ionoMap->lon2 = 0.;
+	ionoMap->dlon = 0.;
+	ionoMap->nlon = 0;
 
 	ionoMap->RMS = NULL;
 	ionoMap->TEC = NULL;
 	ionoMap->HGT = NULL;
+
+	ionoMap->t.MJDN = -1;
+	ionoMap->t.SoD = 0.;
 }
 
 /*****************************************************************************
@@ -1327,8 +3623,12 @@ void initFPPPDCB (TFPPPDCB *FPPPDCB) {
 void initFPPPIONEX (TFPPPIONEX *FPPP) {
 
 	FPPP->numMaps = 0;
-	FPPP->baseRadius = EARTH_RADIUS/1000; // In Km
-	strcpy(FPPP->mappingFunction,"COSZ");
+	FPPP->numMapsAlloc = 0;
+	FPPP->map=NULL;
+	FPPP->baseRadius = EARTH_RADIUS;
+	FPPP->mappingFunctionType=MappingFunctionCOSZ;
+
+
 
 	initFPPPDCB(&FPPP->fpppDCB);
 
@@ -1504,7 +3804,8 @@ void initFilterSolution (TFilterSolution *solution) {
 	int	i;
 
 	solution->prevNumSatellites = 0;
-	solution->prevNumSatellitesGPS = 0;
+	solution->totalNumSatDCBEpoch = 0;
+	solution->totalNumRecDCBEpoch = 0;
 
 	for (i=0;i<MAX_UNK;i++) {
 		solution->parameters[i] = 0;
@@ -1512,6 +3813,48 @@ void initFilterSolution (TFilterSolution *solution) {
 
 	for (i=0;i<MAX_VECTOR_UNK;i++) {
 		solution->correlations[i] = 0;
+	}
+
+	for (i=0;i<MAX_FILTER_RECEIVER_DCB;i++) {
+		solution->recDCBlist[i] = 0;
+	}
+}
+
+/*****************************************************************************
+ * Name        : init0Unkinfo
+ * Description : Initialise a TUnkinfo structure
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TUnkinfo  *unkinfo      O  N/A  TUnkinfo struct
+ *****************************************************************************/
+void init0Unkinfo (TUnkinfo  *unkinfo) {
+
+	int i;
+
+	unkinfo->nunk=0;
+	unkinfo->nunkvector=0;
+
+	for(i=0;i<MAX_PAR;i++) {
+		unkinfo->par2unk[i]=0;
+	}
+	for(i=0;i<MAX_GNSS;i++) {
+		unkinfo->GNSS2ISCBunk[i]=0;
+	}
+	for(i=0;i<MAX_UNK;i++) {
+		unkinfo->qnoise[i]=0;
+	}
+	for(i=0;i<MAX_UNK;i++) {
+		unkinfo->phi[i]=0;
+	}
+	//First three positions will be always the position unknowns
+	unkinfo->pos2unktype[0]=DR_UNK;
+	unkinfo->pos2unktype[1]=DR_UNK;
+	unkinfo->pos2unktype[2]=DR_UNK;
+	//Fourth position will be always the receiver clock unknows
+	unkinfo->pos2unktype[3]=DT_UNK;
+
+	for(i=4;i<MAX_UNK;i++) {
+		unkinfo->pos2unktype[i]=999; //Initialize to invalid value
 	}
 }
 
@@ -1523,8 +3866,15 @@ void initFilterSolution (TFilterSolution *solution) {
  * TConstellation  *constellation  O  N/A  TConstellation struct
  *****************************************************************************/
 void initConstellation (TConstellation *constellation) {
-	constellation->numSatellites = 0;
-	constellation->sat = NULL;
+	int i,j;
+
+	for(i=0;i<MAX_GNSS;i++) {
+		for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			constellation->numSatellites[i][j] = 0;
+			constellation->sat[i][j] = NULL;
+			constellation->satLastUsed[i][j] = NULL;
+		}
+	}
 }
 
 /*****************************************************************************
@@ -1539,11 +3889,12 @@ void initConstellationElement (TConstellationElement *sat) {
 	
 	sat->GNSS = GPS;
 	sat->block = UNKNOWN_BLOCK;
-	for (i=0;i<MAX_FREQUENCIES_PER_GNSS;i++)
+	for (i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
 		sat->PCO[i][0] = sat->PCO[i][1] = sat->PCO[i][2] = 0;
+	}
 	sat->PRN = 0;
 	sat->SVN = 0;
-	sat->tDecommissioned.MJDN = 62502;  // 1st January 2030
+	sat->tDecommissioned.MJDN = 999999;  // 23 September 4596 
 	sat->tDecommissioned.SoD = 0;
 	sat->tLaunch.MJDN = 0;
 	sat->tLaunch.SoD = 0;
@@ -1592,7 +3943,6 @@ void initAntenna (TAntenna *antenna) {
 			antenna->PCO[i][j][0] = antenna->PCO[i][j][1] = antenna->PCO[i][j][2] = 0.;
 		}
 	}
-
 	antenna->type[0] = '\0';
 	antenna->type_ant[0] = '\0';
 	antenna->type_radome[0] = '\0';
@@ -1614,40 +3964,141 @@ void initAntenna (TAntenna *antenna) {
 }
 
 /*****************************************************************************
+ * Name        : freeANTEXdata
+ * Description : Free elements read from ANTEX (satellite and antenna data)
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TConstellation  *constellation  O  N/A  TConstellation struct
+ * TAntennaList  *antennaList      O  N/A  TAntennaList struct
+ *****************************************************************************/
+void freeANTEXdata (TConstellation  *constellation, TAntennaList  *antennaList) {
+
+	int i,j,k,l,m,n;
+
+	for(i=0;i<MAX_GNSS;i++) {
+		for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+			if (constellation->sat[i][j]==NULL) continue;
+			for(k=0;k<constellation->numSatellites[i][j];k++) {
+				if (constellation->sat[i][j][k].noazi==NULL) continue; //For the case of using a constellation file
+				for(l=0;l<MAX_GNSS;l++) {
+					for(m=0;m<MAX_FREQUENCIES_PER_GNSS;m++) {
+						free(constellation->sat[i][j][k].noazi[l][m]);
+					}
+					free(constellation->sat[i][j][k].noazi[l]);
+				}
+				free(constellation->sat[i][j][k].noazi);	
+				if(constellation->sat[i][j][k].dazi>0) {
+					for(l=0;l<MAX_GNSS;l++) {
+						for(m=0;m<MAX_FREQUENCIES_PER_GNSS;m++) {
+							for(n=0;n<constellation->sat[i][j][k].numazi;n++) {
+								free(constellation->sat[i][j][k].azi[l][m][n]);
+							}
+							free(constellation->sat[i][j][k].azi[l][m]);
+						}
+						free(constellation->sat[i][j][k].azi[l]);
+					}
+					free(constellation->sat[i][j][k].azi);	
+				}
+			}
+			free(constellation->sat[i][j]);	
+			constellation->sat[i][j]=NULL;
+		}
+	}
+
+	if (antennaList->ant!=NULL) {
+		for(i=0;i<antennaList->numAnt;i++) {
+			if (antennaList->ant[i].noazi==NULL) continue; //For the case of using a constellation file
+			for(j=0;j<MAX_GNSS;j++) {
+				for(k=0;k<MAX_FREQUENCIES_PER_GNSS;k++) {
+					free(antennaList->ant[i].noazi[j][k]);
+				}
+				free(antennaList->ant[i].noazi[j]);
+			}
+			free(antennaList->ant[i].noazi);
+			if (antennaList->ant[i].dazi>0) {
+				for(j=0;j<MAX_GNSS;j++) {
+					for(k=0;k<MAX_FREQUENCIES_PER_GNSS;k++) {
+						for(l=0;l<antennaList->ant[i].numazi;l++) {
+							free(antennaList->ant[i].azi[j][k][l]);
+						}
+						free(antennaList->ant[i].azi[j][k]);
+					}
+					free(antennaList->ant[i].azi[j]);
+				}
+				free(antennaList->ant[i].azi);
+			}
+		}
+		free(antennaList->ant);
+		antennaList->ant=NULL;
+	}
+}
+
+/*****************************************************************************
  * Name        : initStat
  * Description : Initialise a TStat structure
  * Parameters  :
  * Name                           |Da|Unit|Description
- * TStat  *stat                    O  N/A  TStat struct
+ * TStat  *Stat                    O  N/A  TStat struct
  *****************************************************************************/
-void initStat (TStat *stat) {
-	stat->n = 0;
-	stat->mean = 0;
-	stat->mean2 = 0;
+void initStat (TStat *Stat) {
+	Stat->n = 0;
+	Stat->mean = 0;
+	Stat->mean2 = 0;
 }
 
 /*****************************************************************************
  * Name        : initTGD
  * Description : Initialise a TGDData structure
  * Parameters  :
- * Name                           |Da|Unit|Description
- * TTGDdata  *tgdData              O  N/A  TTGDdata struct
- * enum P1C1DCBModel  p1c1dcbModel I  N/A  P1C1 DCB source (p1c1UNKNOWN if still unavailable)
- * enum P1P2DCBModel  p1p2dcbModel I  N/A  P1P2 DCB source (p1p2UNKNOWN if still unavailable)
+ * Name                                 |Da|Unit|Description
+ * TTGDdata  *tgdData                    O  N/A  TTGDdata struct
+ * TOptions *options                     I  N/A  Options structure
+ * int mode                              I  N/A  0 -> Init all
+ *                                               1 -> Only init DCB options
  *****************************************************************************/
-void initTGD (TTGDdata *tgdData, enum P1C1DCBModel p1c1dcbModel, enum P1P2DCBModel p1p2dcbModel) {
+void initTGD (TTGDdata *tgdData, TOptions *options, int mode) {
+	int i;
+
+
+	tgdData->GPSp1c1DCBModel = options->GPSp1c1DCBModel;
+	tgdData->GPSp1p2DCBModel = options->GPSp1p2DCBModel;
+	tgdData->GPSISCl1caDCBModel = options->GPSISCl1caDCBModel;
+	tgdData->GPSISCl1cpDCBModel = options->GPSISCl1cpDCBModel;
+	tgdData->GPSISCl1cdDCBModel = options->GPSISCl1cdDCBModel;
+	tgdData->GPSISCl2cDCBModel = options->GPSISCl2cDCBModel;
+	tgdData->GPSISCl5i5DCBModel = options->GPSISCl5i5DCBModel;
+	tgdData->GPSISCl5q5DCBModel = options->GPSISCl5q5DCBModel;
+	tgdData->GALe1e5aDCBModel = options->GALe1e5aDCBModel;
+	tgdData->GALe1e5bDCBModel = options->GALe1e5bDCBModel;
+	tgdData->GLOp1p2DCBModel = options->GLOp1p2DCBModel;
+	tgdData->BDSb1b6DCBModel = options->BDSb1b6DCBModel;
+	tgdData->BDSb2b6DCBModel = options->BDSb2b6DCBModel;
+	tgdData->BDSb5b6DCBModel = options->BDSb5b6DCBModel;
+	tgdData->BDSb7b6DCBModel = options->BDSb7b6DCBModel;
+	tgdData->BDSSP3DCBModel = options->BDSSP3DCBModel;
+	tgdData->BDSISCb1cdDCBModel = options->BDSISCb1cdDCBModel;
+	tgdData->BDSISCb2adDCBModel = options->BDSISCb2adDCBModel;
+	tgdData->QZSc1cDCBModel = options->QZSc1cDCBModel;
+	tgdData->QZSISCl1cpDCBModel = options->QZSISCl1cpDCBModel;
+	tgdData->QZSISCl1cdDCBModel = options->QZSISCl1cdDCBModel;
+	tgdData->QZSISCl2cDCBModel = options->QZSISCl2cDCBModel;
+	tgdData->QZSISCl5i5DCBModel = options->QZSISCl5i5DCBModel;
+	tgdData->QZSISCl5q5DCBModel = options->QZSISCl5q5DCBModel;
+	tgdData->IRNc9c5DCBModel = options->IRNc9c5DCBModel;	
+	tgdData->OSBdcbModel = options->OSBdcbModel;
+	tgdData->DSBdcbModel = options->DSBdcbModel;
+	for(i=0;i<MAX_GNSS;i++) {
+		tgdData->DualFreqDCBModel[i]=options->DualFreqDCBModel[i];
+	}
+	tgdData->FPPPDCBModel=options->FPPPDCBModel;
+
+	if (mode==1) return;
 	tgdData->BRDC = NULL;
 	tgdData->DCB = NULL;
-	tgdData->p1c1dcbModel = p1c1dcbModel;
-	tgdData->p1p2dcbModel = p1p2dcbModel;
-
-//	if (tgdData->p1c1dcbModel==p1c1STRICT ||tgdData->p1p2dcbModel==p1p2DCB) {
-		tgdData->DCB = malloc(sizeof(TDCBdata));
-		initDCB(tgdData->DCB);
-//	}
 
 	initIONEXDCB(&tgdData->ionexDCB);
 	initFPPPDCB(&tgdData->fpppDCB);
+	initSINEXBiasData(&tgdData->SNXBias);
 }
 
 /*****************************************************************************
@@ -1662,7 +4113,7 @@ void initDCB (TDCBdata *dcbData) {
 	
 	dcbData-> n = 0;
 	
-	for (i=0;i<MAX_DCB_TYPES;i++) {
+	for (i=0;i<MAX_DCB_FILE_SOURCES;i++) {
 		dcbData->block[i].startTime.MJDN = 0;
 		dcbData->block[i].startTime.SoD = 0;
 		dcbData->block[i].endTime.MJDN = 0;
@@ -1677,6 +4128,97 @@ void initDCB (TDCBdata *dcbData) {
 		}
 	}
 }
+
+/*****************************************************************************
+ * Name        : initSINEXBiasData
+ * Description : Initialise a TSINEXBiasData structure
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TSINEXBiasData *SINEXBias       O  N/A  TSINEXBiasData struct
+ *****************************************************************************/
+void initSINEXBiasData (TSINEXBiasData *SINEXBias) {
+
+	int i;
+
+	SINEXBias->OSBindex=NULL;
+	SINEXBias->DSBindex=NULL;
+	SINEXBias->SNXBiasBlockOSB=NULL;
+	SINEXBias->SNXBiasBlockDSB=NULL;
+
+	for(i=0;i<MAX_GNSS;i++) {
+		SINEXBias->numMeasBlocksOSB[i]=0;
+		SINEXBias->numMeasBlocksDSB[i]=0;
+	}
+}
+
+/*****************************************************************************
+ * Name        : initSINEXBiasBlock
+ * Description : Initialise a TSINEXBiasDCB structure
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TSINEXBiasBlock *SINEXBiasBlock O  N/A  TSINEXBiasBlock struct
+ *****************************************************************************/
+void initSINEXBiasBlock (TSINEXBiasBlock *SINEXBiasBlock) {
+
+	SINEXBiasBlock->EpochStart=NULL;
+	SINEXBiasBlock->EpochEnd=NULL;
+	SINEXBiasBlock->DCBVal=NULL;
+	SINEXBiasBlock->DCBSigma=NULL;
+
+	SINEXBiasBlock->numTimeBlocks=0;
+}
+
+/*****************************************************************************
+ * Name        : freeSINEXBIASData
+ * Description : Free memory from TSINEXBiasData structure
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TSINEXBiasData *SINEXBias       IO N/A  TSINEXBiasData struct
+ *****************************************************************************/
+void freeSINEXBIASData (TSINEXBiasData *SINEXBias) {
+
+	int	i,j,k;
+
+	if (SINEXBias->OSBindex!=NULL) {
+		for(i=0;i<MAX_GNSS;i++) {
+			for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+				for(k=0;k<SINEXBias->numMeasBlocksOSB[i];k++) {
+					free(SINEXBias->SNXBiasBlockOSB[i][j][k].EpochStart);
+					free(SINEXBias->SNXBiasBlockOSB[i][j][k].EpochEnd);
+					free(SINEXBias->SNXBiasBlockOSB[i][j][k].DCBVal);
+					free(SINEXBias->SNXBiasBlockOSB[i][j][k].DCBSigma);
+				}
+				free(SINEXBias->SNXBiasBlockOSB[i][j]);
+			}
+			free(SINEXBias->SNXBiasBlockOSB[i]);
+			free(SINEXBias->OSBindex[i]);
+		}
+		free(SINEXBias->SNXBiasBlockOSB);
+		free(SINEXBias->OSBindex);
+	}
+
+	if (SINEXBias->DSBindex!=NULL) {
+		for(i=0;i<MAX_GNSS;i++) {
+			for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+				for(k=0;k<SINEXBias->numMeasBlocksDSB[i];k++) {
+					free(SINEXBias->SNXBiasBlockDSB[i][j][k].EpochStart);
+					free(SINEXBias->SNXBiasBlockDSB[i][j][k].EpochEnd);
+					free(SINEXBias->SNXBiasBlockDSB[i][j][k].DCBVal);
+					free(SINEXBias->SNXBiasBlockDSB[i][j][k].DCBSigma);
+				}
+				free(SINEXBias->SNXBiasBlockDSB[i][j]);
+			}
+			for(j=0;j<MAX_MEASUREMENTS_NO_COMBINATIONS;j++) {
+				free(SINEXBias->DSBindex[i][j]);
+			}
+			free(SINEXBias->SNXBiasBlockDSB[i]);
+			free(SINEXBias->DSBindex[i]);
+		}
+		free(SINEXBias->SNXBiasBlockDSB);
+		free(SINEXBias->DSBindex);
+	}
+}
+
 
 /*****************************************************************************
  * Name        : initReceiverList
@@ -1710,14 +4252,31 @@ void initStationList (TStationList *stationList) {
  * TSBASdatabox  *SBASdatabox      O  N/A  TSBASdatabox struct
  *****************************************************************************/
 void initSBASdatabox (TSBASdatabox *SBASdatabox) {
+	int i;
 
 	SBASdatabox->SBASdata = NULL;
 	SBASdatabox->SBASdata = malloc(sizeof(TSBASdata));
+
+	SBASdatabox->numlinesmissing=NULL;
+	SBASdatabox->missingmessagesvector=NULL;
+	SBASdatabox->ionobuffer=NULL;
+	SBASdatabox->sbasblock=NULL;
+
+	for(i=0;i<MAX_LINES_BUFFERED_SBAS_MESSAGES;i++) {
+		SBASdatabox->bufferlines[i] = NULL;
+		SBASdatabox->bufferlines[i] = malloc(sizeof(char)*MAX_INPUT_LINE);
+	}
 	
+	SBASdatabox->HBIR = 99999.;
+	SBASdatabox->VBIR = 99999.;
 	SBASdatabox->HWIR = -1.;
 	SBASdatabox->VWIR = -1.;
+	SBASdatabox->HIRPercentileSamples = -1.;
+	SBASdatabox->VIRPercentileSamples = -1.;
 	SBASdatabox->HPLPercentileSamples = -1.;
 	SBASdatabox->VPLPercentileSamples = -1.;
+	SBASdatabox->MinHPL = 9999.;
+	SBASdatabox->MinVPL = 9999.;
 	SBASdatabox->MaxHPL = -1.;
 	SBASdatabox->MaxVPL = -1.;
 	SBASdatabox->decimation = 100.;	//This value is for the first epoch, to ensure there is no discontinuity
@@ -1732,7 +4291,11 @@ void initSBASdatabox (TSBASdatabox *SBASdatabox) {
 	SBASdatabox->NumVMI = 0;
 	SBASdatabox->HPL = NULL;
 	SBASdatabox->VPL = NULL;
+	SBASdatabox->HIR = NULL;
+	SBASdatabox->VIR = NULL;
+	SBASdatabox->LastEpochAvailPrevCurrDisc.MJDN = -1;
 	SBASdatabox->LastEpochAvailPrevCurrDisc.SoD = -1.;
+	SBASdatabox->FirstEpochAvailAfterPrevDisc.MJDN = -1;
 	SBASdatabox->FirstEpochAvailAfterPrevDisc.SoD = -1.;
 
 	//decimation, HerrorEpoch. VerrorEpoch, HWIREpoch, VWIREpoch, MaxHPLEpoch and MaxVPLEpoch does not need to be initialized
@@ -1748,70 +4311,104 @@ void initSBASdatabox (TSBASdatabox *SBASdatabox) {
  *****************************************************************************/
 void initSBASblock (TSBASblock *sbasblock) {
 
-	sbasblock->frequency = 1;			//Only appears in RINEXB file
-	sbasblock->receiverindex = 0 ;			//Only appears in RINEXB file
-	sbasblock->datalength = 32 ;			//Only appears in RINEXB file (in EMS message is 32)
+	int i;
+
+	sbasblock->messagetype = 99;
+	sbasblock->frequency = 1;					//Appears in RINEXB file and in new EMS format
+	sbasblock->receiverindex = 0;				//Only appears in RINEXB file
+	sbasblock->halfdatalength = 32;				//In RINEX-B data is provided in pairs of two bytes, and the length in file is the number of pairs of two bytes
+	sbasblock->datalength = 64;					//Appears in RINEXB file and in new EMS format (in old EMS message is 64 bytes)
+	sbasblock->bandflag='L';					//For distinguishing broadcast mean ('L' for GEO downlink, 'X' for experimentation, 'T' for terrestrial, 'I' for internet) 
 	strcpy(sbasblock->sourceidentifier,"SBA");	//Only appears in RINEXB file
 
 	sbasblock->dontuse = 0;			//Will be 1 when a type 0 message is received, and will last one minute at least
-	sbasblock->problems = 0;			//Will be 1 when a type 0 message is received and it is filled with 0
+	sbasblock->problems = 0;		//Will be 1 when a type 0 message is received and it is filled with 0
+	sbasblock->msg0type=0;			//Will be 1,2 or 3 when DFMC messages 34,35 or 36 are received (either directly or inside a type 0)
 	sbasblock->messageslost=0;
 
-	sbasblock->IODF=NULL;				//Will have 1 position for type 2,3,4,5,24 message and 4 position for type 6. For other messages will be empty.
+	//sbasblock->IODF=NULL;				//Will have 1 position for type 2,3,4,5,24 message and 4 position for type 6. For other messages will be empty.
 	sbasblock->IODP=-1;				//Type 6 does not have IODP. -1 means value not set.
 	sbasblock->numsatellites=-1;			//-1 means value not set.
 
 
-	sbasblock->PRNactive=NULL;			//Will only contain data when a type 1 message arrives. 
-	sbasblock->pos2PRN=NULL;			//Will only contain data when a type 1 message arrives. It will have 51 positions when memory is allocated.
-	sbasblock->pos2GNSS=NULL;			//Will only contain data when a type 1 message arrives. It will have 51 positions when memory is allocated.
-	sbasblock->PRN2pos=NULL;			//Will only contain data when a type 1 message arrives. 
+	//sbasblock->PRNactive=NULL;			//Will only contain data when a type 1 or 31 message arrives. 
+	//sbasblock->pos2PRN=NULL;			//Will only contain data when a type 1 or 31 message arrives. It will have 51 or 92 positions when memory is allocated.
+	//sbasblock->pos2GNSS=NULL;			//Will only contain data when a type 1 or 31 message arrives. It will have 51 or 92 positions when memory is allocated.
+	//sbasblock->Slot2pos=NULL;			//Will only contain data when a type 31 message arrives. It will have 215 positions when memory is allocated.
+	//sbasblock->PRN2pos=NULL;			//Will only contain data when a type 1 or 31 message arrives. 
 
-	sbasblock->PRC=NULL;				//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
-	sbasblock->RRC=NULL;				//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
-	sbasblock->UDREI=NULL;				//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
-	sbasblock->UDRE=NULL;				//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
-	sbasblock->UDREsigma=NULL;			//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
+	//sbasblock->PRC=NULL;				//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
+	//sbasblock->RRC=NULL;				//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
+	//sbasblock->UDREI=NULL;				//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
+	//sbasblock->UDRE=NULL;				//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
+	//sbasblock->UDREsigma=NULL;			//Will only contain data when a type 2,3,4,5,24 message arrives. It will have 13 positions for type 2,3,4,5 and 6 for type 24.
 
-	sbasblock->UDREIacu=NULL;			//Will only contain data when a type 6 message arrives. It will have 51 positions when memory is allocated.
-	sbasblock->UDREacu=NULL;			//Will only contain data when a type 6 message arrives. It will have 51 positions when memory is allocated.
-	sbasblock->UDREacusigma=NULL;			//Will only contain data when a type 6 message arrives. It will have 51 positions when memory is allocated.
+	//sbasblock->UDREIacu=NULL;			//Will only contain data when a type 6 message arrives. It will have 51 positions when memory is allocated.
+	//sbasblock->UDREacu=NULL;			//Will only contain data when a type 6 message arrives. It will have 51 positions when memory is allocated.
+	//sbasblock->UDREacusigma=NULL;		//Will only contain data when a type 6 message arrives. It will have 51 positions when memory is allocated.
 
-	sbasblock->tlat=-1;				//Only appears in message type 7. -1 means value not set.
-	sbasblock->aiind=NULL;				//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
-	sbasblock->aifactor=NULL;			//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
-	sbasblock->timeoutintervalnonprecise=NULL;	//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
-	sbasblock->timeoutintervalprecise=NULL;	//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
-	sbasblock->fastcorrupdateinterval=NULL;	//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
+	sbasblock->tlat=-1;								//Only appears in message type 7. -1 means value not set.
+	//sbasblock->aiind=NULL;							//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
+	//sbasblock->aifactor=NULL;						//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
+	//sbasblock->timeoutintervalnonprecise=NULL;		//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
+	//sbasblock->timeoutintervalprecise=NULL;			//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
+	//sbasblock->fastcorrupdateinterval=NULL;			//Will only contain data when a type 7 message arrives. It will have 51 positions when memory is allocated.
 	
 
-	sbasblock->degradationfactors=NULL;		//Will only contain data when a type 10 message arrives. It will have 16 positions when memory is allocated.
+	//sbasblock->degradationfactors=NULL;		//Will only contain data when a type 10 message arrives. It will have 16 positions when memory is allocated.
 
-	sbasblock->longtermsaterrcorrections=NULL;	//Will only contain data when a type 25 or 24 message arrives. The size will change depending on the message.
+	//sbasblock->longtermsaterrcorrections=NULL;	//Will only contain data when a type 25 or 24 message arrives. The size will change depending on the message.
 	sbasblock->numlongtermsaterrcorrections=-1;	//Only appears in type 25 or 24 messages. -1 means value not set.
 
 	sbasblock->BlockID=-1;				//Only appears in type 24 messages. -1 means value not set.
 
-	sbasblock->geonavigationmessage=NULL;		//Will only contain data when a type 9 message arrives. It will have 17 positions when memory is allocated.
+	//sbasblock->geonavigationmessage=NULL;		//Will only contain data when a type 9 message arrives. It will have 17 positions when memory is allocated.
 
-	sbasblock->geoalmanacsmessage=NULL;		//Will only contain data when a type 17 message arrives. It will have a matrix of 3x12, due there are 3 satellites in the message 
+	//sbasblock->geoalmanacsmessage=NULL;		//Will only contain data when a type 17 message arrives. It will have a matrix of 3x12, due there are 3 satellites in the message 
 							//and 12 parameters per satellite
 	sbasblock->numgeoalmanacs=-1;			//Only appears in type 17 messages. -1 means value not set.
 
-	sbasblock->servicemessage=NULL;		//Will only contain data when a type 27 message arrives. It will have 9 positions when memory is allocated.
-	sbasblock->regioncoordinates=NULL;		//Will only contain data when a type 27 message arrives. It will have a matrix of Nx9 positions when memory is allocated. 
-							//N will vary between 1-5 dependeing on the the number of regions given in the message
+	//sbasblock->servicemessage=NULL;			//Will only contain data when a type 27 message arrives. It will have 9 positions when memory is allocated.
+	//sbasblock->regioncoordinates=NULL;		//Will only contain data when a type 27 message arrives. It will have a matrix of Nx9 positions when memory is allocated. 
+												//N will vary between 1-5 dependeing on the the number of regions given in the message
 	sbasblock->numregioncoordinates=-1;		//Only appears in type 27 messages. -1 means value not set
 
-	sbasblock->networktimemessage=NULL;		//Will only contain data when a type 12 message arrives. It will have 12 positions when memory is allocated.
+	//sbasblock->networktimemessage=NULL;		//Will only contain data when a type 12 message arrives. It will have 12 positions when memory is allocated.
 
-	sbasblock->clockephemeriscovariance=NULL;	//Will only contain data when a type 28 message arrives. It will have a matrix of Nx13 positions when memory is allocated, being N=1 or 2 
+	//sbasblock->clockephemeriscovariance=NULL;	//Will only contain data when a type 28 message arrives. It will have a matrix of Nx13 positions when memory is allocated, being N=1 or 2 
 	sbasblock->numclockephemeriscovariance=-1;	//Only appears in message type 28. -1 means value not set
 
-	sbasblock->igpmaskmessage=NULL;		//Will only contain data when a type 18 message arrives. It will have 204 positions when memory is allocated (201 for the IGP mask and 3 for parameters)
+	//sbasblock->igpmaskmessage=NULL;				//Will only contain data when a type 18 message arrives. It will have 204 positions when memory is allocated (201 for the IGP mask and 3 for parameters)
 
-	sbasblock->ionodelayparameters=NULL;		//Will only contain data when a type 26 message arrives. It will have a matrix of 15x7 positions when memory is allocated.
-	
+	//sbasblock->ionodelayparameters=NULL;		//Will only contain data when a type 26 message arrives. It will have a matrix of 15x7 positions when memory is allocated.
+
+	for(i=0;i<MAX_GNSS;i++) {
+		sbasblock->constMonitored[i]=0;			//Disable monitored constellations. When reading a mask message (MT1 or MT31) it will be updated
+	}
+
+	////DFMC data
+
+	sbasblock->GPSfrequenciesUsed=0;			//Default value to 0 (not set), which means it is L1/L5	
+	sbasblock->IODM=-1;							//IODM = -1 means value not set
+
+	//sbasblock->DFRECI=NULL;						//Will only contain data when a type 34 message arrives. It will have 92 positions.
+	//sbasblock->DFREI=NULL;						//Will only contain data when a type 34, 35 and 36 messages arrives. It will have 7, 53 and 38 positions for messages 34, 35 and 36 respectively
+
+	//sbasblock->covariancematrixdata=NULL;		//Will only contain data when a type 32 messages arrives
+	//sbasblock->orbitclockcorrection=NULL;		//Will only contain data when a type 32 messages arrives
+
+	//sbasblock->OBAD=NULL;						//Will only contain data when a type 37 messages arrives
+	//sbasblock->commonOBAD=NULL;					//Will only contain data when a type 37 messages arrives
+	//sbasblock->DFREITable=NULL;					//Will only contain data when a type 37 messages arrives
+
+	//sbasblock->geoalmanacsDFMC=NULL;			//Will only contain data when a type 47 messages arrives
+	sbasblock->numgeoalmanacsDFMC=-1;			//numgeoalmanacsDFMC=1- meas no almanac message read
+
+	//sbasblock->sbasepehemeris1=NULL;			//Will only contain data when a type 39 messages arrives	
+	//sbasblock->sbasepehemeris2=NULL;			//Will only contain data when a type 40 messages arrives	
+
+	//sbasblock->GNSSTimeOffsetsCommon=NULL;		//Will only contain data when a type 42 messages arrives
+	//sbasblock->GNSSTimeOffsetsConst=NULL;		//Will only contain data when a type 42 messages arrives
 }
 
 /*****************************************************************************
@@ -1827,48 +4424,76 @@ void initSBASdata (TSBASdata *SBASdata, int pos) {
 
 
 	//-1 -> Timeout not set  9999999-> Timeout infinite
-	//Message type number                0   1  2  3  4  5  6   7  8   9  10 11    12 13 14 15 16      17   18 19 20 21 22 23 24  25  26    27  28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
-	int timeoutnonprecision[64] = {9999999,600,-1,-1,-1,-1,18,360,-1,360,360,-1,86400,-1,-1,-1,-1,9999999,1200,-1,-1,-1,-1,-1,-1,360,600,86400,360,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
-	int timeoutprecision[64]    = {9999999,600,-1,-1,-1,-1,12,240,-1,240,240,-1,86400,-1,-1,-1,-1,9999999,1200,-1,-1,-1,-1,-1,-1,240,600,86400,240,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
-	int msgupdateinterval[64]   = {     -1,120,-1,-1,-1,-1, 6,120,-1,120,120,-1,  300,-1,-1,-1,-1,    300, 300,-1,-1,-1,-1,-1,-1,120,300,  300,120,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+	//Message type number                      0   1  2  3  4  5  6   7  8   9  10 11    12 13 14 15 16      17   18 19 20 21 22 23 24  25  26    27  28 29 30  31 32 33 34 35 36  37 38  39  40 41    42 43 44 45 46  47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
+	const int timeoutnonprecision[64] = {9999999,600,-1,-1,-1,-1,18,360,-1,360,360,-1,86400,-1,-1,-1,-1,9999999,1200,-1,-1,-1,-1,-1,-1,360,600,86400,360,-1,-1,600,-1,-1,18,18,18,360,-1, -1, -1,-1,86400,-1,-1,-1,-1,360,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+	const int timeoutprecision[64]    = {9999999,600,-1,-1,-1,-1,12,240,-1,240,240,-1,86400,-1,-1,-1,-1,9999999,1200,-1,-1,-1,-1,-1,-1,240,600,86400,240,-1,-1,600,-1,-1,12,12,12,240,-1, -1, -1,-1,86400,-1,-1,-1,-1,240,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+	const int msgupdateinterval[64]   = {      6,120,-1,-1,-1,-1, 6,120,-1,120,120,-1,  300,-1,-1,-1,-1,    300, 300,-1,-1,-1,-1,-1,-1,120,300,  300,120,-1,-1,120, 6,-1, 6, 6, 6,120,-1,120,120,-1,  240,-1,-1,-1,-1,120,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
 
 
-	if(pos==0) {
-		memcpy(SBASdata[pos].timeoutmessages[0],&timeoutnonprecision,sizeof(timeoutnonprecision));
-		memcpy(SBASdata[pos].timeoutmessages[1],&timeoutprecision,sizeof(timeoutprecision));
-		memcpy(SBASdata[pos].msgupdateinterval,&msgupdateinterval,sizeof(msgupdateinterval));
-	} else {
-		//This is done because time out may be different from the default one (received from parameters)
-		//This way, the user timeouts are propagated to all GEOs
-		memcpy(SBASdata[pos].timeoutmessages[0],SBASdata[0].timeoutmessages[0],sizeof(timeoutnonprecision));
-		memcpy(SBASdata[pos].timeoutmessages[1],SBASdata[0].timeoutmessages[1],sizeof(timeoutprecision));
-		memcpy(SBASdata[pos].msgupdateinterval,SBASdata[0].msgupdateinterval,sizeof(msgupdateinterval));
+	for(i=0;i<NUMPOSFREQSBASMSG;i++) {
+		if(pos==0) {
+			memcpy(SBASdata[pos].timeoutmessages[i][0],&timeoutnonprecision,sizeof(timeoutnonprecision));
+			memcpy(SBASdata[pos].timeoutmessages[i][1],&timeoutprecision,sizeof(timeoutprecision));
+			memcpy(SBASdata[pos].msgupdateinterval[i],&msgupdateinterval,sizeof(msgupdateinterval));
+		} else {
+			//This is done because time out may be different from the default one (received from parameters)
+			//This way, the user timeouts are propagated to all GEOs
+			memcpy(SBASdata[pos].timeoutmessages[i][0],SBASdata[0].timeoutmessages[i][0],sizeof(timeoutnonprecision));
+			memcpy(SBASdata[pos].timeoutmessages[i][1],SBASdata[0].timeoutmessages[i][1],sizeof(timeoutprecision));
+			memcpy(SBASdata[pos].msgupdateinterval[i],SBASdata[0].msgupdateinterval[i],sizeof(msgupdateinterval));
+		}
 	}
 
 
 
 	//Set all satellites unselected by default
-	for(i=0;i<5;i++) {
-		SBASdata[pos].numsatellites[i]=0;
-		for(j=0;j<MAX_GNSS;j++) {
-			for(k=0;k<MAX_SBAS_PRN;k++) {
-				SBASdata[pos].PRNactive[i][j][k]=0;
-				SBASdata[pos].PRN2pos[i][j][k]=-1;
-				SBASdata[pos].useforbidden[j][k]=0;
+	for(i=0;i<NUMPOSFREQSBASMSG;i++) { 
+		for(j=0;j<5;j++) {
+			SBASdata[pos].numsatellites[i][j]=0;
+			for(k=0;k<MAX_GNSS;k++) {
+				for(l=0;l<MAX_SBAS_PRN;l++) {
+					SBASdata[pos].PRNactive[i][j][k][l]=0;
+					SBASdata[pos].PRN2pos[i][j][k][l]=-1;
+				}
 			}
 		}
 	}
+
+	for(i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<MAX_SBAS_PRN;j++) {
+			SBASdata[pos].useforbidden[i][j]=0;
+		}
+	}
+
 	//Set all values to -1 or 9999 (value not set)
-	for(i=0;i<64;i++) {
-		SBASdata[pos].oldlastmsgreceived[i].MJDN = -1;
-		SBASdata[pos].oldlastmsgreceived[i].SoD = -1.;
-		SBASdata[pos].lastmsgreceived[i].MJDN = -1;
-		SBASdata[pos].lastmsgreceived[i].SoD = -1.;
-		SBASdata[pos].oldmaskdiscarded[i]=0;
+	for(i=0;i<NUMPOSFREQSBASMSG;i++) { 
+		for(j=0;j<64;j++) {
+			SBASdata[pos].oldlastmsgreceived[i][j].MJDN = -1;
+			SBASdata[pos].oldlastmsgreceived[i][j].SoD = -1.;
+			SBASdata[pos].lastmsgreceived[i][j].MJDN = -1;
+			SBASdata[pos].lastmsgreceived[i][j].SoD = -1.;
+			SBASdata[pos].oldmaskdiscarded[i][j]=0;
+		}
+	}
+
+	for(i=0;i<NUMPOSFREQSBASMSG;i++) { 
+		SBASdata[pos].firstmessage[i].MJDN=-1;
+		SBASdata[pos].firstmessage[i].SoD=-1.;
+	}
+
+	for(i=0;i<NUMPOSFREQSBASMSG;i++) { 
+		for(j=0;j<5;j++) {
+			for(k=0;k<92;k++) {
+				SBASdata[pos].pos2PRN[i][j][k] = -1;
+				SBASdata[pos].pos2GNSS[i][j][k] = -1;
+			}
+			for(k=0;k<215;k++) {
+				SBASdata[pos].Slot2pos[i][j][k] = -1;
+			}
+		}
 	}
 
 	for(i=0;i<51;i++) {
-
 		for(j=0;j<5;j++) {
 			SBASdata[pos].lastlongtermdata[j][i].MJDN = -1;
 			SBASdata[pos].lastlongtermdata[j][i].SoD = -1.;
@@ -1890,36 +4515,13 @@ void initSBASdata (TSBASdata *SBASdata, int pos) {
 		}
 
 
-		SBASdata[pos].firstmessage.MJDN=-1;
-		SBASdata[pos].firstmessage.SoD=-1.;
-		//SBASdata[pos].oldlastfastcorrections[i].MJDN = -1;
-		//SBASdata[pos].oldlastfastcorrections[i].SoD = -1;
 		SBASdata[pos].oldlastintegrityinfo[i].MJDN = -1;
 		SBASdata[pos].oldlastintegrityinfo[i].SoD = -1;
-		//SBASdata[pos].oldlastfastdegfactor[i].MJDN = -1;
-		//SBASdata[pos].oldlastfastdegfactor[i].SoD = -1;
 
 		SBASdata[pos].lastintegrityinfo[i].MJDN = -1;
 		SBASdata[pos].lastintegrityinfo[i].SoD = -1.;
-		//SBASdata[pos].lastfastdegfactor[i].MJDN = -1;
-		//SBASdata[pos].lastfastdegfactor[i].SoD = -1;
 
 		SBASdata[pos].lastfastmessage[i] = -1;
-		//SBASdata[pos].fastcorrtimeoutnonprecision[i] = -1;
-		//SBASdata[pos].fastcorrtimeoutprecision[i] = -1;
-		//SBASdata[pos].fastcorrupdateinterval[i] = -1;
-		//SBASdata[pos].oldfastcorrtimeoutnonprecision[i] = -1;
-		//SBASdata[pos].oldfastcorrtimeoutprecision[i] = -1;
-		//SBASdata[pos].oldfastcorrupdateinterval[i] = -1;
-		//SBASdata[pos].PRC[i] = 9999;
-		//SBASdata[pos].RRC[i] = 9999;
-		//SBASdata[pos].UDRE[i] = -1;
-		//SBASdata[pos].UDREsigma[i] = -1;
-		//SBASdata[pos].oldPRC[i] = -1;
-		//SBASdata[pos].oldRRC[i] = -1;
-		//SBASdata[pos].oldUDRE[i] = -1;
-		//SBASdata[pos].oldUDREsigma[i] = -1;
-		//SBASdata[pos].oldaifactor[i] = -1;
 		SBASdata[pos].UDREI6[i]=-1;
 		SBASdata[pos].UDRE6[i]=-1;
 		SBASdata[pos].UDREsigma6[i]=-1;
@@ -1927,17 +4529,8 @@ void initSBASdata (TSBASdata *SBASdata, int pos) {
 		SBASdata[pos].oldUDRE6[i]=-1;
 		SBASdata[pos].oldUDREsigma6[i]=-1;
 
-		//SBASdata[pos].IODFfastcorr[i]=-1;
 		SBASdata[pos].IODFintegrity[i]=-1;
-		//SBASdata[pos].oldIODFfastcorr[i]=-1;
 		SBASdata[pos].oldIODFintegrity[i]=-1;
-
-		for(j=0;j<5;j++) {
-			SBASdata[pos].pos2PRN[j][i] = -1;
-			SBASdata[pos].pos2GNSS[j][i] = -1;
-			//SBASdata[pos].oldpos2PRN[j][i] = -1;
-			//SBASdata[pos].oldpos2GNSS[j][i] = -1;
-		}
 
 
 		for(j=0;j<5;j++) {
@@ -1955,7 +4548,7 @@ void initSBASdata (TSBASdata *SBASdata, int pos) {
 			}
 		}
 
-		for(j=0;j<13;j++) {
+		for(j=0;j<15;j++) {
 			for(k=0;k<4;k++) {
 				SBASdata[pos].longtermsaterrcorrections[k][i][j] = 9999;
 				SBASdata[pos].prevlongtermsaterrcorrections[k][i][j] = 9999;
@@ -1972,29 +4565,35 @@ void initSBASdata (TSBASdata *SBASdata, int pos) {
 	if(pos==0) SBASdata[pos].PRN		=  0;
 	else SBASdata[pos].PRN				= -1;
 
-	SBASdata[pos].alarmtime.MJDN		= -1;
-	SBASdata[pos].alarmtime.SoD			= -1.;
-	SBASdata[pos].alarmTimeRemaining	=  0;	
-	SBASdata[pos].numAlarmGEO			=  0;	
-	SBASdata[pos].cleared				=  0;
 	SBASdata[pos].numreceivers			=  0;
 	SBASdata[pos].numSBASsatellites		=  0;
-	SBASdata[pos].dontuse				=  0;
-	SBASdata[pos].problems				=  0;
 	SBASdata[pos].IODPmask				=  4;	//Set to 4 to avoid invalid vector indexes
 	SBASdata[pos].oldIODPmask			=  4;	//Set to 4 to avoid invalid vector indexes
-	SBASdata[pos].oldnumsatellites		=  0;
 	SBASdata[pos].IODPfastcorr			=  4;	//Set to 4 to avoid invalid vector indexes
 	SBASdata[pos].oldIODPfastcorr		=  4;   //Set to 4 to avoid invalid vector indexes
 	SBASdata[pos].IODPlongterm			=  4;   //Set to 4 to avoid invalid vector indexes
 	SBASdata[pos].oldIODPlongterm		=  4;   //Set to 4 to avoid invalid vector indexes
 
+	for(i=0;i<NUMPOSFREQSBASMSG;i++) {
+		SBASdata[pos].alarmtime[i].MJDN		= -1;
+		SBASdata[pos].alarmtime[i].SoD		= -1.;
+		SBASdata[pos].alarmTimeRemaining[i]	=  0;	
+		SBASdata[pos].numAlarmGEO[i]		=  0;	
+		SBASdata[pos].cleared[i]			=  0;
+		SBASdata[pos].dontuse[i]			=  0;
+		SBASdata[pos].problems[i]			=  0;
+	}
+
 	for(i=0;i<MAX_SBAS_PRN;i++) {
 		SBASdata[pos].GEOPRN2pos[i]=-1;
-		SBASdata[pos].failedmessages[i]=0;
-		SBASdata[pos].missed4msg[i]=0;
-		SBASdata[pos].alarmGEOPRN[i]=-1;
-		SBASdata[pos].alarmGEOindex[i]=-1;
+	}
+	for(i=0;i<NUMPOSFREQSBASMSG;i++) {
+		for(j=0;j<MAX_SBAS_PRN;j++) {
+			SBASdata[pos].failedmessages[i][j]=0;
+			SBASdata[pos].missed4msg[i][j]=0;
+			SBASdata[pos].alarmGEOPRN[i][j]=-1;
+			SBASdata[pos].alarmGEOindex[i][j]=-1;
+		}
 	}
 
 	for(i=0;i<4;i++) {
@@ -2032,8 +4631,11 @@ void initSBASdata (TSBASdata *SBASdata, int pos) {
 		SBASdata[pos].oldgeonavigationmessage[i]=9999;
 	}
 
-	for(i=0;i<12;i++) {
+	for(i=0;i<13;i++) {
 		SBASdata[pos].networktimemessage[i]=-9999;
+	}
+
+	for(i=0;i<12;i++) {
 		for(j=0;j<3;j++) {
 			SBASdata[pos].geoalmanacsmessage[j][i]=-1;
 			SBASdata[pos].oldgeoalmanacsmessage[j][i]=-1;
@@ -2083,6 +4685,133 @@ void initSBASdata (TSBASdata *SBASdata, int pos) {
 	SBASdata[pos].sigmamultipathdata=NULL;
 
 	SBASdata[pos].numSat60=0;
+
+	///////DFMC data
+	for(i=0;i<NUMPOSFREQSBASMSG;i++) { 
+		for(j=0;j<MAX_GNSS;j++) {
+			for(k=0;k<MAX_SBAS_PRN;k++) {
+				SBASdata[pos].PRN2SlotNumber[i][j][k]=-1;
+			}
+		}
+		if (i==SBASDFMCFREQPOS) {
+			SBASdata[pos].SlotNumber2PRN[i][0]=-1;
+			SBASdata[pos].SlotNumber2GNSS[i][0]=-1;
+
+			for(j=1;j<=37;j++) {
+				SBASdata[pos].PRN2SlotNumber[i][GPS][j]=j;
+				SBASdata[pos].SlotNumber2GNSS[i][j]=GPS;
+				SBASdata[pos].SlotNumber2PRN[i][j]=j;
+			}
+
+			for(j=38;j<=74;j++) {
+				SBASdata[pos].PRN2SlotNumber[i][GLONASS][j-37]=j;
+				SBASdata[pos].SlotNumber2GNSS[i][j]=GLONASS;
+				SBASdata[pos].SlotNumber2PRN[i][j]=j-37;
+			}
+			for(j=75;j<=111;j++) {
+				SBASdata[pos].PRN2SlotNumber[i][Galileo][j-74]=j;
+				SBASdata[pos].SlotNumber2GNSS[i][j]=Galileo;
+				SBASdata[pos].SlotNumber2PRN[i][j]=j-74;
+			}
+			for(j=112;j<=119;j++) {
+				SBASdata[pos].SlotNumber2GNSS[i][j]=-1;
+				SBASdata[pos].SlotNumber2PRN[i][j]=-1;
+			}
+			for(j=120;j<=158;j++) {
+				SBASdata[pos].PRN2SlotNumber[i][GEO][j]=j;
+				SBASdata[pos].SlotNumber2GNSS[i][j]=GEO;
+				SBASdata[pos].SlotNumber2PRN[i][j]=j;
+			}
+			for(j=159;j<=195;j++) {
+				SBASdata[pos].PRN2SlotNumber[i][BDS][j-158]=j;
+				SBASdata[pos].SlotNumber2GNSS[i][j]=BDS;
+				SBASdata[pos].SlotNumber2PRN[i][j]=j-158;
+			}
+			for(j=196;j<=214;j++) {
+				SBASdata[pos].SlotNumber2GNSS[i][j]=-1;
+				SBASdata[pos].SlotNumber2PRN[i][j]=-1;
+			}
+		} else {
+			for(j=0;j<MAX_SBASDFMC_MASKSLOTNUMBER;j++) {
+				SBASdata[pos].SlotNumber2GNSS[i][j]=-1;
+				SBASdata[pos].SlotNumber2PRN[i][j]=-1;
+			}
+		}
+	}
+
+	SBASdata[pos].IODMmask=4; 		//Set to 4 to avoid invalid vector indexes
+	SBASdata[pos].oldIODMmask=4;	//Set to 4 to avoid invalid vector indexes
+
+	SBASdata[pos].tmoutFactor[PAMODE]=1.;
+	SBASdata[pos].tmoutFactor[NPAMODE]=1.5;
+
+	SBASdata[pos].lastMT3940received.MJDN=-1;
+	SBASdata[pos].lastMT3940received.SoD=-1.;
+
+
+	SBASdata[pos].SBASproviderID=-1;
+	SBASdata[pos].DFREISBASMT3940=-1;
+	SBASdata[pos].RCORRSBASMT3940=-1;
+
+	initBRDCblock(&SBASdata[pos].navSBASmessage);
+
+	for(i=0;i<5;i++) {
+		for(j=0;j<92;j++) {
+			SBASdata[pos].DFREI[i][j]=-1;	
+			SBASdata[pos].DFRECI2bumped[i][j]=0;
+			SBASdata[pos].lastDFREIreceived[i][j].MJDN=-1;
+			SBASdata[pos].lastDFREIreceived[i][j].SoD=-1.;
+		}
+	}
+
+	for(i=0;i<215;i++) {
+		SBASdata[pos].clockephemerisDFMCTime[i].MJDN=-1;
+		SBASdata[pos].clockephemerisDFMCTime[i].SoD=-1.;
+		for(j=0;j<14;j++) {
+			SBASdata[pos].covarianceMatrixDFMC[i][j]=-1;
+		}
+		for(j=0;j<15;j++) {
+			SBASdata[pos].clockephemerisDFMC[i][j]=-1;
+		}
+	}
+
+	SBASdata[pos].numDFMCalmanac=0;
+	SBASdata[pos].WNROcount=15; //15 means not read or transmitted value in almanac message is not valid (so it can't be used)
+
+	for(i=0;i<39;i++) {
+		initBRDCblock(&SBASdata[pos].DFMCalmanac[i]);
+		SBASdata[pos].DFMCalmanacTime[i].MJDN=-1;
+		SBASdata[pos].DFMCalmanacTime[i].SoD=-1.;
+		SBASdata[pos].posWithDataDFMCalmanac[i]=-1;
+		SBASdata[pos].DFMCSBASProvider[i]=-1;
+	}
+
+	for(i=0;i<5;i++) {
+		//commonOBAD set to 0, so if no MT37 received, assume time reference is GPS (time identifier value for GPS is 0)
+		SBASdata[pos].commonOBAD[i]=0;
+	}
+
+	for(i=0;i<15;i++) {
+		SBASdata[pos].DFREITable[i]=-1;		
+	}
+
+	for(i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<3;j++) {
+			SBASdata[pos].OBAD[i][j]=-1;		
+		}
+	}
+
+	for(i=0;i<MAX_GNSS;i++) {
+		for(j=0;j<2;j++) {
+			SBASdata[pos].GNSSTimeOffsetsConst[i][j]=-1;
+		}
+	}
+
+	for(i=0;i<9;i++) {
+		SBASdata[pos].GNSSTimeOffsetsCommon[i]=-1;
+	}
+
+	SBASdata[pos].GPSfrequenciesUsed=0;
 }
 
 /*****************************************************************************
@@ -2092,8 +4821,9 @@ void initSBASdata (TSBASdata *SBASdata, int pos) {
  * Name                           |Da|Unit|Description
  * TSBASdata  *SBASdata            O  N/A  TSBASdata struct
  * int pos                         I  N/A  Slot of TSBASdata to be cleared
+ * int frequencyPos                I  N/A  Frequency position to be cleared
  *****************************************************************************/
-void ClearSBASdata (TSBASdata *SBASdata, int pos) {
+void ClearSBASdata (TSBASdata *SBASdata, int pos, int frequencyPos) {
 
 	int i,j,k,l;
 
@@ -2103,17 +4833,19 @@ void ClearSBASdata (TSBASdata *SBASdata, int pos) {
 	- Common data (like number of satellites) which are stored in position 0 of TSBASdata vector does not have to be erased
 	- Almanac data does not have to be erased
 	- Number of satellites with fast and slow sigma of 60 metres does not have to be erased
+	- PRN2SlotNumber, SlotNumber2GNSS and SlotNumber2PRN indexes does not have to be erased
+	- tmoutFactor multiplier does not have to be erased
 	*/
 
 	//Set all satellites unselected by default
 	for(i=0;i<5;i++) {
-		SBASdata[pos].numsatellites[i]=0;
+		SBASdata[pos].numsatellites[frequencyPos][i]=0;
 		for(j=0;j<MAX_GNSS;j++) {
 			for(k=0;k<MAX_SBAS_PRN;k++) {
-				SBASdata[pos].PRNactive[i][j][k]=0;
-				SBASdata[pos].PRN2pos[i][j][k]=-1;
-				SBASdata[pos].failedmessages[k]=0;
-				SBASdata[pos].missed4msg[k]=0;
+				SBASdata[pos].PRNactive[frequencyPos][i][j][k]=0;
+				SBASdata[pos].PRN2pos[frequencyPos][i][j][k]=-1;
+				SBASdata[pos].failedmessages[frequencyPos][k]=0;
+				SBASdata[pos].missed4msg[frequencyPos][k]=0;
 				if(pos==0) continue;
 				SBASdata[pos].GEOPRN2pos[k]=-1;
 			}
@@ -2121,204 +4853,245 @@ void ClearSBASdata (TSBASdata *SBASdata, int pos) {
 	}
 	//Set all values to -1 or 9999 (value not set)
 	for(i=0;i<64;i++) {
-		SBASdata[pos].oldlastmsgreceived[i].MJDN = -1;
-		SBASdata[pos].oldlastmsgreceived[i].SoD = -1.;
-		SBASdata[pos].oldmaskdiscarded[i]=0;
+		SBASdata[pos].oldlastmsgreceived[frequencyPos][i].MJDN = -1;
+		SBASdata[pos].oldlastmsgreceived[frequencyPos][i].SoD = -1.;
+		SBASdata[pos].oldmaskdiscarded[frequencyPos][i]=0;
 
 		if(i==DONTUSE || i==GEOSATELLITEALMANACS) continue;
 
-		SBASdata[pos].lastmsgreceived[i].MJDN = -1;
-		SBASdata[pos].lastmsgreceived[i].SoD = -1.;
+		SBASdata[pos].lastmsgreceived[frequencyPos][i].MJDN = -1;
+		SBASdata[pos].lastmsgreceived[frequencyPos][i].SoD = -1.;
 	}
 
-	for(i=0;i<51;i++) {
+	SBASdata[pos].firstmessage[frequencyPos].MJDN=-1;
+	SBASdata[pos].firstmessage[frequencyPos].SoD=-1.;
 
-		for(j=0;j<5;j++) {
-			SBASdata[pos].lastlongtermdata[j][i].MJDN = -1;
-			SBASdata[pos].lastlongtermdata[j][i].SoD = -1.;
-
-			SBASdata[pos].prevlastlongtermdata[j][i].MJDN = -1;
-			SBASdata[pos].prevlastlongtermdata[j][i].SoD = -1.;
-
-			SBASdata[pos].lastcovmatrix[j][i].MJDN = -1;
-			SBASdata[pos].lastcovmatrix[j][i].SoD = -1.;
-
-			SBASdata[pos].fastcorrtimeout[0][j][i] = -1;
-			SBASdata[pos].fastcorrtimeout[1][j][i] = -1;
-			SBASdata[pos].fastcorrupdateinterval[j][i] = -1;
-			SBASdata[pos].aifactor[j][i] = -1;
-			SBASdata[pos].tlat[j] =  0;
-			SBASdata[pos].lastfastdegfactor[j][i].MJDN = -1;
-			SBASdata[pos].lastfastdegfactor[j][i].SoD = -1.;
+	for(i=0;i<5;i++) {
+		for(j=0;j<92;j++) {
+			SBASdata[pos].pos2PRN[frequencyPos][i][j] = -1;
+			SBASdata[pos].pos2GNSS[frequencyPos][i][j] = -1;
 		}
-
-
-		SBASdata[pos].firstmessage.MJDN=-1;
-		SBASdata[pos].firstmessage.SoD=-1.;
-		//SBASdata[pos].oldlastfastcorrections[i].MJDN = -1;
-		//SBASdata[pos].oldlastfastcorrections[i].SoD = -1.;
-		SBASdata[pos].oldlastintegrityinfo[i].MJDN = -1;
-		SBASdata[pos].oldlastintegrityinfo[i].SoD = -1.;
-		//SBASdata[pos].oldlastfastdegfactor[i].MJDN = -1;
-		//SBASdata[pos].oldlastfastdegfactor[i].SoD = -1.;
-
-		SBASdata[pos].lastintegrityinfo[i].MJDN = -1;
-		SBASdata[pos].lastintegrityinfo[i].SoD = -1.;
-		//SBASdata[pos].lastfastdegfactor[i].MJDN = -1;
-		//SBASdata[pos].lastfastdegfactor[i].SoD = -1.;
-
-		SBASdata[pos].lastfastmessage[i]= -1;
-		//SBASdata[pos].fastcorrtimeoutnonprecision[i] = -1;
-		//SBASdata[pos].fastcorrtimeoutprecision[i] = -1;
-		//SBASdata[pos].fastcorrupdateinterval[i] = -1;
-		//SBASdata[pos].oldfastcorrtimeoutnonprecision[i] = -1;
-		//SBASdata[pos].oldfastcorrtimeoutprecision[i] = -1;
-		//SBASdata[pos].oldfastcorrupdateinterval[i] = -1;
-		//SBASdata[pos].PRC[i] = 9999;
-		//SBASdata[pos].RRC[i] = 9999;
-		//SBASdata[pos].UDRE[i] = -1;
-		//SBASdata[pos].UDREsigma[i] = -1;
-		//SBASdata[pos].oldPRC[i] = -1;
-		//SBASdata[pos].oldRRC[i] = -1;
-		//SBASdata[pos].oldUDRE[i] = -1;
-		//SBASdata[pos].oldUDREsigma[i] = -1;
-		//SBASdata[pos].oldaifactor[i] = -1;
-		SBASdata[pos].UDREI6[i]=-1;
-		SBASdata[pos].UDRE6[i]=-1;
-		SBASdata[pos].UDREsigma6[i]=-1;
-		SBASdata[pos].oldUDREI6[i]=-1;
-		SBASdata[pos].oldUDRE6[i]=-1;
-		SBASdata[pos].oldUDREsigma6[i]=-1;
-
-		//SBASdata[pos].IODFfastcorr[i]=-1;
-		SBASdata[pos].IODFintegrity[i]=-1;
-		//SBASdata[pos].oldIODFfastcorr[i]=-1;
-		SBASdata[pos].oldIODFintegrity[i]=-1;
-
-		for(j=0;j<5;j++) {
-			SBASdata[pos].pos2PRN[j][i] = -1;
-			SBASdata[pos].pos2GNSS[j][i] = -1;
-			//SBASdata[pos].oldpos2PRN[j][i] = -1;
-			//SBASdata[pos].oldpos2GNSS[j][i] = -1;
-		}
-
-
-		for(j=0;j<5;j++) {
-			SBASdata[pos].poslastFC[j][i] = -1;
-			SBASdata[pos].numFC[j][i] = 0;
-			for(k=0;k<MAXSBASFASTCORR;k++) {
-				SBASdata[pos].PRC[j][k][i] = 9999;
-				SBASdata[pos].RRC[j][k][i] = 9999;
-				SBASdata[pos].UDREI[j][k][i] = -1;
-				SBASdata[pos].UDRE[j][k][i] = -1;
-				SBASdata[pos].UDREsigma[j][k][i] = -1;
-				SBASdata[pos].IODF[j][k][i] = -1;
-				SBASdata[pos].lastfastcorrections[j][k][i].MJDN = -1;
-				SBASdata[pos].lastfastcorrections[j][k][i].SoD = -1.;
-			}
-		}
-
-		for(j=0;j<13;j++) {
-			for(k=0;k<4;k++) {
-				SBASdata[pos].longtermsaterrcorrections[k][i][j] = 9999;
-				SBASdata[pos].prevlongtermsaterrcorrections[k][i][j] = 9999;
-			}
-		}
-
-		for(j=0;j<13;j++) {
-			for(k=0;k<5;k++) {
-				SBASdata[pos].clockephemeriscovariance[k][i][j] = 9999;
-			}
+		for(j=0;j<215;j++) {
+			SBASdata[pos].Slot2pos[frequencyPos][i][j] = -1;
 		}
 	}
-	
-	SBASdata[pos].IODPmask				=  4;	//Set to 4 to avoid invalid vector indexes
-	SBASdata[pos].oldIODPmask			=  4;	//Set to 4 to avoid invalid vector indexes
-	SBASdata[pos].oldnumsatellites		=  0;
-	SBASdata[pos].IODPfastcorr			=  4;   //Set to 4 to avoid invalid vector indexes
-	SBASdata[pos].oldIODPfastcorr		=  4;   //Set to 4 to avoid invalid vector indexes
-	SBASdata[pos].IODPlongterm			=  4;   //Set to 4 to avoid invalid vector indexes
-	SBASdata[pos].oldIODPlongterm		=  4;   //Set to 4 to avoid invalid vector indexes
+	SBASdata[pos].cleared[frequencyPos]	=  1;
 
-	for(i=0;i<4;i++) {
-		for(l=0;l<9;l++) {
-			SBASdata[pos].numberofregions[l][i]=0;
+	switch(frequencyPos) {
+		case SBAS1FFREQPOS:
+			for(i=0;i<51;i++) {
+				for(j=0;j<5;j++) {
+					SBASdata[pos].lastlongtermdata[j][i].MJDN = -1;
+					SBASdata[pos].lastlongtermdata[j][i].SoD = -1.;
 
-			for(j=0;j<40;j++) {
-				for(k=0;k<11;k++) {
-					SBASdata[pos].regioncoordinates[l][i][j][k]=9999;
+					SBASdata[pos].prevlastlongtermdata[j][i].MJDN = -1;
+					SBASdata[pos].prevlastlongtermdata[j][i].SoD = -1.;
+
+					SBASdata[pos].lastcovmatrix[j][i].MJDN = -1;
+					SBASdata[pos].lastcovmatrix[j][i].SoD = -1.;
+
+					SBASdata[pos].fastcorrtimeout[0][j][i] = -1;
+					SBASdata[pos].fastcorrtimeout[1][j][i] = -1;
+					SBASdata[pos].fastcorrupdateinterval[j][i] = -1;
+					SBASdata[pos].aifactor[j][i] = -1;
+					SBASdata[pos].tlat[j] =  0;
+					SBASdata[pos].lastfastdegfactor[j][i].MJDN = -1;
+					SBASdata[pos].lastfastdegfactor[j][i].SoD = -1.;
+				}
+
+
+				SBASdata[pos].oldlastintegrityinfo[i].MJDN = -1;
+				SBASdata[pos].oldlastintegrityinfo[i].SoD = -1.;
+
+				SBASdata[pos].lastintegrityinfo[i].MJDN = -1;
+				SBASdata[pos].lastintegrityinfo[i].SoD = -1.;
+
+				SBASdata[pos].lastfastmessage[i]= -1;
+				SBASdata[pos].UDREI6[i]=-1;
+				SBASdata[pos].UDRE6[i]=-1;
+				SBASdata[pos].UDREsigma6[i]=-1;
+				SBASdata[pos].oldUDREI6[i]=-1;
+				SBASdata[pos].oldUDRE6[i]=-1;
+				SBASdata[pos].oldUDREsigma6[i]=-1;
+
+				SBASdata[pos].IODFintegrity[i]=-1;
+				SBASdata[pos].oldIODFintegrity[i]=-1;
+
+
+
+				for(j=0;j<5;j++) {
+					SBASdata[pos].poslastFC[j][i] = -1;
+					SBASdata[pos].numFC[j][i] = 0;
+					for(k=0;k<MAXSBASFASTCORR;k++) {
+						SBASdata[pos].PRC[j][k][i] = 9999;
+						SBASdata[pos].RRC[j][k][i] = 9999;
+						SBASdata[pos].UDREI[j][k][i] = -1;
+						SBASdata[pos].UDRE[j][k][i] = -1;
+						SBASdata[pos].UDREsigma[j][k][i] = -1;
+						SBASdata[pos].IODF[j][k][i] = -1;
+						SBASdata[pos].lastfastcorrections[j][k][i].MJDN = -1;
+						SBASdata[pos].lastfastcorrections[j][k][i].SoD = -1.;
+					}
+				}
+
+				for(j=0;j<15;j++) {
+					for(k=0;k<4;k++) {
+						SBASdata[pos].longtermsaterrcorrections[k][i][j] = 9999;
+						SBASdata[pos].prevlongtermsaterrcorrections[k][i][j] = 9999;
+					}
+				}
+
+				for(j=0;j<13;j++) {
+					for(k=0;k<5;k++) {
+						SBASdata[pos].clockephemeriscovariance[k][i][j] = 9999;
+					}
 				}
 			}
-		}
-	}
+			
+			SBASdata[pos].IODPmask				=  4;	//Set to 4 to avoid invalid vector indexes
+			SBASdata[pos].oldIODPmask			=  4;	//Set to 4 to avoid invalid vector indexes
+			SBASdata[pos].IODPfastcorr			=  4;   //Set to 4 to avoid invalid vector indexes
+			SBASdata[pos].oldIODPfastcorr		=  4;   //Set to 4 to avoid invalid vector indexes
+			SBASdata[pos].IODPlongterm			=  4;   //Set to 4 to avoid invalid vector indexes
+			SBASdata[pos].oldIODPlongterm		=  4;   //Set to 4 to avoid invalid vector indexes
 
-	for(i=0;i<8;i++) {
-		for(j=0;j<9;j++) {
-			SBASdata[pos].servicemessagesreceived[j][i]=-1;
-			SBASdata[pos].maxprioritycode[j]=0;
-			SBASdata[pos].totalservicemessagesreceived[j]=0;
-		}
-	}
+			for(i=0;i<4;i++) {
+				for(l=0;l<9;l++) {
+					SBASdata[pos].numberofregions[l][i]=0;
 
-	SBASdata[pos].IODPdegcorr	=  4;	//Set to 4 to avoid invalid vector indexes
-	SBASdata[pos].oldIODPdegcorr	=  4;	//Set to 4 to avoid invalid vector indexes
-	SBASdata[pos].IODS		=  8;	//Set to 8 to avoid invalid vector indexes
-	SBASdata[pos].oldIODS		=  8;	//Set to 8 to avoid invalid vector indexes
-
-	for(i=0;i<16;i++) {
-		SBASdata[pos].degradationfactors[i]=-1;
-		SBASdata[pos].olddegradationfactors[i]=-1;
-	}
-
-	for(i=0;i<17;i++) {
-		SBASdata[pos].geonavigationmessage[i]=9999;
-		SBASdata[pos].oldgeonavigationmessage[i]=9999;
-	}
-
-	for(i=0;i<12;i++) {
-		SBASdata[pos].networktimemessage[i]=-9999;
-	}
-
-	SBASdata[pos].cleared				=  1;
-
-	SBASdata[pos].IODPcovariance		= -1;
-	SBASdata[pos].oldIODPcovariance		= -1;
-	SBASdata[pos].numIGPbandbroadcast	= -1;
-	SBASdata[pos].numIGPbandreceived	=  0;
-	SBASdata[pos].oldnumIGPbandreceived	=  0;
-	SBASdata[pos].IODImask				=  4; //Initialize to 4 because it is not a valid IODI and is a valid position in vector
-	SBASdata[pos].oldIODImask			=  4; //Initialize to 4 because it is not a valid IODI and is a valid position in vector
-	SBASdata[pos].IODIcorr				= -1;
-	SBASdata[pos].oldIODIcorr			= -1;
-
-
-	for(i=0;i<11;i++) {
-		SBASdata[pos].IGPbandreceived[i]= -1;
-		SBASdata[pos].oldIGPbandreceived[i]= -1;
-
-		for(j=0;j<202;j++) {
-			for(k=0;k<5;k++) {
-				SBASdata[pos].IGPinMask[k][i][j]=0;
+					for(j=0;j<40;j++) {
+						for(k=0;k<11;k++) {
+							SBASdata[pos].regioncoordinates[l][i][j][k]=9999;
+						}
+					}
+				}
 			}
-			SBASdata[pos].Ionodelay[i][j]=-1;
-			SBASdata[pos].IonoGIVE[i][j]=-1;
-			SBASdata[pos].Ionosigma[i][j]=-1;
-			SBASdata[pos].lastiono[i][j].MJDN=-1;
-			SBASdata[pos].lastiono[i][j].SoD=-1.;
-			SBASdata[pos].IGP2Mask[i][j]=4;	//Initialize to 4 because it is not a valid IODI and is a valid position in vector
 
-		}
-
-		for(j=0;j<14;j++) {
-			for(k=0;k<15;k++) {
-				SBASdata[pos].BlockIDPlace2Grid[i][j][k]=-1;
-				SBASdata[pos].oldBlockIDPlace2Grid[i][j][k]=-1;
+			for(i=0;i<8;i++) {
+				for(j=0;j<9;j++) {
+					SBASdata[pos].servicemessagesreceived[j][i]=-1;
+					SBASdata[pos].maxprioritycode[j]=0;
+					SBASdata[pos].totalservicemessagesreceived[j]=0;
+				}
 			}
-		}
+
+			SBASdata[pos].IODPdegcorr		=  4;	//Set to 4 to avoid invalid vector indexes
+			SBASdata[pos].oldIODPdegcorr	=  4;	//Set to 4 to avoid invalid vector indexes
+			SBASdata[pos].IODS				=  8;	//Set to 8 to avoid invalid vector indexes
+			SBASdata[pos].oldIODS			=  8;	//Set to 8 to avoid invalid vector indexes
+
+			for(i=0;i<16;i++) {
+				SBASdata[pos].degradationfactors[i]=-1;
+				SBASdata[pos].olddegradationfactors[i]=-1;
+			}
+
+			for(i=0;i<17;i++) {
+				SBASdata[pos].geonavigationmessage[i]=9999;
+				SBASdata[pos].oldgeonavigationmessage[i]=9999;
+			}
+
+			for(i=0;i<13;i++) {
+				SBASdata[pos].networktimemessage[i]=-9999;
+			}
+
+
+			SBASdata[pos].IODPcovariance		= -1;
+			SBASdata[pos].oldIODPcovariance		= -1;
+			SBASdata[pos].numIGPbandbroadcast	= -1;
+			SBASdata[pos].numIGPbandreceived	=  0;
+			SBASdata[pos].oldnumIGPbandreceived	=  0;
+			SBASdata[pos].IODImask				=  4; //Initialize to 4 because it is not a valid IODI and is a valid position in vector
+			SBASdata[pos].oldIODImask			=  4; //Initialize to 4 because it is not a valid IODI and is a valid position in vector
+			SBASdata[pos].IODIcorr				= -1;
+			SBASdata[pos].oldIODIcorr			= -1;
+
+
+			for(i=0;i<11;i++) {
+				SBASdata[pos].IGPbandreceived[i]= -1;
+				SBASdata[pos].oldIGPbandreceived[i]= -1;
+
+				for(j=0;j<202;j++) {
+					for(k=0;k<5;k++) {
+						SBASdata[pos].IGPinMask[k][i][j]=0;
+					}
+					SBASdata[pos].Ionodelay[i][j]=-1;
+					SBASdata[pos].IonoGIVE[i][j]=-1;
+					SBASdata[pos].Ionosigma[i][j]=-1;
+					SBASdata[pos].lastiono[i][j].MJDN=-1;
+					SBASdata[pos].lastiono[i][j].SoD=-1.;
+					SBASdata[pos].IGP2Mask[i][j]=4;	//Initialize to 4 because it is not a valid IODI and is a valid position in vector
+
+				}
+
+				for(j=0;j<14;j++) {
+					for(k=0;k<15;k++) {
+						SBASdata[pos].BlockIDPlace2Grid[i][j][k]=-1;
+						SBASdata[pos].oldBlockIDPlace2Grid[i][j][k]=-1;
+					}
+				}
+			}
+			break;
+		case SBASDFMCFREQPOS:
+			SBASdata[pos].IODMmask=4; 		//Set to 4 to avoid invalid vector indexes
+			SBASdata[pos].oldIODMmask=4;	//Set to 4 to avoid invalid vector indexes
+
+			SBASdata[pos].lastMT3940received.MJDN=-1;
+			SBASdata[pos].lastMT3940received.SoD=-1.;
+
+			SBASdata[pos].WNROcount=15; //15 means not read or transmitted value in almanac message is not valid (so it can't be used)
+
+			initBRDCblock(&SBASdata[pos].navSBASmessage);
+
+			for(i=0;i<5;i++) {
+				for(j=0;j<92;j++) {
+					SBASdata[pos].DFREI[i][j]=-1;	
+					SBASdata[pos].DFRECI2bumped[i][j]=0;
+					SBASdata[pos].lastDFREIreceived[i][j].MJDN=-1;
+					SBASdata[pos].lastDFREIreceived[i][j].SoD=-1.;
+				}
+			}
+
+			for(i=0;i<215;i++) {
+				SBASdata[pos].clockephemerisDFMCTime[i].MJDN=-1;
+				SBASdata[pos].clockephemerisDFMCTime[i].SoD=-1.;
+				for(j=0;j<14;j++) {
+					SBASdata[pos].covarianceMatrixDFMC[i][j]=-1;
+				}
+				for(j=0;j<15;j++) {
+					SBASdata[pos].clockephemerisDFMC[i][j]=-1;
+				}
+			}
+
+
+			for(i=0;i<MAX_GNSS;i++) {
+				for(j=0;j<3;j++) {
+					SBASdata[pos].OBAD[i][j]=-1;		
+				}
+			}
+
+			for(i=0;i<5;i++) {
+				//commonOBAD set to 0, so if no MT37 received, assume time reference is GPS (time identifier value for GPS is 0)
+				SBASdata[pos].commonOBAD[i]=0;
+			}
+
+			for(i=0;i<15;i++) {
+				SBASdata[pos].DFREITable[i]=-1;		
+			}
+
+			for(i=0;i<MAX_GNSS;i++) {
+				for(j=0;j<2;j++) {
+					SBASdata[pos].GNSSTimeOffsetsConst[i][j]=-1;
+				}
+			}
+
+			for(i=0;i<9;i++) {
+				SBASdata[pos].GNSSTimeOffsetsCommon[i]=-1;
+			}
+
+			break;
+		default:
+			break;
 	}
-
-
-
 }
 
 /*****************************************************************************
@@ -2339,7 +5112,7 @@ void initSBAScorrections (TSBAScorr *SBAScorr) {
 
 	SBAScorr->IOD=-1;
 	SBAScorr->IODnoSBAS=-1;
-	SBAScorr->ionocorrection=0;
+	SBAScorr->ionocorrection=0.;
 	
 	SBAScorr->PRC=0;
 	SBAScorr->RRC=0;
@@ -2363,14 +5136,14 @@ void initSBAScorrections (TSBAScorr *SBAScorr) {
 
 	SBAScorr->mt10avail=-1;
 
-	SBAScorr->sigma2flt=0;
-	SBAScorr->sigma2iono=0;
-	SBAScorr->sigma2tropo=0;
-	SBAScorr->sigma2noise=0;
-	SBAScorr->sigma2divergence=0;
-	SBAScorr->sigma2multipath=0;
-	SBAScorr->sigma2air=0;
-	SBAScorr->SBASsatsigma2=0;
+	SBAScorr->sigma2flt=0.;
+	SBAScorr->sigma2iono=0.;
+	SBAScorr->sigma2tropo=0.;
+	SBAScorr->sigma2noise=0.;
+	SBAScorr->sigma2divergence=0.;
+	SBAScorr->sigma2multipath=0.;
+	SBAScorr->sigma2air=0.;
+	SBAScorr->SBASsatsigma2=0.;
 
 	SBAScorr->fastcorIODP=-1;
 	SBAScorr->fastcorIODF=-1;
@@ -2383,6 +5156,32 @@ void initSBAScorrections (TSBAScorr *SBAScorr) {
 	SBAScorr->ionomodelflag=0;
 
 	SBAScorr->SBASplotIonoAvail=0;
+
+	SBAScorr->GEOURA=2; //Minimum value of URA by default
+
+	SBAScorr->IODM=0;
+	SBAScorr->DFREI=0;
+	SBAScorr->DFRE=0.;
+	SBAScorr->sigma2DFC=0.;
+	SBAScorr->sigma2ionoresidual=0.;
+	SBAScorr->DFRECIbumped=0;
+	SBAScorr->IODN=0;
+	SBAScorr->tDFREI=0.;
+	SBAScorr->lastMT32=0.;
+	SBAScorr->lastMT3940=0.;
+	SBAScorr->ValidTimeMT32=0.;
+	SBAScorr->ValidTimeMT3940=0.;
+	SBAScorr->deltaDFRE=1.;
+	SBAScorr->tCorrTime=0.;
+	SBAScorr->cer=0.;
+	SBAScorr->ccovariance=0.;
+	SBAScorr->ccorr=0.;
+	SBAScorr->icorr=0.;
+	SBAScorr->rcorr=0.;
+	SBAScorr->deltarcorr=0.;
+	SBAScorr->rcorrSV=0.;
+	SBAScorr->Ecorr=0.;
+	SBAScorr->Eer=0.;
 }
 
 /*****************************************************************************
@@ -2391,35 +5190,39 @@ void initSBAScorrections (TSBAScorr *SBAScorr) {
  * Parameters  :
  * Name                           |Da|Unit|Description
  * TStdESA  *StdESA                O  N/A  TStdESA struct
+ * int  StfdESAenabled             I  N/A  0 -> Stanford ESA enabled
+ *                                         1 -> Stanford ESA disabled
  *****************************************************************************/
-void initStfdESA (TStdESA  *StdESA) {
+void initStfdESA (TStdESA  *StdESA, int StfdESAenabled) {
 
-	unsigned int i,j;
+	unsigned long long int i;
 
 	// Compute number of pixels and allocate space
 	StdESA->numpixelhor = StdESA->xmax/StdESA->xstep;
 	StdESA->numpixelver = StdESA->ymax/StdESA->ystep;
-	StdESA->counthor = NULL;
-	StdESA->countver = NULL;
-	StdESA->counthor = malloc(sizeof(int *)*StdESA->numpixelver);
-	StdESA->countver = malloc(sizeof(int *)*StdESA->numpixelver);
 	StdESA->numsamplesMI=0;
 	StdESA->numsamplesHMI=0;
 	StdESA->numsamplesVMI=0;
 	StdESA->numsamplesProcessed=0;
 	StdESA->numsamplesComputed=0;
 	StdESA->numsamplesSingular=0;
+	StdESA->G = NULL;
+	StdESA->k = NULL;
+	StdESA->kmask = NULL;
+	StdESA->numUsablesSatellites=0;
+	StdESA->numSatSolutionFilter=0;
 	StdESA->HWIR=0.;
 	StdESA->VWIR=0.;
-	for (i=0;i<StdESA->numpixelver;i++) {
-		StdESA->counthor[i] = malloc(sizeof(int)*StdESA->numpixelhor);
-		StdESA->countver[i] = malloc(sizeof(int)*StdESA->numpixelhor);
-		for (j=0;j<StdESA->numpixelhor;j++) {
-			StdESA->counthor[i][j] = 0;
-			StdESA->countver[i][j] = 0;
+	StdESA->counthor = NULL;
+	StdESA->countver = NULL;
+	if (StfdESAenabled) {
+		StdESA->counthor = malloc(sizeof(unsigned long long int *)*StdESA->numpixelver);
+		StdESA->countver = malloc(sizeof(unsigned long long int *)*StdESA->numpixelver);
+		for (i=0;i<StdESA->numpixelver;i++) {
+			StdESA->counthor[i] = calloc(StdESA->numpixelhor,sizeof(unsigned long long int));
+			StdESA->countver[i] = calloc(StdESA->numpixelhor,sizeof(unsigned long long int));
 		}
 	}
-
 }
 
 /*****************************************************************************
@@ -2435,29 +5238,56 @@ void initStfdESA (TStdESA  *StdESA) {
 void initSBASPlotsMode (TEpoch *epoch, TSBASPlots *SBASplots, TOptions  *options, int *retvalue)  {
 	int 	i,j;
 	
-	//Set the number of satellites in view to 32 (GPS PRN 1-32)
-	epoch->numSatellites=32;
-	//Set last index for SBAS satellite
-	if(options->NoAvailabilityPlot==0) {
-		//We are computing Availability plot, so we will loop through all satellites
-		epoch->lastSBASindex=31;
-	} else {
-		//We are only computing ionosphere availability plot, so we will use only satellite in position 0 of epoch->sat
-		epoch->lastSBASindex=0;
+	for(i=0;i<MAX_GNSS;i++) {
+		//Set measurements available only to C1C. 
+		//This values measOrder are not used in SBAS plot mode, but it is good to leave a default value
+		epoch->measOrder[i].nDiffMeasurements=1;
+		epoch->measOrder[i].nDiffMeasurementsRINEXHeader=1;
+		epoch->measOrder[i].GNSS=i;
+		epoch->measOrder[i].meas2Ind[C1C]=0;
+		epoch->measOrder[i].conversionFactor[C1C]=1.0;
+		epoch->measOrder[i].ind2Meas[0]=C1C;
 	}
 
-	//Set GPS measurements available only to C1C
-	epoch->measOrder[GPS].nDiffMeasurements=1;
-	epoch->measOrder[GPS].GNSS=GPS;
-	epoch->measOrder[GPS].meas2Ind[C1C]=0;
-	epoch->measOrder[GPS].conversionFactor[C1C]=1.0;
-	epoch->measOrder[GPS].ind2Meas[0]=C1C;
-	//Set the PRN in each position (we will set them in order, but it is not relevant)
-	for (i=0;i<epoch->numSatellites;i++) {
-		epoch->sat[i].GNSS=GPS;
-		epoch->sat[i].PRN=i+1;
-		epoch->sat[i].meas[0].value=-1;
+	//Set all lastSBASindex to 0 and number of satellites to 0 until a GEO is selected
+	for(i=0;i<MAX_SAT_GEO;i++) {
+		epoch->lastSBASindex[i] = 0;
 	}
+	epoch->numSatellites=0;
+
+	//Set all measurements values for all satellites to -1
+	for (i=0;i<MAX_SATELLITES_VIEWED;i++) {
+		epoch->sat[i].meas[0].value=-1.;
+	}
+
+	epoch->numSBASsatellites=0;
+	epoch->ReferenceGNSSClock=options->ClkRefPriorityList[0];
+	epoch->prevNumInterSystemClocksFilter=0;
+	epoch->numInterSystemClocksFilter=0;
+	epoch->lastRecWindUpEstimated=0.;
+	epoch->lastRecWindUpAutoCorrel=options->filterParams[P0_PAR][WUP_UNK];
+	epoch->receiver.recType = rtUNKNOWN;
+	epoch->receiver.interval = -1;
+	epoch->receiver.intervalEstimate= -1;
+	epoch->receiver.intervalDecimalsFactor = 1;
+	epoch->receiver.DecimateVal=99999;
+	strcpy(epoch->receiver.name,DEFAULTMARKERNAME);
+	epoch->receiver.type[0] = '\0';
+	epoch->receiver.aproxPosition[0] = EARTH_RADIUS;
+	epoch->receiver.aproxPosition[1] = 0;
+	epoch->receiver.aproxPosition[2] = 0;
+	epoch->receiver.aproxPositionError = 1e10;
+	epoch->receiver.receiverSolConverged = 1;
+	epoch->receiver.aproxPositionRover[0] = 0.;
+	epoch->receiver.aproxPositionRover[1] = 0.;
+	epoch->receiver.aproxPositionRover[2] = 0.;
+
+	epoch->prealign = 0;
+	epoch->ZTD = 0;
+	epoch->IPPlat = 0;
+	epoch->IPPlon = 0;
+
+	epoch->dgnss.Nref = 0;
 
 	//To minimize memory usage, we will make a table with the minimum size possible.
 	//Depending on the resolution (1º, 0.1º or 0.01º we will need more or less memory)
@@ -2498,7 +5328,7 @@ void initSBASPlotsMode (TEpoch *epoch, TSBASPlots *SBASplots, TOptions  *options
 		SBASplots->offsetLonIono=(int)(-options->minLonplots*(double)SBASplots->IonoMemFactor);
 	}
 
-	//Set Availability and Risk pointer to NULL
+	//Set pointers to NULL
 	SBASplots->SBASNumEpochsAvail=NULL;
 	SBASplots->SBASNumEpochsRisk=NULL;
 	SBASplots->SBASNumEpochsRiskMar=NULL;
@@ -2523,6 +5353,8 @@ void initSBASPlotsMode (TEpoch *epoch, TSBASPlots *SBASplots, TOptions  *options
 	SBASplots->HDOPValuesHourly=NULL;
 	SBASplots->PDOPValuesHourly=NULL;
 	SBASplots->GDOPValuesHourly=NULL;
+	SBASplots->GEOelevPos=NULL;
+	SBASplots->GEOelevPosIono=NULL;
 
 	//Allocate memory for availability plot counter
 	if(options->NoAvailabilityPlot==0) {
@@ -2927,8 +5759,93 @@ void initSBASPlotsMode (TEpoch *epoch, TSBASPlots *SBASplots, TOptions  *options
 			}
 		}
 	}
+
+
+	//Set number of GEOs with its elevation computed to 0
+	SBASplots->numGEOWithElevComputed=0;
+	SBASplots->numGEOelevPos=0;
+	for(i=0;i<MAX_SBAS_PRN;i++) {
+		SBASplots->GEOWithElevComputed[i]=0;
+	}
+
+	//Allocate memory for GEO elevation
+	if (options->SBASPlotsMinGEOElev == -99.99f) {
+		//No GEO elevation filter. Add 1 position in memory where all positions in map will check GEO elevation with the same value
+		SBASplots->GEOelevPos=NULL;
+		SBASplots->GEOelevPos=malloc(sizeof(float*));
+		SBASplots->GEOelevPos[0]=malloc(sizeof(float*));
+		SBASplots->GEOelevPos[0][0]=malloc(sizeof(float));
+		SBASplots->GEOelevPos[0][0][0]=-99.99f; //Set elevation to a very low value so GEO is not used until its elevation its computed
+		SBASplots->GEOelevNullPos=0;
+		SBASplots->GEOelevPosIono=NULL;
+		if(options->NoIonoPlot==0) {
+			SBASplots->GEOelevPosIono=malloc(sizeof(float*));
+			SBASplots->GEOelevPosIono[0]=malloc(sizeof(float*));
+			SBASplots->GEOelevPosIono[0][0]=malloc(sizeof(float));
+			SBASplots->GEOelevPosIono[0][0][0]=-99.99f; //Set elevation to a very low value so GEO is not used until its elevation its computed
+		}
+	} else {
+		SBASplots->GEOelevPos=NULL; 	//Memory will be assigned in FillGEOelevationGrid function
+		SBASplots->GEOelevPosIono=NULL; //Memory will be assigned in FillGEOelevationGrid function
+		SBASplots->GEOelevNullPos=1;
+	}
+
 	
 	*retvalue=1;
+}
+
+/*****************************************************************************
+ * Name        : SetSatellitesSBASPlotsMode
+ * Description : Set the lists of satellites to process in SBAS plots mode
+ *                 The satellite list is the list of satellites available
+ *                 in the GEO SBAS PRN mask (MT1/MT31) 
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TEpoch *epoch                   IO N/A  TEpoch struct
+ * TSBASdata  *SBASdata            IO N/A  Structure to save SBAS data
+ * TOptions  *options              I  N/A  TOptions struct
+ *****************************************************************************/
+void SetSatellitesSBASPlotsMode (TEpoch *epoch, TSBASdata *SBASdata, TOptions  *options)  {
+
+	int 	i;
+	int 	IOD;
+
+	if (options->SBASmodePos==SBAS1FMODEPOS) {
+		IOD=SBASdata[options->GEOindex].IODPmask;
+	} else {
+		IOD=SBASdata[options->GEOindex].IODMmask;
+	}
+	if (IOD==4) {
+		//No mask received. Change GEO if possible, as we might have selected as initial GEO 
+		//a GEO without data (e.g. a GEO sending only alarm messages and MT63)
+		if (options->switchGEO==1) {
+			//GEO switching enabled, check for next GEO
+			for(i=options->noMixedGEOdata;i<SBASdata[0].numSBASsatellites;i++) {
+				if (i==options->GEOindex) continue;
+				if (options->SBASmodePos==SBAS1FMODEPOS) {
+					IOD=SBASdata[i].IODPmask;
+				} else {
+					IOD=SBASdata[i].IODMmask;
+				}
+				if (IOD!=4) break;
+			}
+			if (IOD==4) return; //No mask found. Do nothing and wait until a mask is received
+			options->GEOindex=i;
+			options->GEOPRN=SBASdata[options->GEOindex].PRN;
+			epoch->currentGEOPRN=SBASdata[options->GEOindex].PRN;
+		} else {
+			//No mask found. Do nothing and wait until a mask is received
+			return;
+		}
+	}
+
+	//Mask available. Set the number of satellites
+	epoch->numSatellites=SBASdata[options->GEOindex].numsatellites[options->SBASFreqPosToProcess][IOD];
+	for(i=0;i<epoch->numSatellites;i++) {
+		epoch->sat[i].GNSS=SBASdata[options->GEOindex].pos2GNSS[options->SBASFreqPosToProcess][IOD][i];
+		epoch->sat[i].PRN=SBASdata[options->GEOindex].pos2PRN[options->SBASFreqPosToProcess][IOD][i]%100;
+	}
+
 }
 
 /*****************************************************************************
@@ -2946,30 +5863,38 @@ void freeSBASPlotsData(TSBASPlots *SBASplots,TOptions  *options) {
 	if(options->NoAvailabilityPlot==0) {
 		for(i=0;i<SBASplots->AvailabilityLatSize;i++) {
 			free(SBASplots->SBASNumEpochsAvail[i]);
+			free(SBASplots->SBASNumEpochsDOP[i]);
 			if (options->SBASHourlyMaps==1) {
 				free(SBASplots->SBASNumEpochsAvailHourly[i]);
+				free(SBASplots->SBASNumEpochsDOPHourly[i]);
 			}
 		}
 		free(SBASplots->SBASNumEpochsAvail);
+		free(SBASplots->SBASNumEpochsDOP);
 		if (options->SBASHourlyMaps==1) {
 			free(SBASplots->SBASNumEpochsAvailHourly);
+				free(SBASplots->SBASNumEpochsDOPHourly);
 		}
 		if(options->ComputeRiskPlots==1) {
 			for(i=0;i<SBASplots->AvailabilityLatSize;i++) {
 				free(SBASplots->SBASNumEpochsRisk[i]);
+				free(SBASplots->SBASNumEpochsRiskMar[i]);
 				free(SBASplots->LastEpochAvailPrevCurrDisc[i]);
 				free(SBASplots->FirstEpochAvailAfterPrevDisc[i]);
 				if (options->SBASHourlyMaps==1) {
 					free(SBASplots->SBASNumEpochsRiskHourly[i]);
+					free(SBASplots->SBASNumEpochsRiskHourlyMar[i]);
 					free(SBASplots->LastEpochAvailPrevCurrDiscHourly[i]);
 					free(SBASplots->FirstEpochAvailAfterPrevDiscHourly[i]);
 				}
 			}
 			free(SBASplots->SBASNumEpochsRisk);
+			free(SBASplots->SBASNumEpochsRiskMar);
 			free(SBASplots->LastEpochAvailPrevCurrDisc);
 			free(SBASplots->FirstEpochAvailAfterPrevDisc);
 			if (options->SBASHourlyMaps==1) {
 				free(SBASplots->SBASNumEpochsRiskHourly);
+				free(SBASplots->SBASNumEpochsRiskHourlyMar);
 				free(SBASplots->LastEpochAvailPrevCurrDiscHourly);
 				free(SBASplots->FirstEpochAvailAfterPrevDiscHourly);
 			}
@@ -3083,6 +6008,33 @@ void freeSBASPlotsData(TSBASPlots *SBASplots,TOptions  *options) {
 			}
 		}
 	}
+	if (options->SBASPlotsMinGEOElev == -99.99f) {
+		free(SBASplots->GEOelevPos[0][0]);
+		free(SBASplots->GEOelevPos[0]);
+		free(SBASplots->GEOelevPos);
+		if(options->NoIonoPlot==0) {
+			free(SBASplots->GEOelevPosIono[0][0]);
+			free(SBASplots->GEOelevPosIono[0]);
+			free(SBASplots->GEOelevPosIono);
+		}
+	} else {
+		for(i=0;i<SBASplots->numGEOelevPos;i++) {
+			for(j=0;j<SBASplots->AvailabilityLatSize;j++) {
+				free(SBASplots->GEOelevPos[i][j]);
+			}
+			free(SBASplots->GEOelevPos[i]);
+		}
+		free(SBASplots->GEOelevPos);
+		if(options->NoIonoPlot==0) {
+			for(i=0;i<SBASplots->numGEOelevPos;i++) {
+				for(j=0;j<SBASplots->IonoLatSize;j++) {
+					free(SBASplots->GEOelevPosIono[i][j]);
+				}
+				free(SBASplots->GEOelevPosIono[i]);
+			}
+			free(SBASplots->GEOelevPosIono);
+		}
+	}
 }
 
 
@@ -3101,6 +6053,7 @@ void initUserError (TUserError *UserError) {
 		UserError->activeErrorsEnd[i] = NULL;
 		UserError->ErrorParam[i] = NULL;
 		UserError->measType[i] = NULL;
+		UserError->measFreq[i] = NULL;
 		UserError->System[i] = NULL;
 		UserError->PRN[i] = NULL;
 		UserError->numactiveErrors[i] = 0;
@@ -3116,6 +6069,9 @@ void initUserError (TUserError *UserError) {
  * TRTCM2 *rtcm2                   O  N/A  TRTCM2 struct
  *****************************************************************************/
 void initRTCM2 (TRTCM2 *rtcm2) {
+
+	int i;
+
 	// Initialise control variables
 	rtcm2->doWeHaveHeaderCorr = 0;
 	rtcm2->doWeHaveHeaderAnt = 0;
@@ -3144,6 +6100,10 @@ void initRTCM2 (TRTCM2 *rtcm2) {
 	rtcm2->last2bits[1] = 1;
 	rtcm2->my_state = Initial;
 	rtcm2->prevZcount = 0.0;
+
+	for(i=0;i<=WORDBIT;i++) {
+		rtcm2->word_current[i]='\0';
+	}
 }
 
 /*****************************************************************************
@@ -3215,8 +6175,8 @@ void initRTCM3 (TRTCM3 *rtcm3) {
 	}
 
 	strcpy(rtcm3->content_str,"ini");
-	rtcm3->hour = malloc(sizeof(int));
-	rtcm3->previousHour = malloc(sizeof(int));
+	rtcm3->hour = 0;
+	rtcm3->previousHour = 0;
 }
 
 /*****************************************************************************
@@ -3295,6 +6255,68 @@ void initMSG24 (TMSG24 *sc) {
 }
 
 /*****************************************************************************
+ * Name        : TUnkinfoPartialCopy
+ * Description : Copy the used data in TUnkinfo structure. As arrays inside
+ *                the structure have a fixed size given by MAX_UNK and
+ *                MAX_VECTOR_UNK, the sizes may get very big, but only part
+ *                of the array is used. To avoid loosing a lot of computation
+ *                time copying unused values of the arrays, it will be copied
+ *                only the used values
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TUnkinfo  *prevUnkinfo          O  N/A  TUnkinfo structure with information on 
+ *                                          the previous epoch unknowns (values will
+ *                                          be replaced with current epoch data)
+ * TUnkinfo  *unkinfo              I  N/A  TUnkinfo structure with information on 
+ *                                          the current epoch unknowns
+ *****************************************************************************/
+void TUnkinfoPartialCopy (TUnkinfo  *prevUnkinfo, TUnkinfo *unkinfo) {
+	prevUnkinfo->nunk = unkinfo->nunk;
+	prevUnkinfo->nunkvector = unkinfo->nunkvector;
+	memcpy(prevUnkinfo->par2unk,unkinfo->par2unk,sizeof(int)*MAX_PAR);
+	memcpy(prevUnkinfo->GNSS2ISCBunk,unkinfo->GNSS2ISCBunk,sizeof(int)*MAX_GNSS);
+	memcpy(prevUnkinfo->qnoise,unkinfo->qnoise,sizeof(double)*unkinfo->nunk);
+	memcpy(prevUnkinfo->phi,unkinfo->phi,sizeof(double)*unkinfo->nunk);
+}
+
+/*****************************************************************************
+ * Name        : TFilterSolutionPartialCopy
+ * Description : Copy the used data in TFilterSolution structure. As arrays
+ *                inside the structure have a fixed size given by MAX_UNK and
+ *                MAX_VECTOR_UNK, the sizes may get very big, but only part
+ *                of the array is used. To avoid loosing a lot of computation
+ *                time copying unused values of the arrays, it will be copied
+ *                only the used values
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TFilterSolution  *prevsolution  O  N/A  Structure with the information of the 
+ *                                          previous solution (values will be
+ *                                          be replaced with current epoch data)
+ * TFilterSolution  *solution      I  N/A  Structure with the information of the
+ *                                          current epoch 
+ * TUnkinfo  *unkinfo              I  N/A  TUnkinfo structure with information on 
+ *                                          the current epoch unknowns
+ *****************************************************************************/
+void TFilterSolutionPartialCopy (TFilterSolution *prevsolution, TFilterSolution *solution, TUnkinfo *unkinfo) {
+	prevsolution->dop = solution->dop;
+	prevsolution->GDOP = solution->GDOP;
+	prevsolution->PDOP = solution->PDOP;
+	prevsolution->TDOP = solution->TDOP;
+	prevsolution->HDOP = solution->HDOP;
+	prevsolution->VDOP = solution->VDOP;
+	prevsolution->HPL = solution->HPL;
+	prevsolution->VPL = solution->VPL;
+	prevsolution->prevNumSatellites = solution->prevNumSatellites;
+	prevsolution->totalNumSatDCBEpoch = solution->totalNumSatDCBEpoch;
+	prevsolution->totalNumRecDCBEpoch = solution->totalNumRecDCBEpoch;
+	memcpy(prevsolution->x,solution->x,sizeof(double)*unkinfo->nunk);
+	memcpy(prevsolution->parameters,solution->parameters,sizeof(double)*unkinfo->nunk);
+	memcpy(prevsolution->correlations,solution->correlations,sizeof(double)*unkinfo->nunkvector);
+	memcpy(prevsolution->satDCBlist,solution->satDCBlist,sizeof(int)*solution->totalNumSatDCBEpoch);
+	memcpy(prevsolution->recDCBlist,solution->recDCBlist,sizeof(int)*solution->totalNumRecDCBEpoch);
+}
+
+/*****************************************************************************
  * Name        : changeBase
  * Description : Changes a 3D vector to the specified base
  * Parameters  :
@@ -3351,11 +6373,11 @@ double max (double a, double b) {
  * Parameters  :
  * Name                           |Da|Unit|Description
  * double  a                       I  N/A  Number
- * double  mod                     I  N/A  Modulo base
+ * double  modNum                  I  N/A  Modulo base
  * Returned value (double)         O  N/A  Modulo
  *****************************************************************************/
-double modulo (double a, double mod) {
-	return a - ((int)(a/mod))*mod;
+double modulo (double a, double modNum) {
+	return a - ((int)(a/modNum))*modNum;
 }
 
 /*****************************************************************************
@@ -3425,30 +6447,35 @@ double scalarProd (double *a, double *b) {
  * Parameters  :
  * Name                           |Da|Unit|Description
  * char  *line                     IO N/A  String to trim
+ * int  length                     I  N/A  Length of input string
  * Returned value (char*)          O  N/A  Pointer to *line
  *****************************************************************************/
-char *trim (char *line) {
-	unsigned int 	i;
-	int 			pos=0;
-	int 			lastnotspace=0;
-	int 			state=0;
-		// 0 -> Trimming first spaces
-		// 1 -> Waiting to end string
+char *trim (char *line, int length) {
+	int 	i;
+	int 	pos=0;
+	int 	lastnotspace=0;
+	int 	state=0;	// 0 -> Trimming first spaces
+						// 1 -> Waiting to end string
 
-	for (i=0;i<strlen(line);i++){
-		if (state==0) {
-			if (line[i]!=' ') {
-				state = 1;
+	for (i=0;i<length;i++){
+		switch(state) {
+			case 0:
+				if (line[i]!=' ') {
+					state = 1;
+					line[pos] = line[i];
+					pos++;
+					lastnotspace = pos;
+				}
+				break;
+			case 1:
 				line[pos] = line[i];
 				pos++;
-				lastnotspace = pos;
-			}
-		} else if (state==1) {
-			line[pos] = line[i];
-			pos++;
-			if (line[i]!=' ' && line[i]!='\n') {
-				lastnotspace = pos;
-			}
+				if (line[i]!=' ' && line[i]!='\n') {
+					lastnotspace = pos;
+				}
+				break;
+			default:
+				break;
 		}
 	}
 	line[lastnotspace]='\0';
@@ -3462,22 +6489,46 @@ char *trim (char *line) {
  * Name                           |Da|Unit|Description
  * char  *out                      O  N/A  Substring
  * char  *line                     I  N/A  Input string
+ * int  linelength                 I  N/A  Length of the input string
  * int  ini                        I  N/A  Initial character position
  * int  length                     I  N/A  Length of the substring
  * Returned value (char*)          O  N/A  Pointer to *out
  *****************************************************************************/
-char *getstr (char *out,char *line,int ini, int length) {
-	int end;
+char *getstr (char *out, char *line, int linelength, int ini, int length) {
 
-	end = strlen(line);
-	if (ini>=end) {
-		out[0]='\0';
-		return &out[0];
+	int 	i,j;
+	int		pos=0;
+	int		maxpos;
+	int 	numCharac;
+
+    if (ini>=linelength) {
+        out[0]='\0';
+        return out;
+    }
+
+	maxpos=ini+length-1;
+
+	for (i=ini;i<=maxpos;i++) {
+		if (line[i]!=' ') {
+			out[0] = line[i];
+			pos=1;
+			i++;
+			break;
+		}
 	}
-	strncpy(out,&line[ini],length);
-	out[length]='\0';
-	trim(out);
-	return &out[0];
+
+	if (line[maxpos]=='\n') maxpos--;
+
+	for (j=maxpos;j>=i;j--) {
+		if (line[j]!=' ') {
+			numCharac=j-i+1;
+			memcpy(&out[1],&line[i],numCharac);
+			out[numCharac+1]='\0';
+			return out;
+		}
+	}
+	out[pos] = '\0';
+    return out;
 }
 
 /*****************************************************************************
@@ -3486,23 +6537,23 @@ char *getstr (char *out,char *line,int ini, int length) {
  * Parameters  :
  * Name                           |Da|Unit|Description
  * char  *line                     I  N/A  Input string
+ * int length                      I  N/A  Length of input string
  * int  *numelements               O  N/A  Number of elements in the string
  * double  *out                    O  N/A  Output vector
  *****************************************************************************/
-void getnumericalelements (char *line, int *numelements, double *datavector) {
-	int i,j,end, counter;
-	int numberstarted; //0-> not reading number (spaces) 1->reading number byte per byte
-	char aux[100];
+void getnumericalelements (char *line, int length, int *numelements, double *datavector) {
+	int 	i,j,counter;
+	int 	numberstarted; //0-> not reading number (spaces) 1->reading number byte per byte
+	char 	aux[100];
 
 	//Initialize variables
 	j = 0;
 	numberstarted = 0;
 	counter = 0;
-	end = strlen(line);
 
 	//Intialize output vector
 		
-	for (i=0;i<end;i++){
+	for (i=0;i<length;i++){
 		if (line[i]!=' ' && line[i]!='\n' && line[i]!=13) {
 			if (numberstarted == 0) {
 				numberstarted = 1;
@@ -3521,86 +6572,103 @@ void getnumericalelements (char *line, int *numelements, double *datavector) {
 	*numelements = counter;
 }
 
+
 /*****************************************************************************
  * Name        : checkConstellationChar
  * Description : Check the given character corresponds to the character of
  *                 a GNSS system
  * Parameters  :
  * Name                            |Da|Unit|Description
- * char c                           I  N/A  Character to be checked for a constellation
+ * char charac                      I  N/A  Character to be checked for a constellation
  * Returned value (int)             O  N/A  0-> Not a valid constellation letter
  *                                          1-> Valid constellation letter
  *****************************************************************************/
-int checkConstellationChar(char c) {
-	if (c!='G' && c!='E' && c!='R' && c!='S' && c!='C' && c!='J' && c!='I') return 0;
-	else return 1;
+int checkConstellationChar(char charac) {
+
+	switch(charac) {
+		case 'G': case 'g': case 'E': case 'e':
+		case 'R': case 'r': case 'S': case 's':
+		case 'C': case 'c': case 'J': case 'j':
+		case 'I': case 'i':
+			return 1;
+			break;
+		default:
+			return 0; 
+			break;
+	}
+	return 0;
 }
+
+/*****************************************************************************
+ * Name        : checkCodelessMeas
+ * Description : Check if the measurement provided is a codeless measurement
+ * Parameters  :
+ * Name                            |Da|Unit|Description
+ * MeasurementType  meas            I  N/A  Measurement type (C1C, C1P...)
+ * Returned value                   O  N/A  0 -> Not a codeless measurement
+ *                                          1 -> Codeless measurement
+ *****************************************************************************/
+int checkCodelessMeas (enum MeasurementType meas) {
+	switch(meas) {
+		case L1N: case D1N: case S1N:
+		case L2N: case D2N: case S2N:
+		case L3N: case D3N: case S3N:
+		case L4N: case D4N: case S4N:
+		case L5N: case D5N: case S5N:
+		case L6N: case D6N: case S6N:
+		case L7N: case D7N: case S7N:
+		case L8N: case D8N: case S8N:
+		case L9N: case D9N: case S9N:
+		case L0N: case D0N: case S0N:
+			return 1;
+			break;
+		default:
+			return 0;
+			break;
+	}
+	return 0;
+}
+
 
 /*****************************************************************************
  * Name        : whatIs
  * Description : Check whether an observation is carrier phase, pseudorange, 
- *               SNR or doppler
+ *               SNR or doppler, including combinations
  * Parameters  :
  * Name                            |Da|Unit|Description
- * MeasurementType  meas            I  N/A  Measurement type (C1P, P1P...)
+ * MeasurementType  meas            I  N/A  Measurement type (C1C, C1P...)
  * Returned value (MeasurementKind) O  N/A  Measurement kind (Pseudorange, CarrierPhase...)
  *****************************************************************************/
 enum MeasurementKind whatIs (enum MeasurementType meas) {
 
-	if (meas == NA) return UNKNOWN_MEAS;
-	else if (meas>=ENDMEAS) {
-		// Combination
-		if (meas == LW || meas == LI || meas == LC || meas == G1C || meas == G1P || meas == G2C || meas == G2P || meas == DF || meas == BW) return CarrierPhase;
-		else if (meas == PW || meas == PI || meas == PC || meas == PCC) return Pseudorange;
-		else return UNKNOWN_MEAS;
-	} else if (((meas-1)%4)==0) return Pseudorange;
-	else if (((meas-2)%4)==0) return CarrierPhase;
-	else if (((meas-3)%4)==0) return Doppler;
-	else if (((meas)%4)==0) return SNR;
-	else return UNKNOWN_MEAS;
-}
-
-/*****************************************************************************
- * Name        : getLambda
- * Description : Get the lambda corresponding to the GNSS and measurement
- * Parameters  :
- * Name                           |Da|Unit|Description
- * GNSSystem  GNSS                 I  N/A  GNSS system
- * MeasurementType  meas           I  N/A  Measurement type
- * Returned value (double)         O  m    Lambda on the measurement
- *****************************************************************************/
-double getLambda (enum GNSSystem GNSS, enum MeasurementType meas) {
-	if (GNSS == GPS) {
-		if (meas <= S1N) return GPSl1;
-		else if (meas <= S2N) return GPSl2;
-		else if (meas <= S5X) return GPSl5;
-	} else if (GNSS == Galileo) {
-		if (meas <= S1N) return GALl1;
-		else if (meas > S2N && meas <= S5X) return GALl5a;
-		else if (meas <= S7X) return GALl5b;
-		else if (meas <= S8X) return GALl5;
-		else if (meas <= S6Z) return GALl6;
-	} else if (GNSS == GLONASS) {
-		return 1;
-	} else if (GNSS == GEO) {
-		if (meas <= S1N) return SBASl1;
-		else if (meas > S2N && meas <= S5X) return SBASl5;
+	switch (meas) {
+		case NA:
+			return UNKNOWN_MEAS;
+			break;
+		case I1: case I2: case I3: case I4: case I5:
+		case I6: case I7: case I8: case I9: case I0:
+			return Ionosphere;
+			break;
+		case X1: case X2: case X3: case X4: case X5:
+		case X6: case X7: case X8: case X9: case X0:
+			return Channels;
+			break;
+		default:
+			if (meas>ENDMEAS) {
+				// Combination
+				if (meas<LW) return Pseudorange;
+				else if (meas<PN12) return CarrierPhase;
+				else if (meas<LW12) return Pseudorange;
+				else if (meas<IF12) return CarrierPhase;
+				//IF, DF or Triple or quadruple combination are not divided in carrier-phase or pseudorange
+				else return UNKNOWN_MEAS;
+			} else if (((meas-1)%4)==0) return Pseudorange;
+			else if (((meas-2)%4)==0) return CarrierPhase;
+			else if (((meas-3)%4)==0) return Doppler;
+			else if (((meas)%4)==0) return SNR;
+			break;
 	}
-
-	return 1;
-}
-
-/*****************************************************************************
- * Name        : getFrequency
- * Description : Get the frequency corresponding to the GNSS and measurement
- * Parameters  :
- * Name                           |Da|Unit|Description
- * GNSSystem  GNSS                 I  N/A  GNSS system
- * MeasurementType  meas           I  N/A  Measurement type
- * Returned value (double)         O  Hz   Frequency of the measurement
- *****************************************************************************/
-double getFrequency (enum GNSSystem GNSS, enum MeasurementType meas) {
-	return c0/getLambda (GNSS,meas);
+	return UNKNOWN_MEAS;
 }
 
 /*****************************************************************************
@@ -3611,25 +6679,703 @@ double getFrequency (enum GNSSystem GNSS, enum MeasurementType meas) {
  * Name                           |Da|Unit|Description
  * MeasurementType  meas           I  N/A  Measurement type
  * Returned value (int)            O  N/A  Frequency identifier of the measurement:
- *							GPS:		'G01' - 1 - L1
- *										'G02' - 2 - L2 
- *										'G05' - 5 - L5
- *							GLONASS:	'R01' - 1 - G1
- *										'R02' - 2 - G2
- *							Galileo:	'E01' - 1 - E1
- *										'E05' - 5 - E5a
- *										'E07' - 7 - E5b
- *										'E08' - 8 - E5 (E5a-E5b)
- *										'E06' - 6 - E56   
+ *                          GPS:        'G01' - 1 - L1
+ *                                      'G02' - 2 - L2 
+ *                                      'G05' - 5 - L5
+ *                          GLONASS:    'R01' - 1 - G1  FDMA
+ *                                      'R02' - 2 - G2  FMDA
+ *                                      'R03' - 3 - G3  CDMA
+ *                                      'R04' - 4 - G1a CDMA
+ *                                      'R06' - 6 - G2a CDMA
+ *                          Galileo:    'E01' - 1 - E1
+ *                                      'E05' - 5 - E5a
+ *                                      'E07' - 7 - E5b
+ *                                      'E08' - 8 - E5 (E5a+E5b)
+ *                                      'E06' - 6 - E56   
+ *                          SBAS:       'S01' - 1 - L1
+ *                                      'S05' - 5 - L5
+ *                          BDS:        'B01' - 1 - B1-2
+ *                                      'B02' - 2 - B1
+ *                                      'B05' - 5 - B2a
+ *                                      'B07' - 7 - B2b
+ *                                      'B08' - 8 - B2
+ *                                      'B06' - 6 - B3
+ *                          QZSS:       'Q01' - 1 - L1
+ *                                      'Q02' - 2 - L2 
+ *                                      'Q05' - 5 - L5
+ *                                      'Q06' - 6 - L6
+ *                          IRNSS:      'I05' - 5 - L5
+ *                                      'I09' - 9 - S
+ *                          -1 -> Invalid measurement or not a measurement with a single frequency
  *****************************************************************************/
 int getFrequencyInt (enum MeasurementType meas) {
-	if (meas <= S1N) return 1;
-	else if (meas <= S2N) return 2;
-	else if (meas <= S5X) return 5;
-	else if (meas <= S7X) return 7;
-	else if (meas <= S8X) return 8;
-	else if (meas <= S6Z) return 6;
-	else return 0;
+
+	#if defined RANGECASEENABLED
+	switch(meas) {
+		case C1A ... S1N: case I1: case X1: case G1:
+			return 1;
+			break;
+		case C2A ... S2N: case I2: case X2: case G2:
+			return 2;
+			break;
+		case C3A ... S3N: case I3: case X3: case G3:
+			return 3;
+			break;
+		case C4A ... S4N: case I4: case X4: case G4:
+			return 4;
+			break;
+		case C5A ... S5N: case I5: case X5: case G5:
+			return 5;
+			break;
+		case C6A ... S6N: case I6: case X6: case G6:
+			return 6;
+			break;
+		case C7A ... S7N: case I7: case X7: case G7:
+			return 7;
+			break;
+		case C8A ... S8N: case I8: case X8: case G8:
+			return 8;
+			break;
+		case C9A ... S9N: case I9: case X9: case G9:
+			return 9;
+			break;
+		case C0A ... S0N: case I0: case X0: case G0:
+			return 0;
+			break;
+		default:
+			return -1;
+			break;
+	}
+	return -1;
+
+	#else
+
+	if (meas <= S1N || meas==I1 || meas==X1 || meas==G1 ) return 1;
+	else if (meas <= S2N || meas==I2 || meas==X2 || meas==G2 ) return 2;
+	else if (meas <= S3N || meas==I3 || meas==X3 || meas==G3 ) return 3;
+	else if (meas <= S4N || meas==I4 || meas==X4 || meas==G4 ) return 4;
+	else if (meas <= S5N || meas==I5 || meas==X5 || meas==G5 ) return 5;
+	else if (meas <= S6N || meas==I6 || meas==X6 || meas==G6 ) return 6;
+	else if (meas <= S7N || meas==I7 || meas==X7 || meas==G7 ) return 7;
+	else if (meas <= S8N || meas==I8 || meas==X8 || meas==G8 ) return 8;
+	else if (meas <= S9N || meas==I9 || meas==X9 || meas==G9 ) return 9;
+	else if (meas <= S0N || meas==I0 || meas==X0 || meas==G0 ) return 0;
+	else return -1;
+	#endif
+}
+
+
+
+/*****************************************************************************
+ * Name        : getFrequencyIntCombinations
+ * Description : Get the integer identifiers values for the frequencies 
+ *               corresponding to the combination (except
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * MeasurementType  meas           I  N/A  Measurement type
+ * int *freq                       O  N/A  Vector with the frequencies
+ * Returned value (int)            O  N/A  0-> Frequencies not found (invalid measurement)
+ *                                         1-> Frequencies found
+ *****************************************************************************/
+int getFrequencyIntCombinations(enum MeasurementType meas, int *freq) {
+
+	int				aux;
+
+	//'char' variable instead of 'int' in order to save memory ('int' is 4 bytes each, 'char' is 1 byte each)
+	const unsigned char		comb2freq1[45]={1,1,1,1,1,1,1,1,1,
+											  2,2,2,2,2,2,2,2,
+												3,3,3,3,3,3,3,
+												  4,4,4,4,4,4,
+													5,5,5,5,5,
+													  6,6,6,6,
+														7,7,7,
+														  8,8,
+															9};
+
+	const unsigned char		comb2freq2[45]={2,3,4,5,6,7,8,9,0,
+											  3,4,5,6,7,8,9,0,
+												4,5,6,7,8,9,0,
+												  5,6,7,8,9,0,
+													6,7,8,9,0,
+													  7,8,9,0,
+														8,9,0,
+														  9,0,
+															0};
+
+	const unsigned char   comb3freq1[360]={ 1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,4,
+											4,4,4,4,4,4,4,4,
+											4,4,4,4,4,4,4,4,
+											4,4,4,4,4,4,4,4,
+											4,4,4,4,4,4,4,4,
+											4,4,4,4,4,4,4,4,
+											4,4,4,4,5,5,5,5,
+											5,5,5,5,5,5,5,5,
+											5,5,5,5,5,5,5,5,
+											5,5,5,5,5,5,5,5,
+											5,5,6,6,6,6,6,6,
+											6,6,6,6,6,6,6,6,
+											6,6,6,6,7,7,7,7,
+											7,7,7,7,7,8,8,8};
+
+	const unsigned char   comb3freq2[360]={ 0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,4,4,4,
+											4,4,4,4,4,4,4,4,
+											4,4,5,5,5,5,5,5,
+											5,5,5,5,5,5,6,6,
+											6,6,6,6,6,6,6,6,
+											6,7,7,7,7,7,7,7,
+											7,7,7,8,8,8,8,8,
+											8,8,8,8,9,9,9,9,
+											9,9,9,9,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,4,
+											4,4,4,4,4,4,4,4,
+											4,4,4,5,5,5,5,5,
+											5,5,5,5,5,5,6,6,
+											6,6,6,6,6,6,6,6,
+											7,7,7,7,7,7,7,7,
+											7,8,8,8,8,8,8,8,
+											8,9,9,9,9,9,9,9,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,4,4,4,4,
+											4,4,4,4,4,4,4,5,
+											5,5,5,5,5,5,5,5,
+											5,6,6,6,6,6,6,6,
+											6,6,7,7,7,7,7,7,
+											7,7,8,8,8,8,8,8,
+											8,9,9,9,9,9,9,0,
+											0,0,0,0,0,0,0,0,
+											0,5,5,5,5,5,5,5,
+											5,5,6,6,6,6,6,6,
+											6,6,7,7,7,7,7,7,
+											7,8,8,8,8,8,8,9,
+											9,9,9,9,0,0,0,0,
+											0,0,0,0,6,6,6,6,
+											6,6,6,7,7,7,7,7,
+											7,8,8,8,8,8,9,9,
+											9,9,0,0,0,0,0,0,
+											7,7,7,7,7,8,8,8,
+											8,9,9,9,0,0,0,0,
+											8,8,8,9,9,0,0,9};
+
+	const unsigned char   comb3freq3[360]={ 1,1,1,1,1,1,1,1,
+											2,3,4,5,6,7,8,9,
+											1,1,1,1,1,1,1,2,
+											2,2,2,2,2,2,2,1,
+											1,1,1,1,1,2,3,3,
+											3,3,3,3,3,1,1,1,
+											1,1,2,3,4,4,4,4,
+											4,4,1,1,1,1,2,3,
+											4,5,5,5,5,5,1,1,
+											1,2,3,4,5,6,6,6,
+											6,1,1,2,3,4,5,6,
+											7,7,7,1,2,3,4,5,
+											6,7,8,8,2,3,4,5,
+											6,7,8,9,2,2,2,2,
+											2,2,2,3,4,5,6,7,
+											8,9,2,2,2,2,2,2,
+											3,3,3,3,3,3,3,2,
+											2,2,2,2,3,4,4,4,
+											4,4,4,2,2,2,2,3,
+											4,5,5,5,5,5,2,2,
+											2,3,4,5,6,6,6,6,
+											2,2,3,4,5,6,7,7,
+											7,2,3,4,5,6,7,8,
+											8,3,4,5,6,7,8,9,
+											3,3,3,3,3,3,4,5,
+											6,7,8,9,3,3,3,3,
+											3,4,4,4,4,4,4,3,
+											3,3,3,4,5,5,5,5,
+											5,3,3,3,4,5,6,6,
+											6,6,3,3,4,5,6,7,
+											7,7,3,4,5,6,7,8,
+											8,4,5,6,7,8,9,4,
+											4,4,4,4,5,6,7,8,
+											9,4,4,4,4,5,5,5,
+											5,5,4,4,4,5,6,6,
+											6,6,4,4,5,6,7,7,
+											7,4,5,6,7,8,8,5,
+											6,7,8,9,5,5,5,5,
+											6,7,8,9,5,5,5,6,
+											6,6,6,5,5,6,7,7,
+											7,5,6,7,8,8,6,7,
+											8,9,6,6,6,7,8,9,
+											6,6,7,7,7,6,7,8,
+											8,7,8,9,7,7,8,9,
+											7,8,8,8,9,8,9,9};
+
+	const unsigned char   comb3freq4[360]={	2,3,4,5,6,7,8,9,
+											0,0,0,0,0,0,0,0,
+											3,4,5,6,7,8,9,0,
+											3,4,5,6,7,8,9,4,
+											5,6,7,8,9,3,0,4,
+											5,6,7,8,9,5,6,7,
+											8,9,4,4,0,5,6,7,
+											8,9,6,7,8,9,5,5,
+											5,0,6,7,8,9,7,8,
+											9,6,6,6,6,0,7,8,
+											9,8,9,7,7,7,7,7,
+											0,8,9,9,8,8,8,8,
+											8,8,0,9,9,9,9,9,
+											9,9,9,0,3,4,5,6,
+											7,8,9,0,0,0,0,0,
+											0,0,4,5,6,7,8,9,
+											0,4,5,6,7,8,9,5,
+											6,7,8,9,4,0,5,6,
+											7,8,9,6,7,8,9,5,
+											5,0,6,7,8,9,7,8,
+											9,6,6,6,0,7,8,9,
+											8,9,7,7,7,7,0,8,
+											9,9,8,8,8,8,8,0,
+											9,9,9,9,9,9,9,0,
+											4,5,6,7,8,9,0,0,
+											0,0,0,0,5,6,7,8,
+											9,0,5,6,7,8,9,6,
+											7,8,9,5,0,6,7,8,
+											9,7,8,9,6,6,0,7,
+											8,9,8,9,7,7,7,0,
+											8,9,9,8,8,8,8,0,
+											9,9,9,9,9,9,0,5,
+											6,7,8,9,0,0,0,0,
+											0,6,7,8,9,0,6,7,
+											8,9,7,8,9,6,0,7,
+											8,9,8,9,7,7,0,8,
+											9,9,8,8,8,0,9,9,
+											9,9,9,0,6,7,8,9,
+											0,0,0,0,7,8,9,0,
+											7,8,9,8,9,7,0,8,
+											9,9,8,8,0,9,9,9,
+											9,0,7,8,9,0,0,0,
+											8,9,0,8,9,9,8,0,
+											9,9,9,0,8,9,0,0,
+											9,0,9,9,0,9,0,0};
+
+
+	const unsigned char   comb4freq1[630]={	1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											4,4,4,4,4,4,4,4,
+											4,4,4,4,4,5,5,5,
+											5,5,5,5,5,5,5,6,
+											6,6,6,6,6,6,6,6,
+											6,6,7,7,7,7,7,7,
+											7,7,7,7,7,7,7,7,
+											7,8,8,8,8,8,8,8,
+											8,8,8,8,8,8,8,8,
+											8,8,8,8,8,8,9,9,
+											9,9,9,9,9,9,9,9,
+											9,9,9,9,9,9,9,9,
+											9,9,9,9,9,9,9,9,
+											9,9,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											4,4,4,4,4,4,4,4,
+											4,4,4,4,4,5,5,5,
+											5,5,5,5,5,5,5,6,
+											6,6,6,6,6,6,6,6,
+											6,6,7,7,7,7,7,7,
+											7,7,7,7,7,7,7,7,
+											7,8,8,8,8,8,8,8,
+											8,8,8,8,8,8,8,8,
+											8,8,8,8,8,8,9,9,
+											9,9,9,9,9,9,9,9,
+											9,9,9,9,9,9,9,9,
+											9,9,9,9,9,9,9,9,
+											9,9,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											1,1,1,1,1,1,1,1,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,3,
+											4,4,4,4,4,4,4,4,
+											4,4,4,4,4,5,5,5,
+											5,5,5,5,5,5,5,6,
+											6,6,6,6,6,6,6,6,
+											6,6,7,7,7,7,7,7,
+											7,7,7,7,7,7,7,7,
+											7,8,8,8,8,8,8,8,
+											8,8,8,8,8,8,8,8,
+											8,8,8,8,8,8,9,9,
+											9,9,9,9,9,9,9,9,
+											9,9,9,9,9,9,9,9,
+											9,9,9,9,9,9,9,9,
+											9,9};
+
+
+	const unsigned char   comb4freq2[630]={	2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,4,4,4,4,
+											4,4,4,4,4,4,5,5,
+											5,5,5,5,6,6,6,7,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,4,
+											4,4,4,4,4,4,4,4,
+											4,5,5,5,5,5,5,6,
+											6,6,7,1,4,4,4,4,
+											4,4,4,4,4,4,5,5,
+											5,5,5,5,6,6,6,7,
+											1,1,2,5,5,5,5,5,
+											5,6,6,6,7,1,1,1,
+											2,2,3,6,6,6,7,1,
+											1,1,1,2,2,2,3,3,
+											4,7,1,1,1,1,1,2,
+											2,2,2,3,3,3,4,4,
+											5,1,1,1,1,1,1,2,
+											2,2,2,2,3,3,3,3,
+											4,4,4,5,5,6,1,1,
+											1,1,1,1,1,2,2,2,
+											2,2,2,3,3,3,3,3,
+											4,4,4,4,5,5,5,6,
+											6,7,
+											3,3,3,3,3,3,4,4,
+											4,4,4,5,5,5,5,6,
+											6,6,7,7,8,4,4,4,
+											4,4,5,5,5,5,6,6,
+											6,7,7,8,5,5,5,5,
+											6,6,6,7,7,8,6,6,
+											6,7,7,8,7,7,8,8,
+											4,4,4,4,4,5,5,5,
+											5,6,6,6,7,7,8,5,
+											5,5,5,6,6,6,7,7,
+											8,6,6,6,7,7,8,7,
+											7,8,8,2,5,5,5,5,
+											6,6,6,7,7,8,6,6,
+											6,7,7,8,7,7,8,8,
+											2,3,3,6,6,6,7,7,
+											8,7,7,8,8,2,3,4,
+											3,4,4,7,7,8,8,2,
+											3,4,5,3,4,5,4,5,
+											5,8,2,3,4,5,6,3,
+											4,5,6,4,5,6,5,6,
+											6,2,3,4,5,6,7,3,
+											4,5,6,7,4,5,6,7,
+											5,6,7,6,7,7,2,3,
+											4,5,6,7,8,3,4,5,
+											6,7,8,4,5,6,7,8,
+											5,6,7,8,6,7,8,7,
+											8,8,
+											4,5,6,7,8,9,5,6,
+											7,8,9,6,7,8,9,7,
+											8,9,8,9,9,5,6,7,
+											8,9,6,7,8,9,7,8,
+											9,8,9,9,6,7,8,9,
+											7,8,9,8,9,9,7,8,
+											9,8,9,9,8,9,9,9,
+											5,6,7,8,9,6,7,8,
+											9,7,8,9,8,9,9,6,
+											7,8,9,7,8,9,8,9,
+											9,7,8,9,8,9,9,8,
+											9,9,9,0,6,7,8,9,
+											7,8,9,8,9,9,7,8,
+											9,8,9,9,8,9,9,9,
+											0,0,0,7,8,9,8,9,
+											9,8,9,9,9,0,0,0,
+											0,0,0,8,9,9,9,0,
+											0,0,0,0,0,0,0,0,
+											0,9,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0};
+
+
+	const unsigned char   comb4freq3[630]={	3,3,3,3,3,3,4,4,
+											4,4,4,5,5,5,5,6,
+											6,6,7,7,8,4,4,4,
+											4,4,5,5,5,5,6,6,
+											6,7,7,8,5,5,5,5,
+											6,6,6,7,7,8,6,6,
+											6,7,7,8,7,7,8,8,
+											4,4,4,4,4,5,5,5,
+											5,6,6,6,7,7,8,5,
+											5,5,5,6,6,6,7,7,
+											8,6,6,6,7,7,8,7,
+											7,8,8,2,5,5,5,5,
+											6,6,6,7,7,8,6,6,
+											6,7,7,8,7,7,8,8,
+											2,3,3,6,6,6,7,7,
+											8,7,7,8,8,2,3,4,
+											3,4,4,7,7,8,8,2,
+											3,4,5,3,4,5,4,5,
+											5,8,2,3,4,5,6,3,
+											4,5,6,4,5,6,5,6,
+											6,2,3,4,5,6,7,3,
+											4,5,6,7,4,5,6,7,
+											5,6,7,6,7,7,2,3,
+											4,5,6,7,8,3,4,5,
+											6,7,8,4,5,6,7,8,
+											5,6,7,8,6,7,8,7,
+											8,8,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,4,4,4,4,
+											4,4,4,4,4,4,5,5,
+											5,5,5,5,6,6,6,7,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,4,
+											4,4,4,4,4,4,4,4,
+											4,5,5,5,5,5,5,6,
+											6,6,7,1,4,4,4,4,
+											4,4,4,4,4,4,5,5,
+											5,5,5,5,6,6,6,7,
+											1,1,2,5,5,5,5,5,
+											5,6,6,6,7,1,1,1,
+											2,2,3,6,6,6,7,1,
+											1,1,1,2,2,2,3,3,
+											4,7,1,1,1,1,1,2,
+											2,2,2,3,3,3,4,4,
+											5,1,1,1,1,1,1,2,
+											2,2,2,2,3,3,3,3,
+											4,4,4,5,5,6,1,1,
+											1,1,1,1,1,2,2,2,
+											2,2,2,3,3,3,3,3,
+											4,4,4,4,5,5,5,6,
+											6,7,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,2,2,2,
+											2,2,2,2,2,3,3,3,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,4,4,4,4,
+											4,4,4,4,4,4,5,5,
+											5,5,5,5,6,6,6,7,
+											3,3,3,3,3,3,3,3,
+											3,3,3,3,3,3,3,4,
+											4,4,4,4,4,4,4,4,
+											4,5,5,5,5,5,5,6,
+											6,6,7,1,4,4,4,4,
+											4,4,4,4,4,4,5,5,
+											5,5,5,5,6,6,6,7,
+											1,1,2,5,5,5,5,5,
+											5,6,6,6,7,1,1,1,
+											2,2,3,6,6,6,7,1,
+											1,1,1,2,2,2,3,3,
+											4,7,1,1,1,1,1,2,
+											2,2,2,3,3,3,4,4,
+											5,1,1,1,1,1,1,2,
+											2,2,2,2,3,3,3,3,
+											4,4,4,5,5,6,1,1,
+											1,1,1,1,1,2,2,2,
+											2,2,2,3,3,3,3,3,
+											4,4,4,4,5,5,5,6,
+											6,7};
+
+	const unsigned char   comb4freq4[630]={	4,5,6,7,8,9,5,6,
+											7,8,9,6,7,8,9,7,
+											8,9,8,9,9,5,6,7,
+											8,9,6,7,8,9,7,8,
+											9,8,9,9,6,7,8,9,
+											7,8,9,8,9,9,7,8,
+											9,8,9,9,8,9,9,9,
+											5,6,7,8,9,6,7,8,
+											9,7,8,9,8,9,9,6,
+											7,8,9,7,8,9,8,9,
+											9,7,8,9,8,9,9,8,
+											9,9,9,0,6,7,8,9,
+											7,8,9,8,9,9,7,8,
+											9,8,9,9,8,9,9,9,
+											0,0,0,7,8,9,8,9,
+											9,8,9,9,9,0,0,0,
+											0,0,0,8,9,9,9,0,
+											0,0,0,0,0,0,0,0,
+											0,9,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,
+											4,5,6,7,8,9,5,6,
+											7,8,9,6,7,8,9,7,
+											8,9,8,9,9,5,6,7,
+											8,9,6,7,8,9,7,8,
+											9,8,9,9,6,7,8,9,
+											7,8,9,8,9,9,7,8,
+											9,8,9,9,8,9,9,9,
+											5,6,7,8,9,6,7,8,
+											9,7,8,9,8,9,9,6,
+											7,8,9,7,8,9,8,9,
+											9,7,8,9,8,9,9,8,
+											9,9,9,0,6,7,8,9,
+											7,8,9,8,9,9,7,8,
+											9,8,9,9,8,9,9,9,
+											0,0,0,7,8,9,8,9,
+											9,8,9,9,9,0,0,0,
+											0,0,0,8,9,9,9,0,
+											0,0,0,0,0,0,0,0,
+											0,9,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,0,0,0,0,0,0,
+											0,0,
+											3,3,3,3,3,3,4,4,
+											4,4,4,5,5,5,5,6,
+											6,6,7,7,8,4,4,4,
+											4,4,5,5,5,5,6,6,
+											6,7,7,8,5,5,5,5,
+											6,6,6,7,7,8,6,6,
+											6,7,7,8,7,7,8,8,
+											4,4,4,4,4,5,5,5,
+											5,6,6,6,7,7,8,5,
+											5,5,5,6,6,6,7,7,
+											8,6,6,6,7,7,8,7,
+											7,8,8,2,5,5,5,5,
+											6,6,6,7,7,8,6,6,
+											6,7,7,8,7,7,8,8,
+											2,3,3,6,6,6,7,7,
+											8,7,7,8,8,2,3,4,
+											3,4,4,7,7,8,8,2,
+											3,4,5,3,4,5,4,5,
+											5,8,2,3,4,5,6,3,
+											4,5,6,4,5,6,5,6,
+											6,2,3,4,5,6,7,3,
+											4,5,6,7,4,5,6,7,
+											5,6,7,6,7,7,2,3,
+											4,5,6,7,8,3,4,5,
+											6,7,8,4,5,6,7,8,
+											5,6,7,8,6,7,8,7,
+											8,8};
+
+
+	if(meas<G1){
+		//Not a combination 
+		//Old gLAB combination format (such as PC) would fall in here, but these will never trigger as
+		//the moment this old format is read, it is changed to the new format
+		freq[0]=getFrequencyInt(meas);
+		return 1;
+	} else if (meas<PN12) {
+		//Graphic combination
+		freq[0]=getFrequencyInt(meas);
+		freq[1]=freq[0];
+		return 1;
+	} else if (meas<DF21) {
+		//Dual frequency combination and less than DF21
+		aux=meas-PN12;
+		freq[0]=(int)comb2freq1[aux%45];
+		freq[1]=(int)comb2freq2[aux%45];
+		return 1;
+	} else if (meas<IGF1012) {
+		//Dual frequency combination and above DF21
+		aux=meas-PN12;
+		freq[0]=(int)comb2freq2[aux%45];
+		freq[1]=(int)comb2freq1[aux%45];
+		return 1;
+	} else if (meas<SIF1012) {
+		//Triple frequency combination Iono-Geometry Free
+		aux=meas-IGF1012;
+		freq[0]=(int)comb3freq1[aux%360];
+		freq[1]=(int)comb3freq2[aux%360];
+		freq[2]=(int)comb3freq3[aux%360];
+		freq[3]=(int)comb3freq4[aux%360];
+		return 1;
+	} else if (meas<IGF1234) {
+		//Triple frequency combination Iono 1st and 2nd term free
+		aux=meas-SIF1012;
+		freq[0]=(int)comb3freq1[aux%360];
+		freq[1]=(int)comb3freq2[aux%360];
+		freq[2]=(int)comb3freq3[aux%360];
+		freq[3]=(int)comb3freq4[aux%360];
+		return 1;
+	} else if (meas<SIF1234) {
+		//Quadruple frequency combination Iono-Geometry Free
+		aux=meas-IGF1234;
+		freq[0]=(int)comb4freq1[aux%630];
+		freq[1]=(int)comb4freq2[aux%630];
+		freq[2]=(int)comb4freq3[aux%630];
+		freq[3]=(int)comb4freq4[aux%630];
+		return 1;
+	} else {
+		//Quadruple frequency combination Iono 1st and 2nd term free
+		aux=meas-SIF1234;
+		freq[0]=(int)comb4freq1[aux%630];
+		freq[1]=(int)comb4freq2[aux%630];
+		freq[2]=(int)comb4freq3[aux%630];
+		freq[3]=(int)comb4freq4[aux%630];
+		return 1;
+	}
+	return 0;
+
 }
 
 /*****************************************************************************
@@ -3641,52 +7387,909 @@ int getFrequencyInt (enum MeasurementType meas) {
  * Returned value (MeasurementType) O  N/A  Measurement type
  *****************************************************************************/
 enum MeasurementType measstr2meastype (char *str) {
-	// Possible options:
-	//    1st digit: C,L,D,S,P,G,B   [7]
-	//    2nd digit: 1,2,5,6,7,8,W,I,C,F    [10]
-	//    3rd digit: <empty>,A,B,C,D,I,L,M,N,P,Q,S,W,X,Y,Z   [16]
+	// Possible option (single measurements, graphic and old two letter combinations):
+	//    1st digit: C,L,D,S,P,G,M,I,X  [9]
+	//    2nd digit: 1,2,3,4,5,6,7,8,9,0,W,I,C,F,N    [15]
+	//    3rd digit: <empty>,A,B,C,D,E,S,L,I,Q,X,P,W,Y,Z,M,N   [17]
+
+	// Possible option (dual frequency combinations):
+	//    1st digit: P,L,M,D,I [5]
+	//    2nd digit: W,I,C,F,N [5]
+	//    3rd digit: 1,2,3,4,5,6,7,8,9,0 [10]
+	//    4th digit: 1,2,3,4,5,6,7,8,9,0 [10]
+
+	// Possible option (triple frequency combinations):
+	//    1st digit: I,S [2]
+	//    2nd digit: G,I [2]
+	//    3rd digit: F [1]
+	//    4th digit: 1,2,3,4,5,6,7,8,9,0 [10]
+	//    5th digit: 1,2,3,4,5,6,7,8,9,0 [10]
+	//    6th digit: 1,2,3,4,5,6,7,8,9,0 [10]
+	//    7th digit: 1,2,3,4,5,6,7,8,9,0 [10]
 
 	//This function is entered in single processing mode (at least the first time), and only the
 	//first time the static variables are initialized, therefore there will be no race conditions
-
 	static int	initialized = 0;
-	static enum MeasurementType	s2t[7][10][16];
-	int 		a1,a2,a3;
+	static enum MeasurementType	s2t[9][15][17];
+	static enum MeasurementType comb2freq[5][5][10][10];
+	static enum MeasurementType comb3freq[2][2][1][10][10][10][10];
+	int 		a1,a2,a3,a4,a5,a6,a7,len;
+	char		freqletter;
 
 	if (!initialized) {
-		for (a1=0;a1<7;a1++) {
-			for (a2=0;a2<10;a2++) {
-				for (a3=0;a3<16;a3++) {
+		//Single frequency combinations
+		for (a1=0;a1<9;a1++) {
+			for (a2=0;a2<15;a2++) {
+				for (a3=0;a3<17;a3++) {
 					s2t[a1][a2][a3] = NA;
 				}
 			}
 		}
 
-		// Combinations
-		s2t[1][6][0] = LW;
-		s2t[4][6][0] = PW;
-		s2t[6][6][0] = BW;
-		s2t[1][7][0] = LI;
-		s2t[4][7][0] = PI;
-		s2t[1][8][0] = LC;
-		s2t[4][8][0] = PC;
-		s2t[4][8][3] = PCC;
-		s2t[5][0][3] = G1C;
-		s2t[5][0][9] = G1P;
-		s2t[5][1][3] = G2C;
-		s2t[5][1][9] = G2P;
-		s2t[2][9][0] = DF;
-		
-		////// Automatically generated code block /////
-		// RINEX 3.00
-		s2t[0][0][1] = C1A; s2t[1][0][1] = L1A; s2t[2][0][1] = D1A; s2t[3][0][1] = S1A; s2t[0][0][2] = C1B; s2t[1][0][2] = L1B; s2t[2][0][2] = D1B; s2t[3][0][2] = S1B; s2t[0][0][3] = C1C; s2t[1][0][3] = L1C; s2t[2][0][3] = D1C; s2t[3][0][3] = S1C; s2t[0][0][9] = C1P; s2t[1][0][9] = L1P; s2t[2][0][9] = D1P; s2t[3][0][9] = S1P; s2t[0][0][12] = C1W; s2t[1][0][12] = L1W; s2t[2][0][12] = D1W; s2t[3][0][12] = S1W; s2t[0][0][13] = C1X; s2t[1][0][13] = L1X; s2t[2][0][13] = D1X; s2t[3][0][13] = S1X; s2t[0][0][14] = C1Y; s2t[1][0][14] = L1Y; s2t[2][0][14] = D1Y; s2t[3][0][14] = S1Y; s2t[0][0][15] = C1Z; s2t[1][0][15] = L1Z; s2t[2][0][15] = D1Z; s2t[3][0][15] = S1Z; s2t[0][0][7] = C1M; s2t[1][0][7] = L1M; s2t[2][0][7] = D1M; s2t[3][0][7] = S1M; s2t[1][0][8] = L1N; s2t[2][0][8] = D1N; s2t[3][0][8] = S1N;
-		s2t[0][1][3] = C2C; s2t[1][1][3] = L2C; s2t[2][1][3] = D2C; s2t[3][1][3] = S2C; s2t[0][1][4] = C2D; s2t[1][1][4] = L2D; s2t[2][1][4] = D2D; s2t[3][1][4] = S2D; s2t[0][1][11] = C2S; s2t[1][1][11] = L2S; s2t[2][1][11] = D2S; s2t[3][1][11] = S2S; s2t[0][1][6] = C2L; s2t[1][1][6] = L2L; s2t[2][1][6] = D2L; s2t[3][1][6] = S2L; s2t[0][1][13] = C2X; s2t[1][1][13] = L2X; s2t[2][1][13] = D2X; s2t[3][1][13] = S2X; s2t[0][1][9] = C2P; s2t[1][1][9] = L2P; s2t[2][1][9] = D2P; s2t[3][1][9] = S2P; s2t[0][1][12] = C2W; s2t[1][1][12] = L2W; s2t[2][1][12] = D2W; s2t[3][1][12] = S2W; s2t[0][1][14] = C2Y; s2t[1][1][14] = L2Y; s2t[2][1][14] = D2Y; s2t[3][1][14] = S2Y; s2t[0][1][7] = C2M; s2t[1][1][7] = L2M; s2t[2][1][7] = D2M; s2t[3][1][7] = S2M; s2t[1][1][8] = L2N; s2t[2][1][8] = D2N; s2t[3][1][8] = S2N;
-		s2t[0][2][5] = C5I; s2t[1][2][5] = L5I; s2t[2][2][5] = D5I; s2t[3][2][5] = S5I; s2t[0][2][10] = C5Q; s2t[1][2][10] = L5Q; s2t[2][2][10] = D5Q; s2t[3][2][10] = S5Q; s2t[0][2][13] = C5X; s2t[1][2][13] = L5X; s2t[2][2][13] = D5X; s2t[3][2][13] = S5X;
-		s2t[0][4][5] = C7I; s2t[1][4][5] = L7I; s2t[2][4][5] = D7I; s2t[3][4][5] = S7I; s2t[0][4][10] = C7Q; s2t[1][4][10] = L7Q; s2t[2][4][10] = D7Q; s2t[3][4][10] = S7Q; s2t[0][4][13] = C7X; s2t[1][4][13] = L7X; s2t[2][4][13] = D7X; s2t[3][4][13] = S7X;
-		s2t[0][5][5] = C8I; s2t[1][5][5] = L8I; s2t[2][5][5] = D8I; s2t[3][5][5] = S8I; s2t[0][5][10] = C8Q; s2t[1][5][10] = L8Q; s2t[2][5][10] = D8Q; s2t[3][5][10] = S8Q; s2t[0][5][13] = C8X; s2t[1][5][13] = L8X; s2t[2][5][13] = D8X; s2t[3][5][13] = S8X;
-		s2t[0][3][1] = C6A; s2t[1][3][1] = L6A; s2t[2][3][1] = D6A; s2t[3][3][1] = S6A; s2t[0][3][2] = C6B; s2t[1][3][2] = L6B; s2t[2][3][2] = D6B; s2t[3][3][2] = S6B; s2t[0][3][3] = C6C; s2t[1][3][3] = L6C; s2t[2][3][3] = D6C; s2t[3][3][3] = S6C; s2t[0][3][13] = C6X; s2t[1][3][13] = L6X; s2t[2][3][13] = D6X; s2t[3][3][13] = S6X; s2t[0][3][15] = C6Z; s2t[1][3][15] = L6Z; s2t[2][3][15] = D6Z; s2t[3][3][15] = S6Z;
-		////// End of automatically generated code block /////
+		//Dual frequency combinations (except graphic combinations)
+		for (a1=0;a1<5;a1++) {
+			for (a2=0;a2<5;a2++) {
+				for (a3=0;a3<10;a3++) {
+					for (a4=0;a4<10;a4++) {
+						comb2freq[a1][a2][a3][a4] = NA;
+					}
+				}
+			}
+		}
 
+		//Triple frequency combinations
+		for (a1=0;a1<2;a1++) {
+			for (a2=0;a2<2;a2++) {
+				for (a3=0;a3<1;a3++) {
+					for (a4=0;a4<10;a4++) {
+						for (a5=0;a5<10;a5++) {
+							for (a6=0;a6<10;a6++) {
+								for (a7=0;a7<10;a7++) {
+									comb3freq[a1][a2][a3][a4][a5][a6][a7] = NA;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Two letter combinations (for compatibility with older versions)
+		s2t[1][10][0]  = LW12; 	//Old LW     for GPS
+		s2t[4][10][0]  = PN12; 	//Old PW     for GPS
+		s2t[4][14][0]  = PN12; 	//Old PN     for GPS
+		s2t[6][10][0]  = MW12;	//Old MW/BW  for GPS
+		s2t[1][11][0]  = LI12;	//Old LI     for GPS
+		s2t[4][11][0]  = PI12;	//Old PI     for GPS
+		s2t[1][12][0]  = LC12;	//Old LC     for GPS
+		s2t[4][12][0]  = PC12;	//Old PC     for GPS
+		s2t[4][12][3]  = PC12;	//Old PCC    for GPS
+		s2t[7][13][0]  = IF12; 	//Old IF     for GPS
+		s2t[2][13][0]  = DF12; 	//Old DF     for GPS
+
+		// Graphic combinations
+		s2t[5][0][0] = G1; s2t[5][0][3] = G1; /*old G1C*/ s2t[5][0][11] = G1; /*old G1P*/
+		s2t[5][1][0] = G2; s2t[5][1][3] = G2; /*old G2C*/ s2t[5][1][11] = G2; /*old G2P*/
+		s2t[5][2][0] = G3;
+		s2t[5][3][0] = G4;
+		s2t[5][4][0] = G5;
+		s2t[5][5][0] = G6;
+		s2t[5][6][0] = G7;
+		s2t[5][7][0] = G8;
+		s2t[5][8][0] = G9;
+		s2t[5][9][0] = G0;
+
+
+		//Ionosphere measurements
+		s2t[7][0][0]  = I1;
+		s2t[7][1][0]  = I2;
+		s2t[7][2][0]  = I3;
+		s2t[7][3][0]  = I4;
+		s2t[7][4][0]  = I5;
+		s2t[7][5][0]  = I6;
+		s2t[7][6][0]  = I7;
+		s2t[7][7][0]  = I8;
+		s2t[7][8][0]  = I9;
+		s2t[7][9][0]  = I0;
+
+		//Receiver channel numbers
+		s2t[8][0][0]  = X1;
+		s2t[8][1][0]  = X2;
+		s2t[8][2][0]  = X3;
+		s2t[8][3][0]  = X4;
+		s2t[8][4][0]  = X5;
+		s2t[8][5][0]  = X6;
+		s2t[8][6][0]  = X7;
+		s2t[8][7][0]  = X8;
+		s2t[8][8][0]  = X9;
+		s2t[8][9][0]  = X0;
+		
+		////// Automatically generated code block for non-combinations/////
+		s2t[0][0][1]  = C1A;	s2t[1][0][1]  = L1A;	s2t[2][0][1]  = D1A;	s2t[3][0][1]  = S1A;
+		s2t[0][0][2]  = C1B;	s2t[1][0][2]  = L1B;	s2t[2][0][2]  = D1B;	s2t[3][0][2]  = S1B;
+		s2t[0][0][3]  = C1C;	s2t[1][0][3]  = L1C;	s2t[2][0][3]  = D1C;	s2t[3][0][3]  = S1C;
+		s2t[0][0][4]  = C1D;	s2t[1][0][4]  = L1D;	s2t[2][0][4]  = D1D;	s2t[3][0][4]  = S1D;
+		s2t[0][0][5]  = C1E;	s2t[1][0][5]  = L1E;	s2t[2][0][5]  = D1E;	s2t[3][0][5]  = S1E;
+		s2t[0][0][6]  = C1S;	s2t[1][0][6]  = L1S;	s2t[2][0][6]  = D1S;	s2t[3][0][6]  = S1S;
+		s2t[0][0][7]  = C1L;	s2t[1][0][7]  = L1L;	s2t[2][0][7]  = D1L;	s2t[3][0][7]  = S1L;
+		s2t[0][0][8]  = C1I;	s2t[1][0][8]  = L1I;	s2t[2][0][8]  = D1I;	s2t[3][0][8]  = S1I;
+		s2t[0][0][9]  = C1Q;	s2t[1][0][9]  = L1Q;	s2t[2][0][9]  = D1Q;	s2t[3][0][9]  = S1Q;
+		s2t[0][0][10] = C1X;	s2t[1][0][10] = L1X;	s2t[2][0][10] = D1X;	s2t[3][0][10] = S1X;
+		s2t[0][0][11] = C1P;	s2t[1][0][11] = L1P;	s2t[2][0][11] = D1P;	s2t[3][0][11] = S1P;
+		s2t[0][0][12] = C1W;	s2t[1][0][12] = L1W;	s2t[2][0][12] = D1W;	s2t[3][0][12] = S1W;
+		s2t[0][0][13] = C1Y;	s2t[1][0][13] = L1Y;	s2t[2][0][13] = D1Y;	s2t[3][0][13] = S1Y;
+		s2t[0][0][14] = C1Z;	s2t[1][0][14] = L1Z;	s2t[2][0][14] = D1Z;	s2t[3][0][14] = S1Z;
+		s2t[0][0][15] = C1M;	s2t[1][0][15] = L1M;	s2t[2][0][15] = D1M;	s2t[3][0][15] = S1M;
+								s2t[1][0][16] = L1N;	s2t[2][0][16] = D1N;	s2t[3][0][16] = S1N;
+		s2t[0][1][1]  = C2A;	s2t[1][1][1]  = L2A;	s2t[2][1][1]  = D2A;	s2t[3][1][1]  = S2A;
+		s2t[0][1][2]  = C2B;	s2t[1][1][2]  = L2B;	s2t[2][1][2]  = D2B;	s2t[3][1][2]  = S2B;
+		s2t[0][1][3]  = C2C;	s2t[1][1][3]  = L2C;	s2t[2][1][3]  = D2C;	s2t[3][1][3]  = S2C;
+		s2t[0][1][4]  = C2D;	s2t[1][1][4]  = L2D;	s2t[2][1][4]  = D2D;	s2t[3][1][4]  = S2D;
+		s2t[0][1][5]  = C2E;	s2t[1][1][5]  = L2E;	s2t[2][1][5]  = D2E;	s2t[3][1][5]  = S2E;
+		s2t[0][1][6]  = C2S;	s2t[1][1][6]  = L2S;	s2t[2][1][6]  = D2S;	s2t[3][1][6]  = S2S;
+		s2t[0][1][7]  = C2L;	s2t[1][1][7]  = L2L;	s2t[2][1][7]  = D2L;	s2t[3][1][7]  = S2L;
+		s2t[0][1][8]  = C2I;	s2t[1][1][8]  = L2I;	s2t[2][1][8]  = D2I;	s2t[3][1][8]  = S2I;
+		s2t[0][1][9]  = C2Q;	s2t[1][1][9]  = L2Q;	s2t[2][1][9]  = D2Q;	s2t[3][1][9]  = S2Q;
+		s2t[0][1][10] = C2X;	s2t[1][1][10] = L2X;	s2t[2][1][10] = D2X;	s2t[3][1][10] = S2X;
+		s2t[0][1][11] = C2P;	s2t[1][1][11] = L2P;	s2t[2][1][11] = D2P;	s2t[3][1][11] = S2P;
+		s2t[0][1][12] = C2W;	s2t[1][1][12] = L2W;	s2t[2][1][12] = D2W;	s2t[3][1][12] = S2W;
+		s2t[0][1][13] = C2Y;	s2t[1][1][13] = L2Y;	s2t[2][1][13] = D2Y;	s2t[3][1][13] = S2Y;
+		s2t[0][1][14] = C2Z;	s2t[1][1][14] = L2Z;	s2t[2][1][14] = D2Z;	s2t[3][1][14] = S2Z;
+		s2t[0][1][15] = C2M;	s2t[1][1][15] = L2M;	s2t[2][1][15] = D2M;	s2t[3][1][15] = S2M;
+								s2t[1][1][16] = L2N;	s2t[2][1][16] = D2N;	s2t[3][1][16] = S2N;
+		s2t[0][2][1]  = C3A;	s2t[1][2][1]  = L3A;	s2t[2][2][1]  = D3A;	s2t[3][2][1]  = S3A;
+		s2t[0][2][2]  = C3B;	s2t[1][2][2]  = L3B;	s2t[2][2][2]  = D3B;	s2t[3][2][2]  = S3B;
+		s2t[0][2][3]  = C3C;	s2t[1][2][3]  = L3C;	s2t[2][2][3]  = D3C;	s2t[3][2][3]  = S3C;
+		s2t[0][2][4]  = C3D;	s2t[1][2][4]  = L3D;	s2t[2][2][4]  = D3D;	s2t[3][2][4]  = S3D;
+		s2t[0][2][5]  = C3E;	s2t[1][2][5]  = L3E;	s2t[2][2][5]  = D3E;	s2t[3][2][5]  = S3E;
+		s2t[0][2][6]  = C3S;	s2t[1][2][6]  = L3S;	s2t[2][2][6]  = D3S;	s2t[3][2][6]  = S3S;
+		s2t[0][2][7]  = C3L;	s2t[1][2][7]  = L3L;	s2t[2][2][7]  = D3L;	s2t[3][2][7]  = S3L;
+		s2t[0][2][8]  = C3I;	s2t[1][2][8]  = L3I;	s2t[2][2][8]  = D3I;	s2t[3][2][8]  = S3I;
+		s2t[0][2][9]  = C3Q;	s2t[1][2][9]  = L3Q;	s2t[2][2][9]  = D3Q;	s2t[3][2][9]  = S3Q;
+		s2t[0][2][10] = C3X;	s2t[1][2][10] = L3X;	s2t[2][2][10] = D3X;	s2t[3][2][10] = S3X;
+		s2t[0][2][11] = C3P;	s2t[1][2][11] = L3P;	s2t[2][2][11] = D3P;	s2t[3][2][11] = S3P;
+		s2t[0][2][12] = C3W;	s2t[1][2][12] = L3W;	s2t[2][2][12] = D3W;	s2t[3][2][12] = S3W;
+		s2t[0][2][13] = C3Y;	s2t[1][2][13] = L3Y;	s2t[2][2][13] = D3Y;	s2t[3][2][13] = S3Y;
+		s2t[0][2][14] = C3Z;	s2t[1][2][14] = L3Z;	s2t[2][2][14] = D3Z;	s2t[3][2][14] = S3Z;
+		s2t[0][2][15] = C3M;	s2t[1][2][15] = L3M;	s2t[2][2][15] = D3M;	s2t[3][2][15] = S3M;
+								s2t[1][2][16] = L3N;	s2t[2][2][16] = D3N;	s2t[3][2][16] = S3N;
+		s2t[0][3][1]  = C4A;	s2t[1][3][1]  = L4A;	s2t[2][3][1]  = D4A;	s2t[3][3][1]  = S4A;
+		s2t[0][3][2]  = C4B;	s2t[1][3][2]  = L4B;	s2t[2][3][2]  = D4B;	s2t[3][3][2]  = S4B;
+		s2t[0][3][3]  = C4C;	s2t[1][3][3]  = L4C;	s2t[2][3][3]  = D4C;	s2t[3][3][3]  = S4C;
+		s2t[0][3][4]  = C4D;	s2t[1][3][4]  = L4D;	s2t[2][3][4]  = D4D;	s2t[3][3][4]  = S4D;
+		s2t[0][3][5]  = C4E;	s2t[1][3][5]  = L4E;	s2t[2][3][5]  = D4E;	s2t[3][3][5]  = S4E;
+		s2t[0][3][6]  = C4S;	s2t[1][3][6]  = L4S;	s2t[2][3][6]  = D4S;	s2t[3][3][6]  = S4S;
+		s2t[0][3][7]  = C4L;	s2t[1][3][7]  = L4L;	s2t[2][3][7]  = D4L;	s2t[3][3][7]  = S4L;
+		s2t[0][3][8]  = C4I;	s2t[1][3][8]  = L4I;	s2t[2][3][8]  = D4I;	s2t[3][3][8]  = S4I;
+		s2t[0][3][9]  = C4Q;	s2t[1][3][9]  = L4Q;	s2t[2][3][9]  = D4Q;	s2t[3][3][9]  = S4Q;
+		s2t[0][3][10] = C4X;	s2t[1][3][10] = L4X;	s2t[2][3][10] = D4X;	s2t[3][3][10] = S4X;
+		s2t[0][3][11] = C4P;	s2t[1][3][11] = L4P;	s2t[2][3][11] = D4P;	s2t[3][3][11] = S4P;
+		s2t[0][3][12] = C4W;	s2t[1][3][12] = L4W;	s2t[2][3][12] = D4W;	s2t[3][3][12] = S4W;
+		s2t[0][3][13] = C4Y;	s2t[1][3][13] = L4Y;	s2t[2][3][13] = D4Y;	s2t[3][3][13] = S4Y;
+		s2t[0][3][14] = C4Z;	s2t[1][3][14] = L4Z;	s2t[2][3][14] = D4Z;	s2t[3][3][14] = S4Z;
+		s2t[0][3][15] = C4M;	s2t[1][3][15] = L4M;	s2t[2][3][15] = D4M;	s2t[3][3][15] = S4M;
+								s2t[1][3][16] = L4N;	s2t[2][3][16] = D4N;	s2t[3][3][16] = S4N;
+		s2t[0][4][1]  = C5A;	s2t[1][4][1]  = L5A;	s2t[2][4][1]  = D5A;	s2t[3][4][1]  = S5A;
+		s2t[0][4][2]  = C5B;	s2t[1][4][2]  = L5B;	s2t[2][4][2]  = D5B;	s2t[3][4][2]  = S5B;
+		s2t[0][4][3]  = C5C;	s2t[1][4][3]  = L5C;	s2t[2][4][3]  = D5C;	s2t[3][4][3]  = S5C;
+		s2t[0][4][4]  = C5D;	s2t[1][4][4]  = L5D;	s2t[2][4][4]  = D5D;	s2t[3][4][4]  = S5D;
+		s2t[0][4][5]  = C5E;	s2t[1][4][5]  = L5E;	s2t[2][4][5]  = D5E;	s2t[3][4][5]  = S5E;
+		s2t[0][4][6]  = C5S;	s2t[1][4][6]  = L5S;	s2t[2][4][6]  = D5S;	s2t[3][4][6]  = S5S;
+		s2t[0][4][7]  = C5L;	s2t[1][4][7]  = L5L;	s2t[2][4][7]  = D5L;	s2t[3][4][7]  = S5L;
+		s2t[0][4][8]  = C5I;	s2t[1][4][8]  = L5I;	s2t[2][4][8]  = D5I;	s2t[3][4][8]  = S5I;
+		s2t[0][4][9]  = C5Q;	s2t[1][4][9]  = L5Q;	s2t[2][4][9]  = D5Q;	s2t[3][4][9]  = S5Q;
+		s2t[0][4][10] = C5X;	s2t[1][4][10] = L5X;	s2t[2][4][10] = D5X;	s2t[3][4][10] = S5X;
+		s2t[0][4][11] = C5P;	s2t[1][4][11] = L5P;	s2t[2][4][11] = D5P;	s2t[3][4][11] = S5P;
+		s2t[0][4][12] = C5W;	s2t[1][4][12] = L5W;	s2t[2][4][12] = D5W;	s2t[3][4][12] = S5W;
+		s2t[0][4][13] = C5Y;	s2t[1][4][13] = L5Y;	s2t[2][4][13] = D5Y;	s2t[3][4][13] = S5Y;
+		s2t[0][4][14] = C5Z;	s2t[1][4][14] = L5Z;	s2t[2][4][14] = D5Z;	s2t[3][4][14] = S5Z;
+		s2t[0][4][15] = C5M;	s2t[1][4][15] = L5M;	s2t[2][4][15] = D5M;	s2t[3][4][15] = S5M;
+								s2t[1][4][16] = L5N;	s2t[2][4][16] = D5N;	s2t[3][4][16] = S5N;
+		s2t[0][5][1]  = C6A;	s2t[1][5][1]  = L6A;	s2t[2][5][1]  = D6A;	s2t[3][5][1]  = S6A;
+		s2t[0][5][2]  = C6B;	s2t[1][5][2]  = L6B;	s2t[2][5][2]  = D6B;	s2t[3][5][2]  = S6B;
+		s2t[0][5][3]  = C6C;	s2t[1][5][3]  = L6C;	s2t[2][5][3]  = D6C;	s2t[3][5][3]  = S6C;
+		s2t[0][5][4]  = C6D;	s2t[1][5][4]  = L6D;	s2t[2][5][4]  = D6D;	s2t[3][5][4]  = S6D;
+		s2t[0][5][5]  = C6E;	s2t[1][5][5]  = L6E;	s2t[2][5][5]  = D6E;	s2t[3][5][5]  = S6E;
+		s2t[0][5][6]  = C6S;	s2t[1][5][6]  = L6S;	s2t[2][5][6]  = D6S;	s2t[3][5][6]  = S6S;
+		s2t[0][5][7]  = C6L;	s2t[1][5][7]  = L6L;	s2t[2][5][7]  = D6L;	s2t[3][5][7]  = S6L;
+		s2t[0][5][8]  = C6I;	s2t[1][5][8]  = L6I;	s2t[2][5][8]  = D6I;	s2t[3][5][8]  = S6I;
+		s2t[0][5][9]  = C6Q;	s2t[1][5][9]  = L6Q;	s2t[2][5][9]  = D6Q;	s2t[3][5][9]  = S6Q;
+		s2t[0][5][10] = C6X;	s2t[1][5][10] = L6X;	s2t[2][5][10] = D6X;	s2t[3][5][10] = S6X;
+		s2t[0][5][11] = C6P;	s2t[1][5][11] = L6P;	s2t[2][5][11] = D6P;	s2t[3][5][11] = S6P;
+		s2t[0][5][12] = C6W;	s2t[1][5][12] = L6W;	s2t[2][5][12] = D6W;	s2t[3][5][12] = S6W;
+		s2t[0][5][13] = C6Y;	s2t[1][5][13] = L6Y;	s2t[2][5][13] = D6Y;	s2t[3][5][13] = S6Y;
+		s2t[0][5][14] = C6Z;	s2t[1][5][14] = L6Z;	s2t[2][5][14] = D6Z;	s2t[3][5][14] = S6Z;
+		s2t[0][5][15] = C6M;	s2t[1][5][15] = L6M;	s2t[2][5][15] = D6M;	s2t[3][5][15] = S6M;
+								s2t[1][5][16] = L6N;	s2t[2][5][16] = D6N;	s2t[3][5][16] = S6N;
+		s2t[0][6][1]  = C7A;	s2t[1][6][1]  = L7A;	s2t[2][6][1]  = D7A;	s2t[3][6][1]  = S7A;
+		s2t[0][6][2]  = C7B;	s2t[1][6][2]  = L7B;	s2t[2][6][2]  = D7B;	s2t[3][6][2]  = S7B;
+		s2t[0][6][3]  = C7C;	s2t[1][6][3]  = L7C;	s2t[2][6][3]  = D7C;	s2t[3][6][3]  = S7C;
+		s2t[0][6][4]  = C7D;	s2t[1][6][4]  = L7D;	s2t[2][6][4]  = D7D;	s2t[3][6][4]  = S7D;
+		s2t[0][6][5]  = C7E;	s2t[1][6][5]  = L7E;	s2t[2][6][5]  = D7E;	s2t[3][6][5]  = S7E;
+		s2t[0][6][6]  = C7S;	s2t[1][6][6]  = L7S;	s2t[2][6][6]  = D7S;	s2t[3][6][6]  = S7S;
+		s2t[0][6][7]  = C7L;	s2t[1][6][7]  = L7L;	s2t[2][6][7]  = D7L;	s2t[3][6][7]  = S7L;
+		s2t[0][6][8]  = C7I;	s2t[1][6][8]  = L7I;	s2t[2][6][8]  = D7I;	s2t[3][6][8]  = S7I;
+		s2t[0][6][9]  = C7Q;	s2t[1][6][9]  = L7Q;	s2t[2][6][9]  = D7Q;	s2t[3][6][9]  = S7Q;
+		s2t[0][6][10] = C7X;	s2t[1][6][10] = L7X;	s2t[2][6][10] = D7X;	s2t[3][6][10] = S7X;
+		s2t[0][6][11] = C7P;	s2t[1][6][11] = L7P;	s2t[2][6][11] = D7P;	s2t[3][6][11] = S7P;
+		s2t[0][6][12] = C7W;	s2t[1][6][12] = L7W;	s2t[2][6][12] = D7W;	s2t[3][6][12] = S7W;
+		s2t[0][6][13] = C7Y;	s2t[1][6][13] = L7Y;	s2t[2][6][13] = D7Y;	s2t[3][6][13] = S7Y;
+		s2t[0][6][14] = C7Z;	s2t[1][6][14] = L7Z;	s2t[2][6][14] = D7Z;	s2t[3][6][14] = S7Z;
+		s2t[0][6][15] = C7M;	s2t[1][6][15] = L7M;	s2t[2][6][15] = D7M;	s2t[3][6][15] = S7M;
+								s2t[1][6][16] = L7N;	s2t[2][6][16] = D7N;	s2t[3][6][16] = S7N;
+		s2t[0][7][1]  = C8A;	s2t[1][7][1]  = L8A;	s2t[2][7][1]  = D8A;	s2t[3][7][1]  = S8A;
+		s2t[0][7][2]  = C8B;	s2t[1][7][2]  = L8B;	s2t[2][7][2]  = D8B;	s2t[3][7][2]  = S8B;
+		s2t[0][7][3]  = C8C;	s2t[1][7][3]  = L8C;	s2t[2][7][3]  = D8C;	s2t[3][7][3]  = S8C;
+		s2t[0][7][4]  = C8D;	s2t[1][7][4]  = L8D;	s2t[2][7][4]  = D8D;	s2t[3][7][4]  = S8D;
+		s2t[0][7][5]  = C8E;	s2t[1][7][5]  = L8E;	s2t[2][7][5]  = D8E;	s2t[3][7][5]  = S8E;
+		s2t[0][7][6]  = C8S;	s2t[1][7][6]  = L8S;	s2t[2][7][6]  = D8S;	s2t[3][7][6]  = S8S;
+		s2t[0][7][7]  = C8L;	s2t[1][7][7]  = L8L;	s2t[2][7][7]  = D8L;	s2t[3][7][7]  = S8L;
+		s2t[0][7][8]  = C8I;	s2t[1][7][8]  = L8I;	s2t[2][7][8]  = D8I;	s2t[3][7][8]  = S8I;
+		s2t[0][7][9]  = C8Q;	s2t[1][7][9]  = L8Q;	s2t[2][7][9]  = D8Q;	s2t[3][7][9]  = S8Q;
+		s2t[0][7][10] = C8X;	s2t[1][7][10] = L8X;	s2t[2][7][10] = D8X;	s2t[3][7][10] = S8X;
+		s2t[0][7][11] = C8P;	s2t[1][7][11] = L8P;	s2t[2][7][11] = D8P;	s2t[3][7][11] = S8P;
+		s2t[0][7][12] = C8W;	s2t[1][7][12] = L8W;	s2t[2][7][12] = D8W;	s2t[3][7][12] = S8W;
+		s2t[0][7][13] = C8Y;	s2t[1][7][13] = L8Y;	s2t[2][7][13] = D8Y;	s2t[3][7][13] = S8Y;
+		s2t[0][7][14] = C8Z;	s2t[1][7][14] = L8Z;	s2t[2][7][14] = D8Z;	s2t[3][7][14] = S8Z;
+		s2t[0][7][15] = C8M;	s2t[1][7][15] = L8M;	s2t[2][7][15] = D8M;	s2t[3][7][15] = S8M;
+								s2t[1][7][16] = L8N;	s2t[2][7][16] = D8N;	s2t[3][7][16] = S8N;
+		s2t[0][8][1]  = C9A;	s2t[1][8][1]  = L9A;	s2t[2][8][1]  = D9A;	s2t[3][8][1]  = S9A;
+		s2t[0][8][2]  = C9B;	s2t[1][8][2]  = L9B;	s2t[2][8][2]  = D9B;	s2t[3][8][2]  = S9B;
+		s2t[0][8][3]  = C9C;	s2t[1][8][3]  = L9C;	s2t[2][8][3]  = D9C;	s2t[3][8][3]  = S9C;
+		s2t[0][8][4]  = C9D;	s2t[1][8][4]  = L9D;	s2t[2][8][4]  = D9D;	s2t[3][8][4]  = S9D;
+		s2t[0][8][5]  = C9E;	s2t[1][8][5]  = L9E;	s2t[2][8][5]  = D9E;	s2t[3][8][5]  = S9E;
+		s2t[0][8][6]  = C9S;	s2t[1][8][6]  = L9S;	s2t[2][8][6]  = D9S;	s2t[3][8][6]  = S9S;
+		s2t[0][8][7]  = C9L;	s2t[1][8][7]  = L9L;	s2t[2][8][7]  = D9L;	s2t[3][8][7]  = S9L;
+		s2t[0][8][8]  = C9I;	s2t[1][8][8]  = L9I;	s2t[2][8][8]  = D9I;	s2t[3][8][8]  = S9I;
+		s2t[0][8][9]  = C9Q;	s2t[1][8][9]  = L9Q;	s2t[2][8][9]  = D9Q;	s2t[3][8][9]  = S9Q;
+		s2t[0][8][10] = C9X;	s2t[1][8][10] = L9X;	s2t[2][8][10] = D9X;	s2t[3][8][10] = S9X;
+		s2t[0][8][11] = C9P;	s2t[1][8][11] = L9P;	s2t[2][8][11] = D9P;	s2t[3][8][11] = S9P;
+		s2t[0][8][12] = C9W;	s2t[1][8][12] = L9W;	s2t[2][8][12] = D9W;	s2t[3][8][12] = S9W;
+		s2t[0][8][13] = C9Y;	s2t[1][8][13] = L9Y;	s2t[2][8][13] = D9Y;	s2t[3][8][13] = S9Y;
+		s2t[0][8][14] = C9Z;	s2t[1][8][14] = L9Z;	s2t[2][8][14] = D9Z;	s2t[3][8][14] = S9Z;
+		s2t[0][8][15] = C9M;	s2t[1][8][15] = L9M;	s2t[2][8][15] = D9M;	s2t[3][8][15] = S9M;
+								s2t[1][8][16] = L9N;	s2t[2][8][16] = D9N;	s2t[3][8][16] = S9N;
+		s2t[0][9][1]  = C0A;	s2t[1][9][1]  = L0A;	s2t[2][9][1]  = D0A;	s2t[3][9][1]  = S0A;
+		s2t[0][9][2]  = C0B;	s2t[1][9][2]  = L0B;	s2t[2][9][2]  = D0B;	s2t[3][9][2]  = S0B;
+		s2t[0][9][3]  = C0C;	s2t[1][9][3]  = L0C;	s2t[2][9][3]  = D0C;	s2t[3][9][3]  = S0C;
+		s2t[0][9][4]  = C0D;	s2t[1][9][4]  = L0D;	s2t[2][9][4]  = D0D;	s2t[3][9][4]  = S0D;
+		s2t[0][9][5]  = C0E;	s2t[1][9][5]  = L0E;	s2t[2][9][5]  = D0E;	s2t[3][9][5]  = S0E;
+		s2t[0][9][6]  = C0S;	s2t[1][9][6]  = L0S;	s2t[2][9][6]  = D0S;	s2t[3][9][6]  = S0S;
+		s2t[0][9][7]  = C0L;	s2t[1][9][7]  = L0L;	s2t[2][9][7]  = D0L;	s2t[3][9][7]  = S0L;
+		s2t[0][9][8]  = C0I;	s2t[1][9][8]  = L0I;	s2t[2][9][8]  = D0I;	s2t[3][9][8]  = S0I;
+		s2t[0][9][9]  = C0Q;	s2t[1][9][9]  = L0Q;	s2t[2][9][9]  = D0Q;	s2t[3][9][9]  = S0Q;
+		s2t[0][9][10] = C0X;	s2t[1][9][10] = L0X;	s2t[2][9][10] = D0X;	s2t[3][9][10] = S0X;
+		s2t[0][9][11] = C0P;	s2t[1][9][11] = L0P;	s2t[2][9][11] = D0P;	s2t[3][9][11] = S0P;
+		s2t[0][9][12] = C0W;	s2t[1][9][12] = L0W;	s2t[2][9][12] = D0W;	s2t[3][9][12] = S0W;
+		s2t[0][9][13] = C0Y;	s2t[1][9][13] = L0Y;	s2t[2][9][13] = D0Y;	s2t[3][9][13] = S0Y;
+		s2t[0][9][14] = C0Z;	s2t[1][9][14] = L0Z;	s2t[2][9][14] = D0Z;	s2t[3][9][14] = S0Z;
+		s2t[0][9][15] = C0M;	s2t[1][9][15] = L0M;	s2t[2][9][15] = D0M;	s2t[3][9][15] = S0M;
+								s2t[1][9][16] = L0N;	s2t[2][9][16] = D0N;	s2t[3][9][16] = S0N;
+		////// End of automatically generated code block non-combinations/////
+
+		////// Automatically generated code block for dual frequency combinations/////
+		comb2freq[0][4][0][1] = PN12;	comb2freq[0][4][0][2] = PN13;	comb2freq[0][4][0][3] = PN14;	comb2freq[0][4][0][4] = PN15;
+		comb2freq[0][4][0][5] = PN16;	comb2freq[0][4][0][6] = PN17;	comb2freq[0][4][0][7] = PN18;	comb2freq[0][4][0][8] = PN19;
+		comb2freq[0][4][0][9] = PN10;	comb2freq[0][4][1][2] = PN23;	comb2freq[0][4][1][3] = PN24;	comb2freq[0][4][1][4] = PN25;
+		comb2freq[0][4][1][5] = PN26;	comb2freq[0][4][1][6] = PN27;	comb2freq[0][4][1][7] = PN28;	comb2freq[0][4][1][8] = PN29;
+		comb2freq[0][4][1][9] = PN20;	comb2freq[0][4][2][3] = PN34;	comb2freq[0][4][2][4] = PN35;	comb2freq[0][4][2][5] = PN36;
+		comb2freq[0][4][2][6] = PN37;	comb2freq[0][4][2][7] = PN38;	comb2freq[0][4][2][8] = PN39;	comb2freq[0][4][2][9] = PN30;
+		comb2freq[0][4][3][4] = PN45;	comb2freq[0][4][3][5] = PN46;	comb2freq[0][4][3][6] = PN47;	comb2freq[0][4][3][7] = PN48;
+		comb2freq[0][4][3][8] = PN49;	comb2freq[0][4][3][9] = PN40;	comb2freq[0][4][4][5] = PN56;	comb2freq[0][4][4][6] = PN57;
+		comb2freq[0][4][4][7] = PN58;	comb2freq[0][4][4][8] = PN59;	comb2freq[0][4][4][9] = PN50;	comb2freq[0][4][5][6] = PN67;
+		comb2freq[0][4][5][7] = PN68;	comb2freq[0][4][5][8] = PN69;	comb2freq[0][4][5][9] = PN60;	comb2freq[0][4][6][7] = PN78;
+		comb2freq[0][4][6][8] = PN79;	comb2freq[0][4][6][9] = PN70;	comb2freq[0][4][7][8] = PN89;	comb2freq[0][4][7][9] = PN80;
+		comb2freq[0][4][8][9] = PN90;	
+		comb2freq[0][1][0][1] = PI12;	comb2freq[0][1][0][2] = PI13;	comb2freq[0][1][0][3] = PI14;	comb2freq[0][1][0][4] = PI15;
+		comb2freq[0][1][0][5] = PI16;	comb2freq[0][1][0][6] = PI17;	comb2freq[0][1][0][7] = PI18;	comb2freq[0][1][0][8] = PI19;
+		comb2freq[0][1][0][9] = PI10;	comb2freq[0][1][1][2] = PI23;	comb2freq[0][1][1][3] = PI24;	comb2freq[0][1][1][4] = PI25;
+		comb2freq[0][1][1][5] = PI26;	comb2freq[0][1][1][6] = PI27;	comb2freq[0][1][1][7] = PI28;	comb2freq[0][1][1][8] = PI29;
+		comb2freq[0][1][1][9] = PI20;	comb2freq[0][1][2][3] = PI34;	comb2freq[0][1][2][4] = PI35;	comb2freq[0][1][2][5] = PI36;
+		comb2freq[0][1][2][6] = PI37;	comb2freq[0][1][2][7] = PI38;	comb2freq[0][1][2][8] = PI39;	comb2freq[0][1][2][9] = PI30;
+		comb2freq[0][1][3][4] = PI45;	comb2freq[0][1][3][5] = PI46;	comb2freq[0][1][3][6] = PI47;	comb2freq[0][1][3][7] = PI48;
+		comb2freq[0][1][3][8] = PI49;	comb2freq[0][1][3][9] = PI40;	comb2freq[0][1][4][5] = PI56;	comb2freq[0][1][4][6] = PI57;
+		comb2freq[0][1][4][7] = PI58;	comb2freq[0][1][4][8] = PI59;	comb2freq[0][1][4][9] = PI50;	comb2freq[0][1][5][6] = PI67;
+		comb2freq[0][1][5][7] = PI68;	comb2freq[0][1][5][8] = PI69;	comb2freq[0][1][5][9] = PI60;	comb2freq[0][1][6][7] = PI78;
+		comb2freq[0][1][6][8] = PI79;	comb2freq[0][1][6][9] = PI70;	comb2freq[0][1][7][8] = PI89;	comb2freq[0][1][7][9] = PI80;
+		comb2freq[0][1][8][9] = PI90;	
+		comb2freq[0][2][0][1] = PC12;	comb2freq[0][2][0][2] = PC13;	comb2freq[0][2][0][3] = PC14;	comb2freq[0][2][0][4] = PC15;
+		comb2freq[0][2][0][5] = PC16;	comb2freq[0][2][0][6] = PC17;	comb2freq[0][2][0][7] = PC18;	comb2freq[0][2][0][8] = PC19;
+		comb2freq[0][2][0][9] = PC10;	comb2freq[0][2][1][2] = PC23;	comb2freq[0][2][1][3] = PC24;	comb2freq[0][2][1][4] = PC25;
+		comb2freq[0][2][1][5] = PC26;	comb2freq[0][2][1][6] = PC27;	comb2freq[0][2][1][7] = PC28;	comb2freq[0][2][1][8] = PC29;
+		comb2freq[0][2][1][9] = PC20;	comb2freq[0][2][2][3] = PC34;	comb2freq[0][2][2][4] = PC35;	comb2freq[0][2][2][5] = PC36;
+		comb2freq[0][2][2][6] = PC37;	comb2freq[0][2][2][7] = PC38;	comb2freq[0][2][2][8] = PC39;	comb2freq[0][2][2][9] = PC30;
+		comb2freq[0][2][3][4] = PC45;	comb2freq[0][2][3][5] = PC46;	comb2freq[0][2][3][6] = PC47;	comb2freq[0][2][3][7] = PC48;
+		comb2freq[0][2][3][8] = PC49;	comb2freq[0][2][3][9] = PC40;	comb2freq[0][2][4][5] = PC56;	comb2freq[0][2][4][6] = PC57;
+		comb2freq[0][2][4][7] = PC58;	comb2freq[0][2][4][8] = PC59;	comb2freq[0][2][4][9] = PC50;	comb2freq[0][2][5][6] = PC67;
+		comb2freq[0][2][5][7] = PC68;	comb2freq[0][2][5][8] = PC69;	comb2freq[0][2][5][9] = PC60;	comb2freq[0][2][6][7] = PC78;
+		comb2freq[0][2][6][8] = PC79;	comb2freq[0][2][6][9] = PC70;	comb2freq[0][2][7][8] = PC89;	comb2freq[0][2][7][9] = PC80;
+		comb2freq[0][2][8][9] = PC90;	
+		comb2freq[1][0][0][1] = LW12;	comb2freq[1][0][0][2] = LW13;	comb2freq[1][0][0][3] = LW14;	comb2freq[1][0][0][4] = LW15;
+		comb2freq[1][0][0][5] = LW16;	comb2freq[1][0][0][6] = LW17;	comb2freq[1][0][0][7] = LW18;	comb2freq[1][0][0][8] = LW19;
+		comb2freq[1][0][0][9] = LW10;	comb2freq[1][0][1][2] = LW23;	comb2freq[1][0][1][3] = LW24;	comb2freq[1][0][1][4] = LW25;
+		comb2freq[1][0][1][5] = LW26;	comb2freq[1][0][1][6] = LW27;	comb2freq[1][0][1][7] = LW28;	comb2freq[1][0][1][8] = LW29;
+		comb2freq[1][0][1][9] = LW20;	comb2freq[1][0][2][3] = LW34;	comb2freq[1][0][2][4] = LW35;	comb2freq[1][0][2][5] = LW36;
+		comb2freq[1][0][2][6] = LW37;	comb2freq[1][0][2][7] = LW38;	comb2freq[1][0][2][8] = LW39;	comb2freq[1][0][2][9] = LW30;
+		comb2freq[1][0][3][4] = LW45;	comb2freq[1][0][3][5] = LW46;	comb2freq[1][0][3][6] = LW47;	comb2freq[1][0][3][7] = LW48;
+		comb2freq[1][0][3][8] = LW49;	comb2freq[1][0][3][9] = LW40;	comb2freq[1][0][4][5] = LW56;	comb2freq[1][0][4][6] = LW57;
+		comb2freq[1][0][4][7] = LW58;	comb2freq[1][0][4][8] = LW59;	comb2freq[1][0][4][9] = LW50;	comb2freq[1][0][5][6] = LW67;
+		comb2freq[1][0][5][7] = LW68;	comb2freq[1][0][5][8] = LW69;	comb2freq[1][0][5][9] = LW60;	comb2freq[1][0][6][7] = LW78;
+		comb2freq[1][0][6][8] = LW79;	comb2freq[1][0][6][9] = LW70;	comb2freq[1][0][7][8] = LW89;	comb2freq[1][0][7][9] = LW80;
+		comb2freq[1][0][8][9] = LW90;	
+		comb2freq[1][1][0][1] = LI12;	comb2freq[1][1][0][2] = LI13;	comb2freq[1][1][0][3] = LI14;	comb2freq[1][1][0][4] = LI15;
+		comb2freq[1][1][0][5] = LI16;	comb2freq[1][1][0][6] = LI17;	comb2freq[1][1][0][7] = LI18;	comb2freq[1][1][0][8] = LI19;
+		comb2freq[1][1][0][9] = LI10;	comb2freq[1][1][1][2] = LI23;	comb2freq[1][1][1][3] = LI24;	comb2freq[1][1][1][4] = LI25;
+		comb2freq[1][1][1][5] = LI26;	comb2freq[1][1][1][6] = LI27;	comb2freq[1][1][1][7] = LI28;	comb2freq[1][1][1][8] = LI29;
+		comb2freq[1][1][1][9] = LI20;	comb2freq[1][1][2][3] = LI34;	comb2freq[1][1][2][4] = LI35;	comb2freq[1][1][2][5] = LI36;
+		comb2freq[1][1][2][6] = LI37;	comb2freq[1][1][2][7] = LI38;	comb2freq[1][1][2][8] = LI39;	comb2freq[1][1][2][9] = LI30;
+		comb2freq[1][1][3][4] = LI45;	comb2freq[1][1][3][5] = LI46;	comb2freq[1][1][3][6] = LI47;	comb2freq[1][1][3][7] = LI48;
+		comb2freq[1][1][3][8] = LI49;	comb2freq[1][1][3][9] = LI40;	comb2freq[1][1][4][5] = LI56;	comb2freq[1][1][4][6] = LI57;
+		comb2freq[1][1][4][7] = LI58;	comb2freq[1][1][4][8] = LI59;	comb2freq[1][1][4][9] = LI50;	comb2freq[1][1][5][6] = LI67;
+		comb2freq[1][1][5][7] = LI68;	comb2freq[1][1][5][8] = LI69;	comb2freq[1][1][5][9] = LI60;	comb2freq[1][1][6][7] = LI78;
+		comb2freq[1][1][6][8] = LI79;	comb2freq[1][1][6][9] = LI70;	comb2freq[1][1][7][8] = LI89;	comb2freq[1][1][7][9] = LI80;
+		comb2freq[1][1][8][9] = LI90;	
+		comb2freq[1][2][0][1] = LC12;	comb2freq[1][2][0][2] = LC13;	comb2freq[1][2][0][3] = LC14;	comb2freq[1][2][0][4] = LC15;
+		comb2freq[1][2][0][5] = LC16;	comb2freq[1][2][0][6] = LC17;	comb2freq[1][2][0][7] = LC18;	comb2freq[1][2][0][8] = LC19;
+		comb2freq[1][2][0][9] = LC10;	comb2freq[1][2][1][2] = LC23;	comb2freq[1][2][1][3] = LC24;	comb2freq[1][2][1][4] = LC25;
+		comb2freq[1][2][1][5] = LC26;	comb2freq[1][2][1][6] = LC27;	comb2freq[1][2][1][7] = LC28;	comb2freq[1][2][1][8] = LC29;
+		comb2freq[1][2][1][9] = LC20;	comb2freq[1][2][2][3] = LC34;	comb2freq[1][2][2][4] = LC35;	comb2freq[1][2][2][5] = LC36;
+		comb2freq[1][2][2][6] = LC37;	comb2freq[1][2][2][7] = LC38;	comb2freq[1][2][2][8] = LC39;	comb2freq[1][2][2][9] = LC30;
+		comb2freq[1][2][3][4] = LC45;	comb2freq[1][2][3][5] = LC46;	comb2freq[1][2][3][6] = LC47;	comb2freq[1][2][3][7] = LC48;
+		comb2freq[1][2][3][8] = LC49;	comb2freq[1][2][3][9] = LC40;	comb2freq[1][2][4][5] = LC56;	comb2freq[1][2][4][6] = LC57;
+		comb2freq[1][2][4][7] = LC58;	comb2freq[1][2][4][8] = LC59;	comb2freq[1][2][4][9] = LC50;	comb2freq[1][2][5][6] = LC67;
+		comb2freq[1][2][5][7] = LC68;	comb2freq[1][2][5][8] = LC69;	comb2freq[1][2][5][9] = LC60;	comb2freq[1][2][6][7] = LC78;
+		comb2freq[1][2][6][8] = LC79;	comb2freq[1][2][6][9] = LC70;	comb2freq[1][2][7][8] = LC89;	comb2freq[1][2][7][9] = LC80;
+		comb2freq[1][2][8][9] = LC90;	
+		comb2freq[2][0][0][1] = MW12;	comb2freq[2][0][0][2] = MW13;	comb2freq[2][0][0][3] = MW14;	comb2freq[2][0][0][4] = MW15;
+		comb2freq[2][0][0][5] = MW16;	comb2freq[2][0][0][6] = MW17;	comb2freq[2][0][0][7] = MW18;	comb2freq[2][0][0][8] = MW19;
+		comb2freq[2][0][0][9] = MW10;	comb2freq[2][0][1][2] = MW23;	comb2freq[2][0][1][3] = MW24;	comb2freq[2][0][1][4] = MW25;
+		comb2freq[2][0][1][5] = MW26;	comb2freq[2][0][1][6] = MW27;	comb2freq[2][0][1][7] = MW28;	comb2freq[2][0][1][8] = MW29;
+		comb2freq[2][0][1][9] = MW20;	comb2freq[2][0][2][3] = MW34;	comb2freq[2][0][2][4] = MW35;	comb2freq[2][0][2][5] = MW36;
+		comb2freq[2][0][2][6] = MW37;	comb2freq[2][0][2][7] = MW38;	comb2freq[2][0][2][8] = MW39;	comb2freq[2][0][2][9] = MW30;
+		comb2freq[2][0][3][4] = MW45;	comb2freq[2][0][3][5] = MW46;	comb2freq[2][0][3][6] = MW47;	comb2freq[2][0][3][7] = MW48;
+		comb2freq[2][0][3][8] = MW49;	comb2freq[2][0][3][9] = MW40;	comb2freq[2][0][4][5] = MW56;	comb2freq[2][0][4][6] = MW57;
+		comb2freq[2][0][4][7] = MW58;	comb2freq[2][0][4][8] = MW59;	comb2freq[2][0][4][9] = MW50;	comb2freq[2][0][5][6] = MW67;
+		comb2freq[2][0][5][7] = MW68;	comb2freq[2][0][5][8] = MW69;	comb2freq[2][0][5][9] = MW60;	comb2freq[2][0][6][7] = MW78;
+		comb2freq[2][0][6][8] = MW79;	comb2freq[2][0][6][9] = MW70;	comb2freq[2][0][7][8] = MW89;	comb2freq[2][0][7][9] = MW80;
+		comb2freq[2][0][8][9] = MW90;	
+		comb2freq[4][3][0][1] = IF12;	comb2freq[4][3][0][2] = IF13;	comb2freq[4][3][0][3] = IF14;	comb2freq[4][3][0][4] = IF15;
+		comb2freq[4][3][0][5] = IF16;	comb2freq[4][3][0][6] = IF17;	comb2freq[4][3][0][7] = IF18;	comb2freq[4][3][0][8] = IF19;
+		comb2freq[4][3][0][9] = IF10;	comb2freq[4][3][1][2] = IF23;	comb2freq[4][3][1][3] = IF24;	comb2freq[4][3][1][4] = IF25;
+		comb2freq[4][3][1][5] = IF26;	comb2freq[4][3][1][6] = IF27;	comb2freq[4][3][1][7] = IF28;	comb2freq[4][3][1][8] = IF29;
+		comb2freq[4][3][1][9] = IF20;	comb2freq[4][3][2][3] = IF34;	comb2freq[4][3][2][4] = IF35;	comb2freq[4][3][2][5] = IF36;
+		comb2freq[4][3][2][6] = IF37;	comb2freq[4][3][2][7] = IF38;	comb2freq[4][3][2][8] = IF39;	comb2freq[4][3][2][9] = IF30;
+		comb2freq[4][3][3][4] = IF45;	comb2freq[4][3][3][5] = IF46;	comb2freq[4][3][3][6] = IF47;	comb2freq[4][3][3][7] = IF48;
+		comb2freq[4][3][3][8] = IF49;	comb2freq[4][3][3][9] = IF40;	comb2freq[4][3][4][5] = IF56;	comb2freq[4][3][4][6] = IF57;
+		comb2freq[4][3][4][7] = IF58;	comb2freq[4][3][4][8] = IF59;	comb2freq[4][3][4][9] = IF50;	comb2freq[4][3][5][6] = IF67;
+		comb2freq[4][3][5][7] = IF68;	comb2freq[4][3][5][8] = IF69;	comb2freq[4][3][5][9] = IF60;	comb2freq[4][3][6][7] = IF78;
+		comb2freq[4][3][6][8] = IF79;	comb2freq[4][3][6][9] = IF70;	comb2freq[4][3][7][8] = IF89;	comb2freq[4][3][7][9] = IF80;
+		comb2freq[4][3][8][9] = IF90;	
+		comb2freq[3][3][0][1] = DF12;	comb2freq[3][3][0][2] = DF13;	comb2freq[3][3][0][3] = DF14;	comb2freq[3][3][0][4] = DF15;
+		comb2freq[3][3][0][5] = DF16;	comb2freq[3][3][0][6] = DF17;	comb2freq[3][3][0][7] = DF18;	comb2freq[3][3][0][8] = DF19;
+		comb2freq[3][3][0][9] = DF10;	comb2freq[3][3][1][2] = DF23;	comb2freq[3][3][1][3] = DF24;	comb2freq[3][3][1][4] = DF25;
+		comb2freq[3][3][1][5] = DF26;	comb2freq[3][3][1][6] = DF27;	comb2freq[3][3][1][7] = DF28;	comb2freq[3][3][1][8] = DF29;
+		comb2freq[3][3][1][9] = DF20;	comb2freq[3][3][2][3] = DF34;	comb2freq[3][3][2][4] = DF35;	comb2freq[3][3][2][5] = DF36;
+		comb2freq[3][3][2][6] = DF37;	comb2freq[3][3][2][7] = DF38;	comb2freq[3][3][2][8] = DF39;	comb2freq[3][3][2][9] = DF30;
+		comb2freq[3][3][3][4] = DF45;	comb2freq[3][3][3][5] = DF46;	comb2freq[3][3][3][6] = DF47;	comb2freq[3][3][3][7] = DF48;
+		comb2freq[3][3][3][8] = DF49;	comb2freq[3][3][3][9] = DF40;	comb2freq[3][3][4][5] = DF56;	comb2freq[3][3][4][6] = DF57;
+		comb2freq[3][3][4][7] = DF58;	comb2freq[3][3][4][8] = DF59;	comb2freq[3][3][4][9] = DF50;	comb2freq[3][3][5][6] = DF67;
+		comb2freq[3][3][5][7] = DF68;	comb2freq[3][3][5][8] = DF69;	comb2freq[3][3][5][9] = DF60;	comb2freq[3][3][6][7] = DF78;
+		comb2freq[3][3][6][8] = DF79;	comb2freq[3][3][6][9] = DF70;	comb2freq[3][3][7][8] = DF89;	comb2freq[3][3][7][9] = DF80;
+		comb2freq[3][3][8][9] = DF90;	
+		comb2freq[3][3][1][0] = DF21;	comb2freq[3][3][2][0] = DF31;	comb2freq[3][3][3][0] = DF41;	comb2freq[3][3][4][0] = DF51;
+		comb2freq[3][3][5][0] = DF61;	comb2freq[3][3][6][0] = DF71;	comb2freq[3][3][7][0] = DF81;	comb2freq[3][3][8][0] = DF91;
+		comb2freq[3][3][9][0] = DF01;	comb2freq[3][3][2][1] = DF32;	comb2freq[3][3][3][1] = DF42;	comb2freq[3][3][4][1] = DF52;
+		comb2freq[3][3][5][1] = DF62;	comb2freq[3][3][6][1] = DF72;	comb2freq[3][3][7][1] = DF82;	comb2freq[3][3][8][1] = DF92;
+		comb2freq[3][3][9][1] = DF02;	comb2freq[3][3][3][2] = DF43;	comb2freq[3][3][4][2] = DF53;	comb2freq[3][3][5][2] = DF63;
+		comb2freq[3][3][6][2] = DF73;	comb2freq[3][3][7][2] = DF83;	comb2freq[3][3][8][2] = DF93;	comb2freq[3][3][9][2] = DF03;
+		comb2freq[3][3][4][3] = DF54;	comb2freq[3][3][5][3] = DF64;	comb2freq[3][3][6][3] = DF74;	comb2freq[3][3][7][3] = DF84;
+		comb2freq[3][3][8][3] = DF94;	comb2freq[3][3][9][3] = DF04;	comb2freq[3][3][5][4] = DF65;	comb2freq[3][3][6][4] = DF75;
+		comb2freq[3][3][7][4] = DF85;	comb2freq[3][3][8][4] = DF95;	comb2freq[3][3][9][4] = DF05;	comb2freq[3][3][6][5] = DF76;
+		comb2freq[3][3][7][5] = DF86;	comb2freq[3][3][8][5] = DF96;	comb2freq[3][3][9][5] = DF06;	comb2freq[3][3][7][6] = DF87;
+		comb2freq[3][3][8][6] = DF97;	comb2freq[3][3][9][6] = DF07;	comb2freq[3][3][8][7] = DF98;	comb2freq[3][3][9][7] = DF08;
+		comb2freq[3][3][9][8] = DF09;	
+		////// End of automatically generated code block dual frequency combinations/////
+		////// Automatically generated code block for triple frequency combinations/////
+		comb3freq[0][0][0][0][9][0][1] = IGF1012;	comb3freq[0][0][0][0][9][0][2] = IGF1013;	comb3freq[0][0][0][0][9][0][3] = IGF1014;	comb3freq[0][0][0][0][9][0][4] = IGF1015;
+		comb3freq[0][0][0][0][9][0][5] = IGF1016;	comb3freq[0][0][0][0][9][0][6] = IGF1017;	comb3freq[0][0][0][0][9][0][7] = IGF1018;	comb3freq[0][0][0][0][9][0][8] = IGF1019;
+		comb3freq[0][0][0][0][9][1][9] = IGF1020;	comb3freq[0][0][0][0][9][2][9] = IGF1030;	comb3freq[0][0][0][0][9][3][9] = IGF1040;	comb3freq[0][0][0][0][9][4][9] = IGF1050;
+		comb3freq[0][0][0][0][9][5][9] = IGF1060;	comb3freq[0][0][0][0][9][6][9] = IGF1070;	comb3freq[0][0][0][0][9][7][9] = IGF1080;	comb3freq[0][0][0][0][9][8][9] = IGF1090;
+		comb3freq[0][0][0][0][1][0][2] = IGF1213;	comb3freq[0][0][0][0][1][0][3] = IGF1214;	comb3freq[0][0][0][0][1][0][4] = IGF1215;	comb3freq[0][0][0][0][1][0][5] = IGF1216;
+		comb3freq[0][0][0][0][1][0][6] = IGF1217;	comb3freq[0][0][0][0][1][0][7] = IGF1218;	comb3freq[0][0][0][0][1][0][8] = IGF1219;	comb3freq[0][0][0][0][1][1][9] = IGF1220;
+		comb3freq[0][0][0][0][1][1][2] = IGF1223;	comb3freq[0][0][0][0][1][1][3] = IGF1224;	comb3freq[0][0][0][0][1][1][4] = IGF1225;	comb3freq[0][0][0][0][1][1][5] = IGF1226;
+		comb3freq[0][0][0][0][1][1][6] = IGF1227;	comb3freq[0][0][0][0][1][1][7] = IGF1228;	comb3freq[0][0][0][0][1][1][8] = IGF1229;	comb3freq[0][0][0][0][2][0][3] = IGF1314;
+		comb3freq[0][0][0][0][2][0][4] = IGF1315;	comb3freq[0][0][0][0][2][0][5] = IGF1316;	comb3freq[0][0][0][0][2][0][6] = IGF1317;	comb3freq[0][0][0][0][2][0][7] = IGF1318;
+		comb3freq[0][0][0][0][2][0][8] = IGF1319;	comb3freq[0][0][0][0][2][1][2] = IGF1323;	comb3freq[0][0][0][0][2][2][9] = IGF1330;	comb3freq[0][0][0][0][2][2][3] = IGF1334;
+		comb3freq[0][0][0][0][2][2][4] = IGF1335;	comb3freq[0][0][0][0][2][2][5] = IGF1336;	comb3freq[0][0][0][0][2][2][6] = IGF1337;	comb3freq[0][0][0][0][2][2][7] = IGF1338;
+		comb3freq[0][0][0][0][2][2][8] = IGF1339;	comb3freq[0][0][0][0][3][0][4] = IGF1415;	comb3freq[0][0][0][0][3][0][5] = IGF1416;	comb3freq[0][0][0][0][3][0][6] = IGF1417;
+		comb3freq[0][0][0][0][3][0][7] = IGF1418;	comb3freq[0][0][0][0][3][0][8] = IGF1419;	comb3freq[0][0][0][0][3][1][3] = IGF1424;	comb3freq[0][0][0][0][3][2][3] = IGF1434;
+		comb3freq[0][0][0][0][3][3][9] = IGF1440;	comb3freq[0][0][0][0][3][3][4] = IGF1445;	comb3freq[0][0][0][0][3][3][5] = IGF1446;	comb3freq[0][0][0][0][3][3][6] = IGF1447;
+		comb3freq[0][0][0][0][3][3][7] = IGF1448;	comb3freq[0][0][0][0][3][3][8] = IGF1449;	comb3freq[0][0][0][0][4][0][5] = IGF1516;	comb3freq[0][0][0][0][4][0][6] = IGF1517;
+		comb3freq[0][0][0][0][4][0][7] = IGF1518;	comb3freq[0][0][0][0][4][0][8] = IGF1519;	comb3freq[0][0][0][0][4][1][4] = IGF1525;	comb3freq[0][0][0][0][4][2][4] = IGF1535;
+		comb3freq[0][0][0][0][4][3][4] = IGF1545;	comb3freq[0][0][0][0][4][4][9] = IGF1550;	comb3freq[0][0][0][0][4][4][5] = IGF1556;	comb3freq[0][0][0][0][4][4][6] = IGF1557;
+		comb3freq[0][0][0][0][4][4][7] = IGF1558;	comb3freq[0][0][0][0][4][4][8] = IGF1559;	comb3freq[0][0][0][0][5][0][6] = IGF1617;	comb3freq[0][0][0][0][5][0][7] = IGF1618;
+		comb3freq[0][0][0][0][5][0][8] = IGF1619;	comb3freq[0][0][0][0][5][1][5] = IGF1626;	comb3freq[0][0][0][0][5][2][5] = IGF1636;	comb3freq[0][0][0][0][5][3][5] = IGF1646;
+		comb3freq[0][0][0][0][5][4][5] = IGF1656;	comb3freq[0][0][0][0][5][5][9] = IGF1660;	comb3freq[0][0][0][0][5][5][6] = IGF1667;	comb3freq[0][0][0][0][5][5][7] = IGF1668;
+		comb3freq[0][0][0][0][5][5][8] = IGF1669;	comb3freq[0][0][0][0][6][0][7] = IGF1718;	comb3freq[0][0][0][0][6][0][8] = IGF1719;	comb3freq[0][0][0][0][6][1][6] = IGF1727;
+		comb3freq[0][0][0][0][6][2][6] = IGF1737;	comb3freq[0][0][0][0][6][3][6] = IGF1747;	comb3freq[0][0][0][0][6][4][6] = IGF1757;	comb3freq[0][0][0][0][6][5][6] = IGF1767;
+		comb3freq[0][0][0][0][6][6][9] = IGF1770;	comb3freq[0][0][0][0][6][6][7] = IGF1778;	comb3freq[0][0][0][0][6][6][8] = IGF1779;	comb3freq[0][0][0][0][7][0][8] = IGF1819;
+		comb3freq[0][0][0][0][7][1][7] = IGF1828;	comb3freq[0][0][0][0][7][2][7] = IGF1838;	comb3freq[0][0][0][0][7][3][7] = IGF1848;	comb3freq[0][0][0][0][7][4][7] = IGF1858;
+		comb3freq[0][0][0][0][7][5][7] = IGF1868;	comb3freq[0][0][0][0][7][6][7] = IGF1878;	comb3freq[0][0][0][0][7][7][9] = IGF1880;	comb3freq[0][0][0][0][7][7][8] = IGF1889;
+		comb3freq[0][0][0][0][8][1][8] = IGF1929;	comb3freq[0][0][0][0][8][2][8] = IGF1939;	comb3freq[0][0][0][0][8][3][8] = IGF1949;	comb3freq[0][0][0][0][8][4][8] = IGF1959;
+		comb3freq[0][0][0][0][8][5][8] = IGF1969;	comb3freq[0][0][0][0][8][6][8] = IGF1979;	comb3freq[0][0][0][0][8][7][8] = IGF1989;	comb3freq[0][0][0][0][8][8][9] = IGF1990;
+		comb3freq[0][0][0][1][9][1][2] = IGF2023;	comb3freq[0][0][0][1][9][1][3] = IGF2024;	comb3freq[0][0][0][1][9][1][4] = IGF2025;	comb3freq[0][0][0][1][9][1][5] = IGF2026;
+		comb3freq[0][0][0][1][9][1][6] = IGF2027;	comb3freq[0][0][0][1][9][1][7] = IGF2028;	comb3freq[0][0][0][1][9][1][8] = IGF2029;	comb3freq[0][0][0][1][9][2][9] = IGF2030;
+		comb3freq[0][0][0][1][9][3][9] = IGF2040;	comb3freq[0][0][0][1][9][4][9] = IGF2050;	comb3freq[0][0][0][1][9][5][9] = IGF2060;	comb3freq[0][0][0][1][9][6][9] = IGF2070;
+		comb3freq[0][0][0][1][9][7][9] = IGF2080;	comb3freq[0][0][0][1][9][8][9] = IGF2090;	comb3freq[0][0][0][1][2][1][3] = IGF2324;	comb3freq[0][0][0][1][2][1][4] = IGF2325;
+		comb3freq[0][0][0][1][2][1][5] = IGF2326;	comb3freq[0][0][0][1][2][1][6] = IGF2327;	comb3freq[0][0][0][1][2][1][7] = IGF2328;	comb3freq[0][0][0][1][2][1][8] = IGF2329;
+		comb3freq[0][0][0][1][2][2][9] = IGF2330;	comb3freq[0][0][0][1][2][2][3] = IGF2334;	comb3freq[0][0][0][1][2][2][4] = IGF2335;	comb3freq[0][0][0][1][2][2][5] = IGF2336;
+		comb3freq[0][0][0][1][2][2][6] = IGF2337;	comb3freq[0][0][0][1][2][2][7] = IGF2338;	comb3freq[0][0][0][1][2][2][8] = IGF2339;	comb3freq[0][0][0][1][3][1][4] = IGF2425;
+		comb3freq[0][0][0][1][3][1][5] = IGF2426;	comb3freq[0][0][0][1][3][1][6] = IGF2427;	comb3freq[0][0][0][1][3][1][7] = IGF2428;	comb3freq[0][0][0][1][3][1][8] = IGF2429;
+		comb3freq[0][0][0][1][3][2][3] = IGF2434;	comb3freq[0][0][0][1][3][3][9] = IGF2440;	comb3freq[0][0][0][1][3][3][4] = IGF2445;	comb3freq[0][0][0][1][3][3][5] = IGF2446;
+		comb3freq[0][0][0][1][3][3][6] = IGF2447;	comb3freq[0][0][0][1][3][3][7] = IGF2448;	comb3freq[0][0][0][1][3][3][8] = IGF2449;	comb3freq[0][0][0][1][4][1][5] = IGF2526;
+		comb3freq[0][0][0][1][4][1][6] = IGF2527;	comb3freq[0][0][0][1][4][1][7] = IGF2528;	comb3freq[0][0][0][1][4][1][8] = IGF2529;	comb3freq[0][0][0][1][4][2][4] = IGF2535;
+		comb3freq[0][0][0][1][4][3][4] = IGF2545;	comb3freq[0][0][0][1][4][4][9] = IGF2550;	comb3freq[0][0][0][1][4][4][5] = IGF2556;	comb3freq[0][0][0][1][4][4][6] = IGF2557;
+		comb3freq[0][0][0][1][4][4][7] = IGF2558;	comb3freq[0][0][0][1][4][4][8] = IGF2559;	comb3freq[0][0][0][1][5][1][6] = IGF2627;	comb3freq[0][0][0][1][5][1][7] = IGF2628;
+		comb3freq[0][0][0][1][5][1][8] = IGF2629;	comb3freq[0][0][0][1][5][2][5] = IGF2636;	comb3freq[0][0][0][1][5][3][5] = IGF2646;	comb3freq[0][0][0][1][5][4][5] = IGF2656;
+		comb3freq[0][0][0][1][5][5][9] = IGF2660;	comb3freq[0][0][0][1][5][5][6] = IGF2667;	comb3freq[0][0][0][1][5][5][7] = IGF2668;	comb3freq[0][0][0][1][5][5][8] = IGF2669;
+		comb3freq[0][0][0][1][6][1][7] = IGF2728;	comb3freq[0][0][0][1][6][1][8] = IGF2729;	comb3freq[0][0][0][1][6][2][6] = IGF2737;	comb3freq[0][0][0][1][6][3][6] = IGF2747;
+		comb3freq[0][0][0][1][6][4][6] = IGF2757;	comb3freq[0][0][0][1][6][5][6] = IGF2767;	comb3freq[0][0][0][1][6][6][9] = IGF2770;	comb3freq[0][0][0][1][6][6][7] = IGF2778;
+		comb3freq[0][0][0][1][6][6][8] = IGF2779;	comb3freq[0][0][0][1][7][1][8] = IGF2829;	comb3freq[0][0][0][1][7][2][7] = IGF2838;	comb3freq[0][0][0][1][7][3][7] = IGF2848;
+		comb3freq[0][0][0][1][7][4][7] = IGF2858;	comb3freq[0][0][0][1][7][5][7] = IGF2868;	comb3freq[0][0][0][1][7][6][7] = IGF2878;	comb3freq[0][0][0][1][7][7][9] = IGF2880;
+		comb3freq[0][0][0][1][7][7][8] = IGF2889;	comb3freq[0][0][0][1][8][2][8] = IGF2939;	comb3freq[0][0][0][1][8][3][8] = IGF2949;	comb3freq[0][0][0][1][8][4][8] = IGF2959;
+		comb3freq[0][0][0][1][8][5][8] = IGF2969;	comb3freq[0][0][0][1][8][6][8] = IGF2979;	comb3freq[0][0][0][1][8][7][8] = IGF2989;	comb3freq[0][0][0][1][8][8][9] = IGF2990;
+		comb3freq[0][0][0][2][9][2][3] = IGF3034;	comb3freq[0][0][0][2][9][2][4] = IGF3035;	comb3freq[0][0][0][2][9][2][5] = IGF3036;	comb3freq[0][0][0][2][9][2][6] = IGF3037;
+		comb3freq[0][0][0][2][9][2][7] = IGF3038;	comb3freq[0][0][0][2][9][2][8] = IGF3039;	comb3freq[0][0][0][2][9][3][9] = IGF3040;	comb3freq[0][0][0][2][9][4][9] = IGF3050;
+		comb3freq[0][0][0][2][9][5][9] = IGF3060;	comb3freq[0][0][0][2][9][6][9] = IGF3070;	comb3freq[0][0][0][2][9][7][9] = IGF3080;	comb3freq[0][0][0][2][9][8][9] = IGF3090;
+		comb3freq[0][0][0][2][3][2][4] = IGF3435;	comb3freq[0][0][0][2][3][2][5] = IGF3436;	comb3freq[0][0][0][2][3][2][6] = IGF3437;	comb3freq[0][0][0][2][3][2][7] = IGF3438;
+		comb3freq[0][0][0][2][3][2][8] = IGF3439;	comb3freq[0][0][0][2][3][3][9] = IGF3440;	comb3freq[0][0][0][2][3][3][4] = IGF3445;	comb3freq[0][0][0][2][3][3][5] = IGF3446;
+		comb3freq[0][0][0][2][3][3][6] = IGF3447;	comb3freq[0][0][0][2][3][3][7] = IGF3448;	comb3freq[0][0][0][2][3][3][8] = IGF3449;	comb3freq[0][0][0][2][4][2][5] = IGF3536;
+		comb3freq[0][0][0][2][4][2][6] = IGF3537;	comb3freq[0][0][0][2][4][2][7] = IGF3538;	comb3freq[0][0][0][2][4][2][8] = IGF3539;	comb3freq[0][0][0][2][4][3][4] = IGF3545;
+		comb3freq[0][0][0][2][4][4][9] = IGF3550;	comb3freq[0][0][0][2][4][4][5] = IGF3556;	comb3freq[0][0][0][2][4][4][6] = IGF3557;	comb3freq[0][0][0][2][4][4][7] = IGF3558;
+		comb3freq[0][0][0][2][4][4][8] = IGF3559;	comb3freq[0][0][0][2][5][2][6] = IGF3637;	comb3freq[0][0][0][2][5][2][7] = IGF3638;	comb3freq[0][0][0][2][5][2][8] = IGF3639;
+		comb3freq[0][0][0][2][5][3][5] = IGF3646;	comb3freq[0][0][0][2][5][4][5] = IGF3656;	comb3freq[0][0][0][2][5][5][9] = IGF3660;	comb3freq[0][0][0][2][5][5][6] = IGF3667;
+		comb3freq[0][0][0][2][5][5][7] = IGF3668;	comb3freq[0][0][0][2][5][5][8] = IGF3669;	comb3freq[0][0][0][2][6][2][7] = IGF3738;	comb3freq[0][0][0][2][6][2][8] = IGF3739;
+		comb3freq[0][0][0][2][6][3][6] = IGF3747;	comb3freq[0][0][0][2][6][4][6] = IGF3757;	comb3freq[0][0][0][2][6][5][6] = IGF3767;	comb3freq[0][0][0][2][6][6][9] = IGF3770;
+		comb3freq[0][0][0][2][6][6][7] = IGF3778;	comb3freq[0][0][0][2][6][6][8] = IGF3779;	comb3freq[0][0][0][2][7][2][8] = IGF3839;	comb3freq[0][0][0][2][7][3][7] = IGF3848;
+		comb3freq[0][0][0][2][7][4][7] = IGF3858;	comb3freq[0][0][0][2][7][5][7] = IGF3868;	comb3freq[0][0][0][2][7][6][7] = IGF3878;	comb3freq[0][0][0][2][7][7][9] = IGF3880;
+		comb3freq[0][0][0][2][7][7][8] = IGF3889;	comb3freq[0][0][0][2][8][3][8] = IGF3949;	comb3freq[0][0][0][2][8][4][8] = IGF3959;	comb3freq[0][0][0][2][8][5][8] = IGF3969;
+		comb3freq[0][0][0][2][8][6][8] = IGF3979;	comb3freq[0][0][0][2][8][7][8] = IGF3989;	comb3freq[0][0][0][2][8][8][9] = IGF3990;	comb3freq[0][0][0][3][9][3][4] = IGF4045;
+		comb3freq[0][0][0][3][9][3][5] = IGF4046;	comb3freq[0][0][0][3][9][3][6] = IGF4047;	comb3freq[0][0][0][3][9][3][7] = IGF4048;	comb3freq[0][0][0][3][9][3][8] = IGF4049;
+		comb3freq[0][0][0][3][9][4][9] = IGF4050;	comb3freq[0][0][0][3][9][5][9] = IGF4060;	comb3freq[0][0][0][3][9][6][9] = IGF4070;	comb3freq[0][0][0][3][9][7][9] = IGF4080;
+		comb3freq[0][0][0][3][9][8][9] = IGF4090;	comb3freq[0][0][0][3][4][3][5] = IGF4546;	comb3freq[0][0][0][3][4][3][6] = IGF4547;	comb3freq[0][0][0][3][4][3][7] = IGF4548;
+		comb3freq[0][0][0][3][4][3][8] = IGF4549;	comb3freq[0][0][0][3][4][4][9] = IGF4550;	comb3freq[0][0][0][3][4][4][5] = IGF4556;	comb3freq[0][0][0][3][4][4][6] = IGF4557;
+		comb3freq[0][0][0][3][4][4][7] = IGF4558;	comb3freq[0][0][0][3][4][4][8] = IGF4559;	comb3freq[0][0][0][3][5][3][6] = IGF4647;	comb3freq[0][0][0][3][5][3][7] = IGF4648;
+		comb3freq[0][0][0][3][5][3][8] = IGF4649;	comb3freq[0][0][0][3][5][4][5] = IGF4656;	comb3freq[0][0][0][3][5][5][9] = IGF4660;	comb3freq[0][0][0][3][5][5][6] = IGF4667;
+		comb3freq[0][0][0][3][5][5][7] = IGF4668;	comb3freq[0][0][0][3][5][5][8] = IGF4669;	comb3freq[0][0][0][3][6][3][7] = IGF4748;	comb3freq[0][0][0][3][6][3][8] = IGF4749;
+		comb3freq[0][0][0][3][6][4][6] = IGF4757;	comb3freq[0][0][0][3][6][5][6] = IGF4767;	comb3freq[0][0][0][3][6][6][9] = IGF4770;	comb3freq[0][0][0][3][6][6][7] = IGF4778;
+		comb3freq[0][0][0][3][6][6][8] = IGF4779;	comb3freq[0][0][0][3][7][3][8] = IGF4849;	comb3freq[0][0][0][3][7][4][7] = IGF4858;	comb3freq[0][0][0][3][7][5][7] = IGF4868;
+		comb3freq[0][0][0][3][7][6][7] = IGF4878;	comb3freq[0][0][0][3][7][7][9] = IGF4880;	comb3freq[0][0][0][3][7][7][8] = IGF4889;	comb3freq[0][0][0][3][8][4][8] = IGF4959;
+		comb3freq[0][0][0][3][8][5][8] = IGF4969;	comb3freq[0][0][0][3][8][6][8] = IGF4979;	comb3freq[0][0][0][3][8][7][8] = IGF4989;	comb3freq[0][0][0][3][8][8][9] = IGF4990;
+		comb3freq[0][0][0][4][9][4][5] = IGF5056;	comb3freq[0][0][0][4][9][4][6] = IGF5057;	comb3freq[0][0][0][4][9][4][7] = IGF5058;	comb3freq[0][0][0][4][9][4][8] = IGF5059;
+		comb3freq[0][0][0][4][9][5][9] = IGF5060;	comb3freq[0][0][0][4][9][6][9] = IGF5070;	comb3freq[0][0][0][4][9][7][9] = IGF5080;	comb3freq[0][0][0][4][9][8][9] = IGF5090;
+		comb3freq[0][0][0][4][5][4][6] = IGF5657;	comb3freq[0][0][0][4][5][4][7] = IGF5658;	comb3freq[0][0][0][4][5][4][8] = IGF5659;	comb3freq[0][0][0][4][5][5][9] = IGF5660;
+		comb3freq[0][0][0][4][5][5][6] = IGF5667;	comb3freq[0][0][0][4][5][5][7] = IGF5668;	comb3freq[0][0][0][4][5][5][8] = IGF5669;	comb3freq[0][0][0][4][6][4][7] = IGF5758;
+		comb3freq[0][0][0][4][6][4][8] = IGF5759;	comb3freq[0][0][0][4][6][5][6] = IGF5767;	comb3freq[0][0][0][4][6][6][9] = IGF5770;	comb3freq[0][0][0][4][6][6][7] = IGF5778;
+		comb3freq[0][0][0][4][6][6][8] = IGF5779;	comb3freq[0][0][0][4][7][4][8] = IGF5859;	comb3freq[0][0][0][4][7][5][7] = IGF5868;	comb3freq[0][0][0][4][7][6][7] = IGF5878;
+		comb3freq[0][0][0][4][7][7][9] = IGF5880;	comb3freq[0][0][0][4][7][7][8] = IGF5889;	comb3freq[0][0][0][4][8][5][8] = IGF5969;	comb3freq[0][0][0][4][8][6][8] = IGF5979;
+		comb3freq[0][0][0][4][8][7][8] = IGF5989;	comb3freq[0][0][0][4][8][8][9] = IGF5990;	comb3freq[0][0][0][5][9][5][6] = IGF6067;	comb3freq[0][0][0][5][9][5][7] = IGF6068;
+		comb3freq[0][0][0][5][9][5][8] = IGF6069;	comb3freq[0][0][0][5][9][6][9] = IGF6070;	comb3freq[0][0][0][5][9][7][9] = IGF6080;	comb3freq[0][0][0][5][9][8][9] = IGF6090;
+		comb3freq[0][0][0][5][6][5][7] = IGF6768;	comb3freq[0][0][0][5][6][5][8] = IGF6769;	comb3freq[0][0][0][5][6][6][9] = IGF6770;	comb3freq[0][0][0][5][6][6][7] = IGF6778;
+		comb3freq[0][0][0][5][6][6][8] = IGF6779;	comb3freq[0][0][0][5][7][5][8] = IGF6869;	comb3freq[0][0][0][5][7][6][7] = IGF6878;	comb3freq[0][0][0][5][7][7][9] = IGF6880;
+		comb3freq[0][0][0][5][7][7][8] = IGF6889;	comb3freq[0][0][0][5][8][6][8] = IGF6979;	comb3freq[0][0][0][5][8][7][8] = IGF6989;	comb3freq[0][0][0][5][8][8][9] = IGF6990;
+		comb3freq[0][0][0][6][9][6][7] = IGF7078;	comb3freq[0][0][0][6][9][6][8] = IGF7079;	comb3freq[0][0][0][6][9][7][9] = IGF7080;	comb3freq[0][0][0][6][9][8][9] = IGF7090;
+		comb3freq[0][0][0][6][7][6][8] = IGF7879;	comb3freq[0][0][0][6][7][7][9] = IGF7880;	comb3freq[0][0][0][6][7][7][8] = IGF7889;	comb3freq[0][0][0][6][8][7][8] = IGF7989;
+		comb3freq[0][0][0][6][8][8][9] = IGF7990;	comb3freq[0][0][0][7][9][7][8] = IGF8089;	comb3freq[0][0][0][7][9][8][9] = IGF8090;	comb3freq[0][0][0][7][8][8][9] = IGF8990;
+
+		comb3freq[1][1][0][0][9][0][1] = SIF1012;	comb3freq[1][1][0][0][9][0][2] = SIF1013;	comb3freq[1][1][0][0][9][0][3] = SIF1014;	comb3freq[1][1][0][0][9][0][4] = SIF1015;
+		comb3freq[1][1][0][0][9][0][5] = SIF1016;	comb3freq[1][1][0][0][9][0][6] = SIF1017;	comb3freq[1][1][0][0][9][0][7] = SIF1018;	comb3freq[1][1][0][0][9][0][8] = SIF1019;
+		comb3freq[1][1][0][0][9][1][9] = SIF1020;	comb3freq[1][1][0][0][9][2][9] = SIF1030;	comb3freq[1][1][0][0][9][3][9] = SIF1040;	comb3freq[1][1][0][0][9][4][9] = SIF1050;
+		comb3freq[1][1][0][0][9][5][9] = SIF1060;	comb3freq[1][1][0][0][9][6][9] = SIF1070;	comb3freq[1][1][0][0][9][7][9] = SIF1080;	comb3freq[1][1][0][0][9][8][9] = SIF1090;
+		comb3freq[1][1][0][0][1][0][2] = SIF1213;	comb3freq[1][1][0][0][1][0][3] = SIF1214;	comb3freq[1][1][0][0][1][0][4] = SIF1215;	comb3freq[1][1][0][0][1][0][5] = SIF1216;
+		comb3freq[1][1][0][0][1][0][6] = SIF1217;	comb3freq[1][1][0][0][1][0][7] = SIF1218;	comb3freq[1][1][0][0][1][0][8] = SIF1219;	comb3freq[1][1][0][0][1][1][9] = SIF1220;
+		comb3freq[1][1][0][0][1][1][2] = SIF1223;	comb3freq[1][1][0][0][1][1][3] = SIF1224;	comb3freq[1][1][0][0][1][1][4] = SIF1225;	comb3freq[1][1][0][0][1][1][5] = SIF1226;
+		comb3freq[1][1][0][0][1][1][6] = SIF1227;	comb3freq[1][1][0][0][1][1][7] = SIF1228;	comb3freq[1][1][0][0][1][1][8] = SIF1229;	comb3freq[1][1][0][0][2][0][3] = SIF1314;
+		comb3freq[1][1][0][0][2][0][4] = SIF1315;	comb3freq[1][1][0][0][2][0][5] = SIF1316;	comb3freq[1][1][0][0][2][0][6] = SIF1317;	comb3freq[1][1][0][0][2][0][7] = SIF1318;
+		comb3freq[1][1][0][0][2][0][8] = SIF1319;	comb3freq[1][1][0][0][2][1][2] = SIF1323;	comb3freq[1][1][0][0][2][2][9] = SIF1330;	comb3freq[1][1][0][0][2][2][3] = SIF1334;
+		comb3freq[1][1][0][0][2][2][4] = SIF1335;	comb3freq[1][1][0][0][2][2][5] = SIF1336;	comb3freq[1][1][0][0][2][2][6] = SIF1337;	comb3freq[1][1][0][0][2][2][7] = SIF1338;
+		comb3freq[1][1][0][0][2][2][8] = SIF1339;	comb3freq[1][1][0][0][3][0][4] = SIF1415;	comb3freq[1][1][0][0][3][0][5] = SIF1416;	comb3freq[1][1][0][0][3][0][6] = SIF1417;
+		comb3freq[1][1][0][0][3][0][7] = SIF1418;	comb3freq[1][1][0][0][3][0][8] = SIF1419;	comb3freq[1][1][0][0][3][1][3] = SIF1424;	comb3freq[1][1][0][0][3][2][3] = SIF1434;
+		comb3freq[1][1][0][0][3][3][9] = SIF1440;	comb3freq[1][1][0][0][3][3][4] = SIF1445;	comb3freq[1][1][0][0][3][3][5] = SIF1446;	comb3freq[1][1][0][0][3][3][6] = SIF1447;
+		comb3freq[1][1][0][0][3][3][7] = SIF1448;	comb3freq[1][1][0][0][3][3][8] = SIF1449;	comb3freq[1][1][0][0][4][0][5] = SIF1516;	comb3freq[1][1][0][0][4][0][6] = SIF1517;
+		comb3freq[1][1][0][0][4][0][7] = SIF1518;	comb3freq[1][1][0][0][4][0][8] = SIF1519;	comb3freq[1][1][0][0][4][1][4] = SIF1525;	comb3freq[1][1][0][0][4][2][4] = SIF1535;
+		comb3freq[1][1][0][0][4][3][4] = SIF1545;	comb3freq[1][1][0][0][4][4][9] = SIF1550;	comb3freq[1][1][0][0][4][4][5] = SIF1556;	comb3freq[1][1][0][0][4][4][6] = SIF1557;
+		comb3freq[1][1][0][0][4][4][7] = SIF1558;	comb3freq[1][1][0][0][4][4][8] = SIF1559;	comb3freq[1][1][0][0][5][0][6] = SIF1617;	comb3freq[1][1][0][0][5][0][7] = SIF1618;
+		comb3freq[1][1][0][0][5][0][8] = SIF1619;	comb3freq[1][1][0][0][5][1][5] = SIF1626;	comb3freq[1][1][0][0][5][2][5] = SIF1636;	comb3freq[1][1][0][0][5][3][5] = SIF1646;
+		comb3freq[1][1][0][0][5][4][5] = SIF1656;	comb3freq[1][1][0][0][5][5][9] = SIF1660;	comb3freq[1][1][0][0][5][5][6] = SIF1667;	comb3freq[1][1][0][0][5][5][7] = SIF1668;
+		comb3freq[1][1][0][0][5][5][8] = SIF1669;	comb3freq[1][1][0][0][6][0][7] = SIF1718;	comb3freq[1][1][0][0][6][0][8] = SIF1719;	comb3freq[1][1][0][0][6][1][6] = SIF1727;
+		comb3freq[1][1][0][0][6][2][6] = SIF1737;	comb3freq[1][1][0][0][6][3][6] = SIF1747;	comb3freq[1][1][0][0][6][4][6] = SIF1757;	comb3freq[1][1][0][0][6][5][6] = SIF1767;
+		comb3freq[1][1][0][0][6][6][9] = SIF1770;	comb3freq[1][1][0][0][6][6][7] = SIF1778;	comb3freq[1][1][0][0][6][6][8] = SIF1779;	comb3freq[1][1][0][0][7][0][8] = SIF1819;
+		comb3freq[1][1][0][0][7][1][7] = SIF1828;	comb3freq[1][1][0][0][7][2][7] = SIF1838;	comb3freq[1][1][0][0][7][3][7] = SIF1848;	comb3freq[1][1][0][0][7][4][7] = SIF1858;
+		comb3freq[1][1][0][0][7][5][7] = SIF1868;	comb3freq[1][1][0][0][7][6][7] = SIF1878;	comb3freq[1][1][0][0][7][7][9] = SIF1880;	comb3freq[1][1][0][0][7][7][8] = SIF1889;
+		comb3freq[1][1][0][0][8][1][8] = SIF1929;	comb3freq[1][1][0][0][8][2][8] = SIF1939;	comb3freq[1][1][0][0][8][3][8] = SIF1949;	comb3freq[1][1][0][0][8][4][8] = SIF1959;
+		comb3freq[1][1][0][0][8][5][8] = SIF1969;	comb3freq[1][1][0][0][8][6][8] = SIF1979;	comb3freq[1][1][0][0][8][7][8] = SIF1989;	comb3freq[1][1][0][0][8][8][9] = SIF1990;
+		comb3freq[1][1][0][1][9][1][2] = SIF2023;	comb3freq[1][1][0][1][9][1][3] = SIF2024;	comb3freq[1][1][0][1][9][1][4] = SIF2025;	comb3freq[1][1][0][1][9][1][5] = SIF2026;
+		comb3freq[1][1][0][1][9][1][6] = SIF2027;	comb3freq[1][1][0][1][9][1][7] = SIF2028;	comb3freq[1][1][0][1][9][1][8] = SIF2029;	comb3freq[1][1][0][1][9][2][9] = SIF2030;
+		comb3freq[1][1][0][1][9][3][9] = SIF2040;	comb3freq[1][1][0][1][9][4][9] = SIF2050;	comb3freq[1][1][0][1][9][5][9] = SIF2060;	comb3freq[1][1][0][1][9][6][9] = SIF2070;
+		comb3freq[1][1][0][1][9][7][9] = SIF2080;	comb3freq[1][1][0][1][9][8][9] = SIF2090;	comb3freq[1][1][0][1][2][1][3] = SIF2324;	comb3freq[1][1][0][1][2][1][4] = SIF2325;
+		comb3freq[1][1][0][1][2][1][5] = SIF2326;	comb3freq[1][1][0][1][2][1][6] = SIF2327;	comb3freq[1][1][0][1][2][1][7] = SIF2328;	comb3freq[1][1][0][1][2][1][8] = SIF2329;
+		comb3freq[1][1][0][1][2][2][9] = SIF2330;	comb3freq[1][1][0][1][2][2][3] = SIF2334;	comb3freq[1][1][0][1][2][2][4] = SIF2335;	comb3freq[1][1][0][1][2][2][5] = SIF2336;
+		comb3freq[1][1][0][1][2][2][6] = SIF2337;	comb3freq[1][1][0][1][2][2][7] = SIF2338;	comb3freq[1][1][0][1][2][2][8] = SIF2339;	comb3freq[1][1][0][1][3][1][4] = SIF2425;
+		comb3freq[1][1][0][1][3][1][5] = SIF2426;	comb3freq[1][1][0][1][3][1][6] = SIF2427;	comb3freq[1][1][0][1][3][1][7] = SIF2428;	comb3freq[1][1][0][1][3][1][8] = SIF2429;
+		comb3freq[1][1][0][1][3][2][3] = SIF2434;	comb3freq[1][1][0][1][3][3][9] = SIF2440;	comb3freq[1][1][0][1][3][3][4] = SIF2445;	comb3freq[1][1][0][1][3][3][5] = SIF2446;
+		comb3freq[1][1][0][1][3][3][6] = SIF2447;	comb3freq[1][1][0][1][3][3][7] = SIF2448;	comb3freq[1][1][0][1][3][3][8] = SIF2449;	comb3freq[1][1][0][1][4][1][5] = SIF2526;
+		comb3freq[1][1][0][1][4][1][6] = SIF2527;	comb3freq[1][1][0][1][4][1][7] = SIF2528;	comb3freq[1][1][0][1][4][1][8] = SIF2529;	comb3freq[1][1][0][1][4][2][4] = SIF2535;
+		comb3freq[1][1][0][1][4][3][4] = SIF2545;	comb3freq[1][1][0][1][4][4][9] = SIF2550;	comb3freq[1][1][0][1][4][4][5] = SIF2556;	comb3freq[1][1][0][1][4][4][6] = SIF2557;
+		comb3freq[1][1][0][1][4][4][7] = SIF2558;	comb3freq[1][1][0][1][4][4][8] = SIF2559;	comb3freq[1][1][0][1][5][1][6] = SIF2627;	comb3freq[1][1][0][1][5][1][7] = SIF2628;
+		comb3freq[1][1][0][1][5][1][8] = SIF2629;	comb3freq[1][1][0][1][5][2][5] = SIF2636;	comb3freq[1][1][0][1][5][3][5] = SIF2646;	comb3freq[1][1][0][1][5][4][5] = SIF2656;
+		comb3freq[1][1][0][1][5][5][9] = SIF2660;	comb3freq[1][1][0][1][5][5][6] = SIF2667;	comb3freq[1][1][0][1][5][5][7] = SIF2668;	comb3freq[1][1][0][1][5][5][8] = SIF2669;
+		comb3freq[1][1][0][1][6][1][7] = SIF2728;	comb3freq[1][1][0][1][6][1][8] = SIF2729;	comb3freq[1][1][0][1][6][2][6] = SIF2737;	comb3freq[1][1][0][1][6][3][6] = SIF2747;
+		comb3freq[1][1][0][1][6][4][6] = SIF2757;	comb3freq[1][1][0][1][6][5][6] = SIF2767;	comb3freq[1][1][0][1][6][6][9] = SIF2770;	comb3freq[1][1][0][1][6][6][7] = SIF2778;
+		comb3freq[1][1][0][1][6][6][8] = SIF2779;	comb3freq[1][1][0][1][7][1][8] = SIF2829;	comb3freq[1][1][0][1][7][2][7] = SIF2838;	comb3freq[1][1][0][1][7][3][7] = SIF2848;
+		comb3freq[1][1][0][1][7][4][7] = SIF2858;	comb3freq[1][1][0][1][7][5][7] = SIF2868;	comb3freq[1][1][0][1][7][6][7] = SIF2878;	comb3freq[1][1][0][1][7][7][9] = SIF2880;
+		comb3freq[1][1][0][1][7][7][8] = SIF2889;	comb3freq[1][1][0][1][8][2][8] = SIF2939;	comb3freq[1][1][0][1][8][3][8] = SIF2949;	comb3freq[1][1][0][1][8][4][8] = SIF2959;
+		comb3freq[1][1][0][1][8][5][8] = SIF2969;	comb3freq[1][1][0][1][8][6][8] = SIF2979;	comb3freq[1][1][0][1][8][7][8] = SIF2989;	comb3freq[1][1][0][1][8][8][9] = SIF2990;
+		comb3freq[1][1][0][2][9][2][3] = SIF3034;	comb3freq[1][1][0][2][9][2][4] = SIF3035;	comb3freq[1][1][0][2][9][2][5] = SIF3036;	comb3freq[1][1][0][2][9][2][6] = SIF3037;
+		comb3freq[1][1][0][2][9][2][7] = SIF3038;	comb3freq[1][1][0][2][9][2][8] = SIF3039;	comb3freq[1][1][0][2][9][3][9] = SIF3040;	comb3freq[1][1][0][2][9][4][9] = SIF3050;
+		comb3freq[1][1][0][2][9][5][9] = SIF3060;	comb3freq[1][1][0][2][9][6][9] = SIF3070;	comb3freq[1][1][0][2][9][7][9] = SIF3080;	comb3freq[1][1][0][2][9][8][9] = SIF3090;
+		comb3freq[1][1][0][2][3][2][4] = SIF3435;	comb3freq[1][1][0][2][3][2][5] = SIF3436;	comb3freq[1][1][0][2][3][2][6] = SIF3437;	comb3freq[1][1][0][2][3][2][7] = SIF3438;
+		comb3freq[1][1][0][2][3][2][8] = SIF3439;	comb3freq[1][1][0][2][3][3][9] = SIF3440;	comb3freq[1][1][0][2][3][3][4] = SIF3445;	comb3freq[1][1][0][2][3][3][5] = SIF3446;
+		comb3freq[1][1][0][2][3][3][6] = SIF3447;	comb3freq[1][1][0][2][3][3][7] = SIF3448;	comb3freq[1][1][0][2][3][3][8] = SIF3449;	comb3freq[1][1][0][2][4][2][5] = SIF3536;
+		comb3freq[1][1][0][2][4][2][6] = SIF3537;	comb3freq[1][1][0][2][4][2][7] = SIF3538;	comb3freq[1][1][0][2][4][2][8] = SIF3539;	comb3freq[1][1][0][2][4][3][4] = SIF3545;
+		comb3freq[1][1][0][2][4][4][9] = SIF3550;	comb3freq[1][1][0][2][4][4][5] = SIF3556;	comb3freq[1][1][0][2][4][4][6] = SIF3557;	comb3freq[1][1][0][2][4][4][7] = SIF3558;
+		comb3freq[1][1][0][2][4][4][8] = SIF3559;	comb3freq[1][1][0][2][5][2][6] = SIF3637;	comb3freq[1][1][0][2][5][2][7] = SIF3638;	comb3freq[1][1][0][2][5][2][8] = SIF3639;
+		comb3freq[1][1][0][2][5][3][5] = SIF3646;	comb3freq[1][1][0][2][5][4][5] = SIF3656;	comb3freq[1][1][0][2][5][5][9] = SIF3660;	comb3freq[1][1][0][2][5][5][6] = SIF3667;
+		comb3freq[1][1][0][2][5][5][7] = SIF3668;	comb3freq[1][1][0][2][5][5][8] = SIF3669;	comb3freq[1][1][0][2][6][2][7] = SIF3738;	comb3freq[1][1][0][2][6][2][8] = SIF3739;
+		comb3freq[1][1][0][2][6][3][6] = SIF3747;	comb3freq[1][1][0][2][6][4][6] = SIF3757;	comb3freq[1][1][0][2][6][5][6] = SIF3767;	comb3freq[1][1][0][2][6][6][9] = SIF3770;
+		comb3freq[1][1][0][2][6][6][7] = SIF3778;	comb3freq[1][1][0][2][6][6][8] = SIF3779;	comb3freq[1][1][0][2][7][2][8] = SIF3839;	comb3freq[1][1][0][2][7][3][7] = SIF3848;
+		comb3freq[1][1][0][2][7][4][7] = SIF3858;	comb3freq[1][1][0][2][7][5][7] = SIF3868;	comb3freq[1][1][0][2][7][6][7] = SIF3878;	comb3freq[1][1][0][2][7][7][9] = SIF3880;
+		comb3freq[1][1][0][2][7][7][8] = SIF3889;	comb3freq[1][1][0][2][8][3][8] = SIF3949;	comb3freq[1][1][0][2][8][4][8] = SIF3959;	comb3freq[1][1][0][2][8][5][8] = SIF3969;
+		comb3freq[1][1][0][2][8][6][8] = SIF3979;	comb3freq[1][1][0][2][8][7][8] = SIF3989;	comb3freq[1][1][0][2][8][8][9] = SIF3990;	comb3freq[1][1][0][3][9][3][4] = SIF4045;
+		comb3freq[1][1][0][3][9][3][5] = SIF4046;	comb3freq[1][1][0][3][9][3][6] = SIF4047;	comb3freq[1][1][0][3][9][3][7] = SIF4048;	comb3freq[1][1][0][3][9][3][8] = SIF4049;
+		comb3freq[1][1][0][3][9][4][9] = SIF4050;	comb3freq[1][1][0][3][9][5][9] = SIF4060;	comb3freq[1][1][0][3][9][6][9] = SIF4070;	comb3freq[1][1][0][3][9][7][9] = SIF4080;
+		comb3freq[1][1][0][3][9][8][9] = SIF4090;	comb3freq[1][1][0][3][4][3][5] = SIF4546;	comb3freq[1][1][0][3][4][3][6] = SIF4547;	comb3freq[1][1][0][3][4][3][7] = SIF4548;
+		comb3freq[1][1][0][3][4][3][8] = SIF4549;	comb3freq[1][1][0][3][4][4][9] = SIF4550;	comb3freq[1][1][0][3][4][4][5] = SIF4556;	comb3freq[1][1][0][3][4][4][6] = SIF4557;
+		comb3freq[1][1][0][3][4][4][7] = SIF4558;	comb3freq[1][1][0][3][4][4][8] = SIF4559;	comb3freq[1][1][0][3][5][3][6] = SIF4647;	comb3freq[1][1][0][3][5][3][7] = SIF4648;
+		comb3freq[1][1][0][3][5][3][8] = SIF4649;	comb3freq[1][1][0][3][5][4][5] = SIF4656;	comb3freq[1][1][0][3][5][5][9] = SIF4660;	comb3freq[1][1][0][3][5][5][6] = SIF4667;
+		comb3freq[1][1][0][3][5][5][7] = SIF4668;	comb3freq[1][1][0][3][5][5][8] = SIF4669;	comb3freq[1][1][0][3][6][3][7] = SIF4748;	comb3freq[1][1][0][3][6][3][8] = SIF4749;
+		comb3freq[1][1][0][3][6][4][6] = SIF4757;	comb3freq[1][1][0][3][6][5][6] = SIF4767;	comb3freq[1][1][0][3][6][6][9] = SIF4770;	comb3freq[1][1][0][3][6][6][7] = SIF4778;
+		comb3freq[1][1][0][3][6][6][8] = SIF4779;	comb3freq[1][1][0][3][7][3][8] = SIF4849;	comb3freq[1][1][0][3][7][4][7] = SIF4858;	comb3freq[1][1][0][3][7][5][7] = SIF4868;
+		comb3freq[1][1][0][3][7][6][7] = SIF4878;	comb3freq[1][1][0][3][7][7][9] = SIF4880;	comb3freq[1][1][0][3][7][7][8] = SIF4889;	comb3freq[1][1][0][3][8][4][8] = SIF4959;
+		comb3freq[1][1][0][3][8][5][8] = SIF4969;	comb3freq[1][1][0][3][8][6][8] = SIF4979;	comb3freq[1][1][0][3][8][7][8] = SIF4989;	comb3freq[1][1][0][3][8][8][9] = SIF4990;
+		comb3freq[1][1][0][4][9][4][5] = SIF5056;	comb3freq[1][1][0][4][9][4][6] = SIF5057;	comb3freq[1][1][0][4][9][4][7] = SIF5058;	comb3freq[1][1][0][4][9][4][8] = SIF5059;
+		comb3freq[1][1][0][4][9][5][9] = SIF5060;	comb3freq[1][1][0][4][9][6][9] = SIF5070;	comb3freq[1][1][0][4][9][7][9] = SIF5080;	comb3freq[1][1][0][4][9][8][9] = SIF5090;
+		comb3freq[1][1][0][4][5][4][6] = SIF5657;	comb3freq[1][1][0][4][5][4][7] = SIF5658;	comb3freq[1][1][0][4][5][4][8] = SIF5659;	comb3freq[1][1][0][4][5][5][9] = SIF5660;
+		comb3freq[1][1][0][4][5][5][6] = SIF5667;	comb3freq[1][1][0][4][5][5][7] = SIF5668;	comb3freq[1][1][0][4][5][5][8] = SIF5669;	comb3freq[1][1][0][4][6][4][7] = SIF5758;
+		comb3freq[1][1][0][4][6][4][8] = SIF5759;	comb3freq[1][1][0][4][6][5][6] = SIF5767;	comb3freq[1][1][0][4][6][6][9] = SIF5770;	comb3freq[1][1][0][4][6][6][7] = SIF5778;
+		comb3freq[1][1][0][4][6][6][8] = SIF5779;	comb3freq[1][1][0][4][7][4][8] = SIF5859;	comb3freq[1][1][0][4][7][5][7] = SIF5868;	comb3freq[1][1][0][4][7][6][7] = SIF5878;
+		comb3freq[1][1][0][4][7][7][9] = SIF5880;	comb3freq[1][1][0][4][7][7][8] = SIF5889;	comb3freq[1][1][0][4][8][5][8] = SIF5969;	comb3freq[1][1][0][4][8][6][8] = SIF5979;
+		comb3freq[1][1][0][4][8][7][8] = SIF5989;	comb3freq[1][1][0][4][8][8][9] = SIF5990;	comb3freq[1][1][0][5][9][5][6] = SIF6067;	comb3freq[1][1][0][5][9][5][7] = SIF6068;
+		comb3freq[1][1][0][5][9][5][8] = SIF6069;	comb3freq[1][1][0][5][9][6][9] = SIF6070;	comb3freq[1][1][0][5][9][7][9] = SIF6080;	comb3freq[1][1][0][5][9][8][9] = SIF6090;
+		comb3freq[1][1][0][5][6][5][7] = SIF6768;	comb3freq[1][1][0][5][6][5][8] = SIF6769;	comb3freq[1][1][0][5][6][6][9] = SIF6770;	comb3freq[1][1][0][5][6][6][7] = SIF6778;
+		comb3freq[1][1][0][5][6][6][8] = SIF6779;	comb3freq[1][1][0][5][7][5][8] = SIF6869;	comb3freq[1][1][0][5][7][6][7] = SIF6878;	comb3freq[1][1][0][5][7][7][9] = SIF6880;
+		comb3freq[1][1][0][5][7][7][8] = SIF6889;	comb3freq[1][1][0][5][8][6][8] = SIF6979;	comb3freq[1][1][0][5][8][7][8] = SIF6989;	comb3freq[1][1][0][5][8][8][9] = SIF6990;
+		comb3freq[1][1][0][6][9][6][7] = SIF7078;	comb3freq[1][1][0][6][9][6][8] = SIF7079;	comb3freq[1][1][0][6][9][7][9] = SIF7080;	comb3freq[1][1][0][6][9][8][9] = SIF7090;
+		comb3freq[1][1][0][6][7][6][8] = SIF7879;	comb3freq[1][1][0][6][7][7][9] = SIF7880;	comb3freq[1][1][0][6][7][7][8] = SIF7889;	comb3freq[1][1][0][6][8][7][8] = SIF7989;
+		comb3freq[1][1][0][6][8][8][9] = SIF7990;	comb3freq[1][1][0][7][9][7][8] = SIF8089;	comb3freq[1][1][0][7][9][8][9] = SIF8090;	comb3freq[1][1][0][7][8][8][9] = SIF8990;
+		////// End of automatically generated code block triple frequency combinations/////
+		////// Automatically generated code block for quadruple frequency combinations/////
+		comb3freq[0][0][0][0][1][2][3] = IGF1234;	comb3freq[0][0][0][0][1][2][4] = IGF1235;	comb3freq[0][0][0][0][1][2][5] = IGF1236;	comb3freq[0][0][0][0][1][2][6] = IGF1237;
+		comb3freq[0][0][0][0][1][2][7] = IGF1238;	comb3freq[0][0][0][0][1][2][8] = IGF1239;	comb3freq[0][0][0][0][1][3][4] = IGF1245;	comb3freq[0][0][0][0][1][3][5] = IGF1246;
+		comb3freq[0][0][0][0][1][3][6] = IGF1247;	comb3freq[0][0][0][0][1][3][7] = IGF1248;	comb3freq[0][0][0][0][1][3][8] = IGF1249;	comb3freq[0][0][0][0][1][4][5] = IGF1256;
+		comb3freq[0][0][0][0][1][4][6] = IGF1257;	comb3freq[0][0][0][0][1][4][7] = IGF1258;	comb3freq[0][0][0][0][1][4][8] = IGF1259;	comb3freq[0][0][0][0][1][5][6] = IGF1267;
+		comb3freq[0][0][0][0][1][5][7] = IGF1268;	comb3freq[0][0][0][0][1][5][8] = IGF1269;	comb3freq[0][0][0][0][1][6][7] = IGF1278;	comb3freq[0][0][0][0][1][6][8] = IGF1279;
+		comb3freq[0][0][0][0][1][7][8] = IGF1289;	comb3freq[0][0][0][0][2][3][4] = IGF1345;	comb3freq[0][0][0][0][2][3][5] = IGF1346;	comb3freq[0][0][0][0][2][3][6] = IGF1347;
+		comb3freq[0][0][0][0][2][3][7] = IGF1348;	comb3freq[0][0][0][0][2][3][8] = IGF1349;	comb3freq[0][0][0][0][2][4][5] = IGF1356;	comb3freq[0][0][0][0][2][4][6] = IGF1357;
+		comb3freq[0][0][0][0][2][4][7] = IGF1358;	comb3freq[0][0][0][0][2][4][8] = IGF1359;	comb3freq[0][0][0][0][2][5][6] = IGF1367;	comb3freq[0][0][0][0][2][5][7] = IGF1368;
+		comb3freq[0][0][0][0][2][5][8] = IGF1369;	comb3freq[0][0][0][0][2][6][7] = IGF1378;	comb3freq[0][0][0][0][2][6][8] = IGF1379;	comb3freq[0][0][0][0][2][7][8] = IGF1389;
+		comb3freq[0][0][0][0][3][4][5] = IGF1456;	comb3freq[0][0][0][0][3][4][6] = IGF1457;	comb3freq[0][0][0][0][3][4][7] = IGF1458;	comb3freq[0][0][0][0][3][4][8] = IGF1459;
+		comb3freq[0][0][0][0][3][5][6] = IGF1467;	comb3freq[0][0][0][0][3][5][7] = IGF1468;	comb3freq[0][0][0][0][3][5][8] = IGF1469;	comb3freq[0][0][0][0][3][6][7] = IGF1478;
+		comb3freq[0][0][0][0][3][6][8] = IGF1479;	comb3freq[0][0][0][0][3][7][8] = IGF1489;	comb3freq[0][0][0][0][4][5][6] = IGF1567;	comb3freq[0][0][0][0][4][5][7] = IGF1568;
+		comb3freq[0][0][0][0][4][5][8] = IGF1569;	comb3freq[0][0][0][0][4][6][7] = IGF1578;	comb3freq[0][0][0][0][4][6][8] = IGF1579;	comb3freq[0][0][0][0][4][7][8] = IGF1589;
+		comb3freq[0][0][0][0][5][6][7] = IGF1678;	comb3freq[0][0][0][0][5][6][8] = IGF1679;	comb3freq[0][0][0][0][5][7][8] = IGF1689;	comb3freq[0][0][0][0][6][7][8] = IGF1789;
+		comb3freq[0][0][0][1][2][3][4] = IGF2345;	comb3freq[0][0][0][1][2][3][5] = IGF2346;	comb3freq[0][0][0][1][2][3][6] = IGF2347;	comb3freq[0][0][0][1][2][3][7] = IGF2348;
+		comb3freq[0][0][0][1][2][3][8] = IGF2349;	comb3freq[0][0][0][1][2][4][5] = IGF2356;	comb3freq[0][0][0][1][2][4][6] = IGF2357;	comb3freq[0][0][0][1][2][4][7] = IGF2358;
+		comb3freq[0][0][0][1][2][4][8] = IGF2359;	comb3freq[0][0][0][1][2][5][6] = IGF2367;	comb3freq[0][0][0][1][2][5][7] = IGF2368;	comb3freq[0][0][0][1][2][5][8] = IGF2369;
+		comb3freq[0][0][0][1][2][6][7] = IGF2378;	comb3freq[0][0][0][1][2][6][8] = IGF2379;	comb3freq[0][0][0][1][2][7][8] = IGF2389;	comb3freq[0][0][0][1][3][4][5] = IGF2456;
+		comb3freq[0][0][0][1][3][4][6] = IGF2457;	comb3freq[0][0][0][1][3][4][7] = IGF2458;	comb3freq[0][0][0][1][3][4][8] = IGF2459;	comb3freq[0][0][0][1][3][5][6] = IGF2467;
+		comb3freq[0][0][0][1][3][5][7] = IGF2468;	comb3freq[0][0][0][1][3][5][8] = IGF2469;	comb3freq[0][0][0][1][3][6][7] = IGF2478;	comb3freq[0][0][0][1][3][6][8] = IGF2479;
+		comb3freq[0][0][0][1][3][7][8] = IGF2489;	comb3freq[0][0][0][1][4][5][6] = IGF2567;	comb3freq[0][0][0][1][4][5][7] = IGF2568;	comb3freq[0][0][0][1][4][5][8] = IGF2569;
+		comb3freq[0][0][0][1][4][6][7] = IGF2578;	comb3freq[0][0][0][1][4][6][8] = IGF2579;	comb3freq[0][0][0][1][4][7][8] = IGF2589;	comb3freq[0][0][0][1][5][6][7] = IGF2678;
+		comb3freq[0][0][0][1][5][6][8] = IGF2679;	comb3freq[0][0][0][1][5][7][8] = IGF2689;	comb3freq[0][0][0][1][6][7][8] = IGF2789;	comb3freq[0][0][0][2][0][1][9] = IGF3120;
+		comb3freq[0][0][0][2][3][4][5] = IGF3456;	comb3freq[0][0][0][2][3][4][6] = IGF3457;	comb3freq[0][0][0][2][3][4][7] = IGF3458;	comb3freq[0][0][0][2][3][4][8] = IGF3459;
+		comb3freq[0][0][0][2][3][5][6] = IGF3467;	comb3freq[0][0][0][2][3][5][7] = IGF3468;	comb3freq[0][0][0][2][3][5][8] = IGF3469;	comb3freq[0][0][0][2][3][6][7] = IGF3478;
+		comb3freq[0][0][0][2][3][6][8] = IGF3479;	comb3freq[0][0][0][2][3][7][8] = IGF3489;	comb3freq[0][0][0][2][4][5][6] = IGF3567;	comb3freq[0][0][0][2][4][5][7] = IGF3568;
+		comb3freq[0][0][0][2][4][5][8] = IGF3569;	comb3freq[0][0][0][2][4][6][7] = IGF3578;	comb3freq[0][0][0][2][4][6][8] = IGF3579;	comb3freq[0][0][0][2][4][7][8] = IGF3589;
+		comb3freq[0][0][0][2][5][6][7] = IGF3678;	comb3freq[0][0][0][2][5][6][8] = IGF3679;	comb3freq[0][0][0][2][5][7][8] = IGF3689;	comb3freq[0][0][0][2][6][7][8] = IGF3789;
+		comb3freq[0][0][0][3][0][1][9] = IGF4120;	comb3freq[0][0][0][3][0][2][9] = IGF4130;	comb3freq[0][0][0][3][1][2][9] = IGF4230;	comb3freq[0][0][0][3][4][5][6] = IGF4567;
+		comb3freq[0][0][0][3][4][5][7] = IGF4568;	comb3freq[0][0][0][3][4][5][8] = IGF4569;	comb3freq[0][0][0][3][4][6][7] = IGF4578;	comb3freq[0][0][0][3][4][6][8] = IGF4579;
+		comb3freq[0][0][0][3][4][7][8] = IGF4589;	comb3freq[0][0][0][3][5][6][7] = IGF4678;	comb3freq[0][0][0][3][5][6][8] = IGF4679;	comb3freq[0][0][0][3][5][7][8] = IGF4689;
+		comb3freq[0][0][0][3][6][7][8] = IGF4789;	comb3freq[0][0][0][4][0][1][9] = IGF5120;	comb3freq[0][0][0][4][0][2][9] = IGF5130;	comb3freq[0][0][0][4][0][3][9] = IGF5140;
+		comb3freq[0][0][0][4][1][2][9] = IGF5230;	comb3freq[0][0][0][4][1][3][9] = IGF5240;	comb3freq[0][0][0][4][2][3][9] = IGF5340;	comb3freq[0][0][0][4][5][6][7] = IGF5678;
+		comb3freq[0][0][0][4][5][6][8] = IGF5679;	comb3freq[0][0][0][4][5][7][8] = IGF5689;	comb3freq[0][0][0][4][6][7][8] = IGF5789;	comb3freq[0][0][0][5][0][1][9] = IGF6120;
+		comb3freq[0][0][0][5][0][2][9] = IGF6130;	comb3freq[0][0][0][5][0][3][9] = IGF6140;	comb3freq[0][0][0][5][0][4][9] = IGF6150;	comb3freq[0][0][0][5][1][2][9] = IGF6230;
+		comb3freq[0][0][0][5][1][3][9] = IGF6240;	comb3freq[0][0][0][5][1][4][9] = IGF6250;	comb3freq[0][0][0][5][2][3][9] = IGF6340;	comb3freq[0][0][0][5][2][4][9] = IGF6350;
+		comb3freq[0][0][0][5][3][4][9] = IGF6450;	comb3freq[0][0][0][5][6][7][8] = IGF6789;	comb3freq[0][0][0][6][0][1][9] = IGF7120;	comb3freq[0][0][0][6][0][2][9] = IGF7130;
+		comb3freq[0][0][0][6][0][3][9] = IGF7140;	comb3freq[0][0][0][6][0][4][9] = IGF7150;	comb3freq[0][0][0][6][0][5][9] = IGF7160;	comb3freq[0][0][0][6][1][2][9] = IGF7230;
+		comb3freq[0][0][0][6][1][3][9] = IGF7240;	comb3freq[0][0][0][6][1][4][9] = IGF7250;	comb3freq[0][0][0][6][1][5][9] = IGF7260;	comb3freq[0][0][0][6][2][3][9] = IGF7340;
+		comb3freq[0][0][0][6][2][4][9] = IGF7350;	comb3freq[0][0][0][6][2][5][9] = IGF7360;	comb3freq[0][0][0][6][3][4][9] = IGF7450;	comb3freq[0][0][0][6][3][5][9] = IGF7460;
+		comb3freq[0][0][0][6][4][5][9] = IGF7560;	comb3freq[0][0][0][7][0][1][9] = IGF8120;	comb3freq[0][0][0][7][0][2][9] = IGF8130;	comb3freq[0][0][0][7][0][3][9] = IGF8140;
+		comb3freq[0][0][0][7][0][4][9] = IGF8150;	comb3freq[0][0][0][7][0][5][9] = IGF8160;	comb3freq[0][0][0][7][0][6][9] = IGF8170;	comb3freq[0][0][0][7][1][2][9] = IGF8230;
+		comb3freq[0][0][0][7][1][3][9] = IGF8240;	comb3freq[0][0][0][7][1][4][9] = IGF8250;	comb3freq[0][0][0][7][1][5][9] = IGF8260;	comb3freq[0][0][0][7][1][6][9] = IGF8270;
+		comb3freq[0][0][0][7][2][3][9] = IGF8340;	comb3freq[0][0][0][7][2][4][9] = IGF8350;	comb3freq[0][0][0][7][2][5][9] = IGF8360;	comb3freq[0][0][0][7][2][6][9] = IGF8370;
+		comb3freq[0][0][0][7][3][4][9] = IGF8450;	comb3freq[0][0][0][7][3][5][9] = IGF8460;	comb3freq[0][0][0][7][3][6][9] = IGF8470;	comb3freq[0][0][0][7][4][5][9] = IGF8560;
+		comb3freq[0][0][0][7][4][6][9] = IGF8570;	comb3freq[0][0][0][7][5][6][9] = IGF8670;	comb3freq[0][0][0][8][0][1][9] = IGF9120;	comb3freq[0][0][0][8][0][2][9] = IGF9130;
+		comb3freq[0][0][0][8][0][3][9] = IGF9140;	comb3freq[0][0][0][8][0][4][9] = IGF9150;	comb3freq[0][0][0][8][0][5][9] = IGF9160;	comb3freq[0][0][0][8][0][6][9] = IGF9170;
+		comb3freq[0][0][0][8][0][7][9] = IGF9180;	comb3freq[0][0][0][8][1][2][9] = IGF9230;	comb3freq[0][0][0][8][1][3][9] = IGF9240;	comb3freq[0][0][0][8][1][4][9] = IGF9250;
+		comb3freq[0][0][0][8][1][5][9] = IGF9260;	comb3freq[0][0][0][8][1][6][9] = IGF9270;	comb3freq[0][0][0][8][1][7][9] = IGF9280;	comb3freq[0][0][0][8][2][3][9] = IGF9340;
+		comb3freq[0][0][0][8][2][4][9] = IGF9350;	comb3freq[0][0][0][8][2][5][9] = IGF9360;	comb3freq[0][0][0][8][2][6][9] = IGF9370;	comb3freq[0][0][0][8][2][7][9] = IGF9380;
+		comb3freq[0][0][0][8][3][4][9] = IGF9450;	comb3freq[0][0][0][8][3][5][9] = IGF9460;	comb3freq[0][0][0][8][3][6][9] = IGF9470;	comb3freq[0][0][0][8][3][7][9] = IGF9480;
+		comb3freq[0][0][0][8][4][5][9] = IGF9560;	comb3freq[0][0][0][8][4][6][9] = IGF9570;	comb3freq[0][0][0][8][4][7][9] = IGF9580;	comb3freq[0][0][0][8][5][6][9] = IGF9670;
+		comb3freq[0][0][0][8][5][7][9] = IGF9680;	comb3freq[0][0][0][8][6][7][9] = IGF9780;	comb3freq[0][0][0][0][2][1][3] = IGF1324;	comb3freq[0][0][0][0][2][1][4] = IGF1325;
+		comb3freq[0][0][0][0][2][1][5] = IGF1326;	comb3freq[0][0][0][0][2][1][6] = IGF1327;	comb3freq[0][0][0][0][2][1][7] = IGF1328;	comb3freq[0][0][0][0][2][1][8] = IGF1329;
+		comb3freq[0][0][0][0][3][1][4] = IGF1425;	comb3freq[0][0][0][0][3][1][5] = IGF1426;	comb3freq[0][0][0][0][3][1][6] = IGF1427;	comb3freq[0][0][0][0][3][1][7] = IGF1428;
+		comb3freq[0][0][0][0][3][1][8] = IGF1429;	comb3freq[0][0][0][0][4][1][5] = IGF1526;	comb3freq[0][0][0][0][4][1][6] = IGF1527;	comb3freq[0][0][0][0][4][1][7] = IGF1528;
+		comb3freq[0][0][0][0][4][1][8] = IGF1529;	comb3freq[0][0][0][0][5][1][6] = IGF1627;	comb3freq[0][0][0][0][5][1][7] = IGF1628;	comb3freq[0][0][0][0][5][1][8] = IGF1629;
+		comb3freq[0][0][0][0][6][1][7] = IGF1728;	comb3freq[0][0][0][0][6][1][8] = IGF1729;	comb3freq[0][0][0][0][7][1][8] = IGF1829;	comb3freq[0][0][0][0][3][2][4] = IGF1435;
+		comb3freq[0][0][0][0][3][2][5] = IGF1436;	comb3freq[0][0][0][0][3][2][6] = IGF1437;	comb3freq[0][0][0][0][3][2][7] = IGF1438;	comb3freq[0][0][0][0][3][2][8] = IGF1439;
+		comb3freq[0][0][0][0][4][2][5] = IGF1536;	comb3freq[0][0][0][0][4][2][6] = IGF1537;	comb3freq[0][0][0][0][4][2][7] = IGF1538;	comb3freq[0][0][0][0][4][2][8] = IGF1539;
+		comb3freq[0][0][0][0][5][2][6] = IGF1637;	comb3freq[0][0][0][0][5][2][7] = IGF1638;	comb3freq[0][0][0][0][5][2][8] = IGF1639;	comb3freq[0][0][0][0][6][2][7] = IGF1738;
+		comb3freq[0][0][0][0][6][2][8] = IGF1739;	comb3freq[0][0][0][0][7][2][8] = IGF1839;	comb3freq[0][0][0][0][4][3][5] = IGF1546;	comb3freq[0][0][0][0][4][3][6] = IGF1547;
+		comb3freq[0][0][0][0][4][3][7] = IGF1548;	comb3freq[0][0][0][0][4][3][8] = IGF1549;	comb3freq[0][0][0][0][5][3][6] = IGF1647;	comb3freq[0][0][0][0][5][3][7] = IGF1648;
+		comb3freq[0][0][0][0][5][3][8] = IGF1649;	comb3freq[0][0][0][0][6][3][7] = IGF1748;	comb3freq[0][0][0][0][6][3][8] = IGF1749;	comb3freq[0][0][0][0][7][3][8] = IGF1849;
+		comb3freq[0][0][0][0][5][4][6] = IGF1657;	comb3freq[0][0][0][0][5][4][7] = IGF1658;	comb3freq[0][0][0][0][5][4][8] = IGF1659;	comb3freq[0][0][0][0][6][4][7] = IGF1758;
+		comb3freq[0][0][0][0][6][4][8] = IGF1759;	comb3freq[0][0][0][0][7][4][8] = IGF1859;	comb3freq[0][0][0][0][6][5][7] = IGF1768;	comb3freq[0][0][0][0][6][5][8] = IGF1769;
+		comb3freq[0][0][0][0][7][5][8] = IGF1869;	comb3freq[0][0][0][0][7][6][8] = IGF1879;	comb3freq[0][0][0][1][3][2][4] = IGF2435;	comb3freq[0][0][0][1][3][2][5] = IGF2436;
+		comb3freq[0][0][0][1][3][2][6] = IGF2437;	comb3freq[0][0][0][1][3][2][7] = IGF2438;	comb3freq[0][0][0][1][3][2][8] = IGF2439;	comb3freq[0][0][0][1][4][2][5] = IGF2536;
+		comb3freq[0][0][0][1][4][2][6] = IGF2537;	comb3freq[0][0][0][1][4][2][7] = IGF2538;	comb3freq[0][0][0][1][4][2][8] = IGF2539;	comb3freq[0][0][0][1][5][2][6] = IGF2637;
+		comb3freq[0][0][0][1][5][2][7] = IGF2638;	comb3freq[0][0][0][1][5][2][8] = IGF2639;	comb3freq[0][0][0][1][6][2][7] = IGF2738;	comb3freq[0][0][0][1][6][2][8] = IGF2739;
+		comb3freq[0][0][0][1][7][2][8] = IGF2839;	comb3freq[0][0][0][1][4][3][5] = IGF2546;	comb3freq[0][0][0][1][4][3][6] = IGF2547;	comb3freq[0][0][0][1][4][3][7] = IGF2548;
+		comb3freq[0][0][0][1][4][3][8] = IGF2549;	comb3freq[0][0][0][1][5][3][6] = IGF2647;	comb3freq[0][0][0][1][5][3][7] = IGF2648;	comb3freq[0][0][0][1][5][3][8] = IGF2649;
+		comb3freq[0][0][0][1][6][3][7] = IGF2748;	comb3freq[0][0][0][1][6][3][8] = IGF2749;	comb3freq[0][0][0][1][7][3][8] = IGF2849;	comb3freq[0][0][0][1][5][4][6] = IGF2657;
+		comb3freq[0][0][0][1][5][4][7] = IGF2658;	comb3freq[0][0][0][1][5][4][8] = IGF2659;	comb3freq[0][0][0][1][6][4][7] = IGF2758;	comb3freq[0][0][0][1][6][4][8] = IGF2759;
+		comb3freq[0][0][0][1][7][4][8] = IGF2859;	comb3freq[0][0][0][1][6][5][7] = IGF2768;	comb3freq[0][0][0][1][6][5][8] = IGF2769;	comb3freq[0][0][0][1][7][5][8] = IGF2869;
+		comb3freq[0][0][0][1][7][6][8] = IGF2879;	comb3freq[0][0][0][2][1][0][9] = IGF3210;	comb3freq[0][0][0][2][4][3][5] = IGF3546;	comb3freq[0][0][0][2][4][3][6] = IGF3547;
+		comb3freq[0][0][0][2][4][3][7] = IGF3548;	comb3freq[0][0][0][2][4][3][8] = IGF3549;	comb3freq[0][0][0][2][5][3][6] = IGF3647;	comb3freq[0][0][0][2][5][3][7] = IGF3648;
+		comb3freq[0][0][0][2][5][3][8] = IGF3649;	comb3freq[0][0][0][2][6][3][7] = IGF3748;	comb3freq[0][0][0][2][6][3][8] = IGF3749;	comb3freq[0][0][0][2][7][3][8] = IGF3849;
+		comb3freq[0][0][0][2][5][4][6] = IGF3657;	comb3freq[0][0][0][2][5][4][7] = IGF3658;	comb3freq[0][0][0][2][5][4][8] = IGF3659;	comb3freq[0][0][0][2][6][4][7] = IGF3758;
+		comb3freq[0][0][0][2][6][4][8] = IGF3759;	comb3freq[0][0][0][2][7][4][8] = IGF3859;	comb3freq[0][0][0][2][6][5][7] = IGF3768;	comb3freq[0][0][0][2][6][5][8] = IGF3769;
+		comb3freq[0][0][0][2][7][5][8] = IGF3869;	comb3freq[0][0][0][2][7][6][8] = IGF3879;	comb3freq[0][0][0][3][1][0][9] = IGF4210;	comb3freq[0][0][0][3][2][0][9] = IGF4310;
+		comb3freq[0][0][0][3][2][1][9] = IGF4320;	comb3freq[0][0][0][3][5][4][6] = IGF4657;	comb3freq[0][0][0][3][5][4][7] = IGF4658;	comb3freq[0][0][0][3][5][4][8] = IGF4659;
+		comb3freq[0][0][0][3][6][4][7] = IGF4758;	comb3freq[0][0][0][3][6][4][8] = IGF4759;	comb3freq[0][0][0][3][7][4][8] = IGF4859;	comb3freq[0][0][0][3][6][5][7] = IGF4768;
+		comb3freq[0][0][0][3][6][5][8] = IGF4769;	comb3freq[0][0][0][3][7][5][8] = IGF4869;	comb3freq[0][0][0][3][7][6][8] = IGF4879;	comb3freq[0][0][0][4][1][0][9] = IGF5210;
+		comb3freq[0][0][0][4][2][0][9] = IGF5310;	comb3freq[0][0][0][4][3][0][9] = IGF5410;	comb3freq[0][0][0][4][2][1][9] = IGF5320;	comb3freq[0][0][0][4][3][1][9] = IGF5420;
+		comb3freq[0][0][0][4][3][2][9] = IGF5430;	comb3freq[0][0][0][4][6][5][7] = IGF5768;	comb3freq[0][0][0][4][6][5][8] = IGF5769;	comb3freq[0][0][0][4][7][5][8] = IGF5869;
+		comb3freq[0][0][0][4][7][6][8] = IGF5879;	comb3freq[0][0][0][5][1][0][9] = IGF6210;	comb3freq[0][0][0][5][2][0][9] = IGF6310;	comb3freq[0][0][0][5][3][0][9] = IGF6410;
+		comb3freq[0][0][0][5][4][0][9] = IGF6510;	comb3freq[0][0][0][5][2][1][9] = IGF6320;	comb3freq[0][0][0][5][3][1][9] = IGF6420;	comb3freq[0][0][0][5][4][1][9] = IGF6520;
+		comb3freq[0][0][0][5][3][2][9] = IGF6430;	comb3freq[0][0][0][5][4][2][9] = IGF6530;	comb3freq[0][0][0][5][4][3][9] = IGF6540;	comb3freq[0][0][0][5][7][6][8] = IGF6879;
+		comb3freq[0][0][0][6][1][0][9] = IGF7210;	comb3freq[0][0][0][6][2][0][9] = IGF7310;	comb3freq[0][0][0][6][3][0][9] = IGF7410;	comb3freq[0][0][0][6][4][0][9] = IGF7510;
+		comb3freq[0][0][0][6][5][0][9] = IGF7610;	comb3freq[0][0][0][6][2][1][9] = IGF7320;	comb3freq[0][0][0][6][3][1][9] = IGF7420;	comb3freq[0][0][0][6][4][1][9] = IGF7520;
+		comb3freq[0][0][0][6][5][1][9] = IGF7620;	comb3freq[0][0][0][6][3][2][9] = IGF7430;	comb3freq[0][0][0][6][4][2][9] = IGF7530;	comb3freq[0][0][0][6][5][2][9] = IGF7630;
+		comb3freq[0][0][0][6][4][3][9] = IGF7540;	comb3freq[0][0][0][6][5][3][9] = IGF7640;	comb3freq[0][0][0][6][5][4][9] = IGF7650;	comb3freq[0][0][0][7][1][0][9] = IGF8210;
+		comb3freq[0][0][0][7][2][0][9] = IGF8310;	comb3freq[0][0][0][7][3][0][9] = IGF8410;	comb3freq[0][0][0][7][4][0][9] = IGF8510;	comb3freq[0][0][0][7][5][0][9] = IGF8610;
+		comb3freq[0][0][0][7][6][0][9] = IGF8710;	comb3freq[0][0][0][7][2][1][9] = IGF8320;	comb3freq[0][0][0][7][3][1][9] = IGF8420;	comb3freq[0][0][0][7][4][1][9] = IGF8520;
+		comb3freq[0][0][0][7][5][1][9] = IGF8620;	comb3freq[0][0][0][7][6][1][9] = IGF8720;	comb3freq[0][0][0][7][3][2][9] = IGF8430;	comb3freq[0][0][0][7][4][2][9] = IGF8530;
+		comb3freq[0][0][0][7][5][2][9] = IGF8630;	comb3freq[0][0][0][7][6][2][9] = IGF8730;	comb3freq[0][0][0][7][4][3][9] = IGF8540;	comb3freq[0][0][0][7][5][3][9] = IGF8640;
+		comb3freq[0][0][0][7][6][3][9] = IGF8740;	comb3freq[0][0][0][7][5][4][9] = IGF8650;	comb3freq[0][0][0][7][6][4][9] = IGF8750;	comb3freq[0][0][0][7][6][5][9] = IGF8760;
+		comb3freq[0][0][0][8][1][0][9] = IGF9210;	comb3freq[0][0][0][8][2][0][9] = IGF9310;	comb3freq[0][0][0][8][3][0][9] = IGF9410;	comb3freq[0][0][0][8][4][0][9] = IGF9510;
+		comb3freq[0][0][0][8][5][0][9] = IGF9610;	comb3freq[0][0][0][8][6][0][9] = IGF9710;	comb3freq[0][0][0][8][7][0][9] = IGF9810;	comb3freq[0][0][0][8][2][1][9] = IGF9320;
+		comb3freq[0][0][0][8][3][1][9] = IGF9420;	comb3freq[0][0][0][8][4][1][9] = IGF9520;	comb3freq[0][0][0][8][5][1][9] = IGF9620;	comb3freq[0][0][0][8][6][1][9] = IGF9720;
+		comb3freq[0][0][0][8][7][1][9] = IGF9820;	comb3freq[0][0][0][8][3][2][9] = IGF9430;	comb3freq[0][0][0][8][4][2][9] = IGF9530;	comb3freq[0][0][0][8][5][2][9] = IGF9630;
+		comb3freq[0][0][0][8][6][2][9] = IGF9730;	comb3freq[0][0][0][8][7][2][9] = IGF9830;	comb3freq[0][0][0][8][4][3][9] = IGF9540;	comb3freq[0][0][0][8][5][3][9] = IGF9640;
+		comb3freq[0][0][0][8][6][3][9] = IGF9740;	comb3freq[0][0][0][8][7][3][9] = IGF9840;	comb3freq[0][0][0][8][5][4][9] = IGF9650;	comb3freq[0][0][0][8][6][4][9] = IGF9750;
+		comb3freq[0][0][0][8][7][4][9] = IGF9850;	comb3freq[0][0][0][8][6][5][9] = IGF9760;	comb3freq[0][0][0][8][7][5][9] = IGF9860;	comb3freq[0][0][0][8][7][6][9] = IGF9870;
+		comb3freq[0][0][0][0][3][1][2] = IGF1423;	comb3freq[0][0][0][0][4][1][2] = IGF1523;	comb3freq[0][0][0][0][5][1][2] = IGF1623;	comb3freq[0][0][0][0][6][1][2] = IGF1723;
+		comb3freq[0][0][0][0][7][1][2] = IGF1823;	comb3freq[0][0][0][0][8][1][2] = IGF1923;	comb3freq[0][0][0][0][4][1][3] = IGF1524;	comb3freq[0][0][0][0][5][1][3] = IGF1624;
+		comb3freq[0][0][0][0][6][1][3] = IGF1724;	comb3freq[0][0][0][0][7][1][3] = IGF1824;	comb3freq[0][0][0][0][8][1][3] = IGF1924;	comb3freq[0][0][0][0][5][1][4] = IGF1625;
+		comb3freq[0][0][0][0][6][1][4] = IGF1725;	comb3freq[0][0][0][0][7][1][4] = IGF1825;	comb3freq[0][0][0][0][8][1][4] = IGF1925;	comb3freq[0][0][0][0][6][1][5] = IGF1726;
+		comb3freq[0][0][0][0][7][1][5] = IGF1826;	comb3freq[0][0][0][0][8][1][5] = IGF1926;	comb3freq[0][0][0][0][7][1][6] = IGF1827;	comb3freq[0][0][0][0][8][1][6] = IGF1927;
+		comb3freq[0][0][0][0][8][1][7] = IGF1928;	comb3freq[0][0][0][0][4][2][3] = IGF1534;	comb3freq[0][0][0][0][5][2][3] = IGF1634;	comb3freq[0][0][0][0][6][2][3] = IGF1734;
+		comb3freq[0][0][0][0][7][2][3] = IGF1834;	comb3freq[0][0][0][0][8][2][3] = IGF1934;	comb3freq[0][0][0][0][5][2][4] = IGF1635;	comb3freq[0][0][0][0][6][2][4] = IGF1735;
+		comb3freq[0][0][0][0][7][2][4] = IGF1835;	comb3freq[0][0][0][0][8][2][4] = IGF1935;	comb3freq[0][0][0][0][6][2][5] = IGF1736;	comb3freq[0][0][0][0][7][2][5] = IGF1836;
+		comb3freq[0][0][0][0][8][2][5] = IGF1936;	comb3freq[0][0][0][0][7][2][6] = IGF1837;	comb3freq[0][0][0][0][8][2][6] = IGF1937;	comb3freq[0][0][0][0][8][2][7] = IGF1938;
+		comb3freq[0][0][0][0][5][3][4] = IGF1645;	comb3freq[0][0][0][0][6][3][4] = IGF1745;	comb3freq[0][0][0][0][7][3][4] = IGF1845;	comb3freq[0][0][0][0][8][3][4] = IGF1945;
+		comb3freq[0][0][0][0][6][3][5] = IGF1746;	comb3freq[0][0][0][0][7][3][5] = IGF1846;	comb3freq[0][0][0][0][8][3][5] = IGF1946;	comb3freq[0][0][0][0][7][3][6] = IGF1847;
+		comb3freq[0][0][0][0][8][3][6] = IGF1947;	comb3freq[0][0][0][0][8][3][7] = IGF1948;	comb3freq[0][0][0][0][6][4][5] = IGF1756;	comb3freq[0][0][0][0][7][4][5] = IGF1856;
+		comb3freq[0][0][0][0][8][4][5] = IGF1956;	comb3freq[0][0][0][0][7][4][6] = IGF1857;	comb3freq[0][0][0][0][8][4][6] = IGF1957;	comb3freq[0][0][0][0][8][4][7] = IGF1958;
+		comb3freq[0][0][0][0][7][5][6] = IGF1867;	comb3freq[0][0][0][0][8][5][6] = IGF1967;	comb3freq[0][0][0][0][8][5][7] = IGF1968;	comb3freq[0][0][0][0][8][6][7] = IGF1978;
+		comb3freq[0][0][0][1][4][2][3] = IGF2534;	comb3freq[0][0][0][1][5][2][3] = IGF2634;	comb3freq[0][0][0][1][6][2][3] = IGF2734;	comb3freq[0][0][0][1][7][2][3] = IGF2834;
+		comb3freq[0][0][0][1][8][2][3] = IGF2934;	comb3freq[0][0][0][1][5][2][4] = IGF2635;	comb3freq[0][0][0][1][6][2][4] = IGF2735;	comb3freq[0][0][0][1][7][2][4] = IGF2835;
+		comb3freq[0][0][0][1][8][2][4] = IGF2935;	comb3freq[0][0][0][1][6][2][5] = IGF2736;	comb3freq[0][0][0][1][7][2][5] = IGF2836;	comb3freq[0][0][0][1][8][2][5] = IGF2936;
+		comb3freq[0][0][0][1][7][2][6] = IGF2837;	comb3freq[0][0][0][1][8][2][6] = IGF2937;	comb3freq[0][0][0][1][8][2][7] = IGF2938;	comb3freq[0][0][0][1][5][3][4] = IGF2645;
+		comb3freq[0][0][0][1][6][3][4] = IGF2745;	comb3freq[0][0][0][1][7][3][4] = IGF2845;	comb3freq[0][0][0][1][8][3][4] = IGF2945;	comb3freq[0][0][0][1][6][3][5] = IGF2746;
+		comb3freq[0][0][0][1][7][3][5] = IGF2846;	comb3freq[0][0][0][1][8][3][5] = IGF2946;	comb3freq[0][0][0][1][7][3][6] = IGF2847;	comb3freq[0][0][0][1][8][3][6] = IGF2947;
+		comb3freq[0][0][0][1][8][3][7] = IGF2948;	comb3freq[0][0][0][1][6][4][5] = IGF2756;	comb3freq[0][0][0][1][7][4][5] = IGF2856;	comb3freq[0][0][0][1][8][4][5] = IGF2956;
+		comb3freq[0][0][0][1][7][4][6] = IGF2857;	comb3freq[0][0][0][1][8][4][6] = IGF2957;	comb3freq[0][0][0][1][8][4][7] = IGF2958;	comb3freq[0][0][0][1][7][5][6] = IGF2867;
+		comb3freq[0][0][0][1][8][5][6] = IGF2967;	comb3freq[0][0][0][1][8][5][7] = IGF2968;	comb3freq[0][0][0][1][8][6][7] = IGF2978;	comb3freq[0][0][0][2][9][0][1] = IGF3012;
+		comb3freq[0][0][0][2][5][3][4] = IGF3645;	comb3freq[0][0][0][2][6][3][4] = IGF3745;	comb3freq[0][0][0][2][7][3][4] = IGF3845;	comb3freq[0][0][0][2][8][3][4] = IGF3945;
+		comb3freq[0][0][0][2][6][3][5] = IGF3746;	comb3freq[0][0][0][2][7][3][5] = IGF3846;	comb3freq[0][0][0][2][8][3][5] = IGF3946;	comb3freq[0][0][0][2][7][3][6] = IGF3847;
+		comb3freq[0][0][0][2][8][3][6] = IGF3947;	comb3freq[0][0][0][2][8][3][7] = IGF3948;	comb3freq[0][0][0][2][6][4][5] = IGF3756;	comb3freq[0][0][0][2][7][4][5] = IGF3856;
+		comb3freq[0][0][0][2][8][4][5] = IGF3956;	comb3freq[0][0][0][2][7][4][6] = IGF3857;	comb3freq[0][0][0][2][8][4][6] = IGF3957;	comb3freq[0][0][0][2][8][4][7] = IGF3958;
+		comb3freq[0][0][0][2][7][5][6] = IGF3867;	comb3freq[0][0][0][2][8][5][6] = IGF3967;	comb3freq[0][0][0][2][8][5][7] = IGF3968;	comb3freq[0][0][0][2][8][6][7] = IGF3978;
+		comb3freq[0][0][0][3][9][0][1] = IGF4012;	comb3freq[0][0][0][3][9][0][2] = IGF4013;	comb3freq[0][0][0][3][9][1][2] = IGF4023;	comb3freq[0][0][0][3][6][4][5] = IGF4756;
+		comb3freq[0][0][0][3][7][4][5] = IGF4856;	comb3freq[0][0][0][3][8][4][5] = IGF4956;	comb3freq[0][0][0][3][7][4][6] = IGF4857;	comb3freq[0][0][0][3][8][4][6] = IGF4957;
+		comb3freq[0][0][0][3][8][4][7] = IGF4958;	comb3freq[0][0][0][3][7][5][6] = IGF4867;	comb3freq[0][0][0][3][8][5][6] = IGF4967;	comb3freq[0][0][0][3][8][5][7] = IGF4968;
+		comb3freq[0][0][0][3][8][6][7] = IGF4978;	comb3freq[0][0][0][4][9][0][1] = IGF5012;	comb3freq[0][0][0][4][9][0][2] = IGF5013;	comb3freq[0][0][0][4][9][0][3] = IGF5014;
+		comb3freq[0][0][0][4][9][1][2] = IGF5023;	comb3freq[0][0][0][4][9][1][3] = IGF5024;	comb3freq[0][0][0][4][9][2][3] = IGF5034;	comb3freq[0][0][0][4][7][5][6] = IGF5867;
+		comb3freq[0][0][0][4][8][5][6] = IGF5967;	comb3freq[0][0][0][4][8][5][7] = IGF5968;	comb3freq[0][0][0][4][8][6][7] = IGF5978;	comb3freq[0][0][0][5][9][0][1] = IGF6012;
+		comb3freq[0][0][0][5][9][0][2] = IGF6013;	comb3freq[0][0][0][5][9][0][3] = IGF6014;	comb3freq[0][0][0][5][9][0][4] = IGF6015;	comb3freq[0][0][0][5][9][1][2] = IGF6023;
+		comb3freq[0][0][0][5][9][1][3] = IGF6024;	comb3freq[0][0][0][5][9][1][4] = IGF6025;	comb3freq[0][0][0][5][9][2][3] = IGF6034;	comb3freq[0][0][0][5][9][2][4] = IGF6035;
+		comb3freq[0][0][0][5][9][3][4] = IGF6045;	comb3freq[0][0][0][5][8][6][7] = IGF6978;	comb3freq[0][0][0][6][9][0][1] = IGF7012;	comb3freq[0][0][0][6][9][0][2] = IGF7013;
+		comb3freq[0][0][0][6][9][0][3] = IGF7014;	comb3freq[0][0][0][6][9][0][4] = IGF7015;	comb3freq[0][0][0][6][9][0][5] = IGF7016;	comb3freq[0][0][0][6][9][1][2] = IGF7023;
+		comb3freq[0][0][0][6][9][1][3] = IGF7024;	comb3freq[0][0][0][6][9][1][4] = IGF7025;	comb3freq[0][0][0][6][9][1][5] = IGF7026;	comb3freq[0][0][0][6][9][2][3] = IGF7034;
+		comb3freq[0][0][0][6][9][2][4] = IGF7035;	comb3freq[0][0][0][6][9][2][5] = IGF7036;	comb3freq[0][0][0][6][9][3][4] = IGF7045;	comb3freq[0][0][0][6][9][3][5] = IGF7046;
+		comb3freq[0][0][0][6][9][4][5] = IGF7056;	comb3freq[0][0][0][7][9][0][1] = IGF8012;	comb3freq[0][0][0][7][9][0][2] = IGF8013;	comb3freq[0][0][0][7][9][0][3] = IGF8014;
+		comb3freq[0][0][0][7][9][0][4] = IGF8015;	comb3freq[0][0][0][7][9][0][5] = IGF8016;	comb3freq[0][0][0][7][9][0][6] = IGF8017;	comb3freq[0][0][0][7][9][1][2] = IGF8023;
+		comb3freq[0][0][0][7][9][1][3] = IGF8024;	comb3freq[0][0][0][7][9][1][4] = IGF8025;	comb3freq[0][0][0][7][9][1][5] = IGF8026;	comb3freq[0][0][0][7][9][1][6] = IGF8027;
+		comb3freq[0][0][0][7][9][2][3] = IGF8034;	comb3freq[0][0][0][7][9][2][4] = IGF8035;	comb3freq[0][0][0][7][9][2][5] = IGF8036;	comb3freq[0][0][0][7][9][2][6] = IGF8037;
+		comb3freq[0][0][0][7][9][3][4] = IGF8045;	comb3freq[0][0][0][7][9][3][5] = IGF8046;	comb3freq[0][0][0][7][9][3][6] = IGF8047;	comb3freq[0][0][0][7][9][4][5] = IGF8056;
+		comb3freq[0][0][0][7][9][4][6] = IGF8057;	comb3freq[0][0][0][7][9][5][6] = IGF8067;	comb3freq[0][0][0][8][9][0][1] = IGF9012;	comb3freq[0][0][0][8][9][0][2] = IGF9013;
+		comb3freq[0][0][0][8][9][0][3] = IGF9014;	comb3freq[0][0][0][8][9][0][4] = IGF9015;	comb3freq[0][0][0][8][9][0][5] = IGF9016;	comb3freq[0][0][0][8][9][0][6] = IGF9017;
+		comb3freq[0][0][0][8][9][0][7] = IGF9018;	comb3freq[0][0][0][8][9][1][2] = IGF9023;	comb3freq[0][0][0][8][9][1][3] = IGF9024;	comb3freq[0][0][0][8][9][1][4] = IGF9025;
+		comb3freq[0][0][0][8][9][1][5] = IGF9026;	comb3freq[0][0][0][8][9][1][6] = IGF9027;	comb3freq[0][0][0][8][9][1][7] = IGF9028;	comb3freq[0][0][0][8][9][2][3] = IGF9034;
+		comb3freq[0][0][0][8][9][2][4] = IGF9035;	comb3freq[0][0][0][8][9][2][5] = IGF9036;	comb3freq[0][0][0][8][9][2][6] = IGF9037;	comb3freq[0][0][0][8][9][2][7] = IGF9038;
+		comb3freq[0][0][0][8][9][3][4] = IGF9045;	comb3freq[0][0][0][8][9][3][5] = IGF9046;	comb3freq[0][0][0][8][9][3][6] = IGF9047;	comb3freq[0][0][0][8][9][3][7] = IGF9048;
+		comb3freq[0][0][0][8][9][4][5] = IGF9056;	comb3freq[0][0][0][8][9][4][6] = IGF9057;	comb3freq[0][0][0][8][9][4][7] = IGF9058;	comb3freq[0][0][0][8][9][5][6] = IGF9067;
+
+		comb3freq[1][1][0][0][1][2][3] = SIF1234;	comb3freq[1][1][0][0][1][2][4] = SIF1235;	comb3freq[1][1][0][0][1][2][5] = SIF1236;	comb3freq[1][1][0][0][1][2][6] = SIF1237;
+		comb3freq[1][1][0][0][1][2][7] = SIF1238;	comb3freq[1][1][0][0][1][2][8] = SIF1239;	comb3freq[1][1][0][0][1][3][4] = SIF1245;	comb3freq[1][1][0][0][1][3][5] = SIF1246;
+		comb3freq[1][1][0][0][1][3][6] = SIF1247;	comb3freq[1][1][0][0][1][3][7] = SIF1248;	comb3freq[1][1][0][0][1][3][8] = SIF1249;	comb3freq[1][1][0][0][1][4][5] = SIF1256;
+		comb3freq[1][1][0][0][1][4][6] = SIF1257;	comb3freq[1][1][0][0][1][4][7] = SIF1258;	comb3freq[1][1][0][0][1][4][8] = SIF1259;	comb3freq[1][1][0][0][1][5][6] = SIF1267;
+		comb3freq[1][1][0][0][1][5][7] = SIF1268;	comb3freq[1][1][0][0][1][5][8] = SIF1269;	comb3freq[1][1][0][0][1][6][7] = SIF1278;	comb3freq[1][1][0][0][1][6][8] = SIF1279;
+		comb3freq[1][1][0][0][1][7][8] = SIF1289;	comb3freq[1][1][0][0][2][3][4] = SIF1345;	comb3freq[1][1][0][0][2][3][5] = SIF1346;	comb3freq[1][1][0][0][2][3][6] = SIF1347;
+		comb3freq[1][1][0][0][2][3][7] = SIF1348;	comb3freq[1][1][0][0][2][3][8] = SIF1349;	comb3freq[1][1][0][0][2][4][5] = SIF1356;	comb3freq[1][1][0][0][2][4][6] = SIF1357;
+		comb3freq[1][1][0][0][2][4][7] = SIF1358;	comb3freq[1][1][0][0][2][4][8] = SIF1359;	comb3freq[1][1][0][0][2][5][6] = SIF1367;	comb3freq[1][1][0][0][2][5][7] = SIF1368;
+		comb3freq[1][1][0][0][2][5][8] = SIF1369;	comb3freq[1][1][0][0][2][6][7] = SIF1378;	comb3freq[1][1][0][0][2][6][8] = SIF1379;	comb3freq[1][1][0][0][2][7][8] = SIF1389;
+		comb3freq[1][1][0][0][3][4][5] = SIF1456;	comb3freq[1][1][0][0][3][4][6] = SIF1457;	comb3freq[1][1][0][0][3][4][7] = SIF1458;	comb3freq[1][1][0][0][3][4][8] = SIF1459;
+		comb3freq[1][1][0][0][3][5][6] = SIF1467;	comb3freq[1][1][0][0][3][5][7] = SIF1468;	comb3freq[1][1][0][0][3][5][8] = SIF1469;	comb3freq[1][1][0][0][3][6][7] = SIF1478;
+		comb3freq[1][1][0][0][3][6][8] = SIF1479;	comb3freq[1][1][0][0][3][7][8] = SIF1489;	comb3freq[1][1][0][0][4][5][6] = SIF1567;	comb3freq[1][1][0][0][4][5][7] = SIF1568;
+		comb3freq[1][1][0][0][4][5][8] = SIF1569;	comb3freq[1][1][0][0][4][6][7] = SIF1578;	comb3freq[1][1][0][0][4][6][8] = SIF1579;	comb3freq[1][1][0][0][4][7][8] = SIF1589;
+		comb3freq[1][1][0][0][5][6][7] = SIF1678;	comb3freq[1][1][0][0][5][6][8] = SIF1679;	comb3freq[1][1][0][0][5][7][8] = SIF1689;	comb3freq[1][1][0][0][6][7][8] = SIF1789;
+		comb3freq[1][1][0][1][2][3][4] = SIF2345;	comb3freq[1][1][0][1][2][3][5] = SIF2346;	comb3freq[1][1][0][1][2][3][6] = SIF2347;	comb3freq[1][1][0][1][2][3][7] = SIF2348;
+		comb3freq[1][1][0][1][2][3][8] = SIF2349;	comb3freq[1][1][0][1][2][4][5] = SIF2356;	comb3freq[1][1][0][1][2][4][6] = SIF2357;	comb3freq[1][1][0][1][2][4][7] = SIF2358;
+		comb3freq[1][1][0][1][2][4][8] = SIF2359;	comb3freq[1][1][0][1][2][5][6] = SIF2367;	comb3freq[1][1][0][1][2][5][7] = SIF2368;	comb3freq[1][1][0][1][2][5][8] = SIF2369;
+		comb3freq[1][1][0][1][2][6][7] = SIF2378;	comb3freq[1][1][0][1][2][6][8] = SIF2379;	comb3freq[1][1][0][1][2][7][8] = SIF2389;	comb3freq[1][1][0][1][3][4][5] = SIF2456;
+		comb3freq[1][1][0][1][3][4][6] = SIF2457;	comb3freq[1][1][0][1][3][4][7] = SIF2458;	comb3freq[1][1][0][1][3][4][8] = SIF2459;	comb3freq[1][1][0][1][3][5][6] = SIF2467;
+		comb3freq[1][1][0][1][3][5][7] = SIF2468;	comb3freq[1][1][0][1][3][5][8] = SIF2469;	comb3freq[1][1][0][1][3][6][7] = SIF2478;	comb3freq[1][1][0][1][3][6][8] = SIF2479;
+		comb3freq[1][1][0][1][3][7][8] = SIF2489;	comb3freq[1][1][0][1][4][5][6] = SIF2567;	comb3freq[1][1][0][1][4][5][7] = SIF2568;	comb3freq[1][1][0][1][4][5][8] = SIF2569;
+		comb3freq[1][1][0][1][4][6][7] = SIF2578;	comb3freq[1][1][0][1][4][6][8] = SIF2579;	comb3freq[1][1][0][1][4][7][8] = SIF2589;	comb3freq[1][1][0][1][5][6][7] = SIF2678;
+		comb3freq[1][1][0][1][5][6][8] = SIF2679;	comb3freq[1][1][0][1][5][7][8] = SIF2689;	comb3freq[1][1][0][1][6][7][8] = SIF2789;	comb3freq[1][1][0][2][0][1][9] = SIF3120;
+		comb3freq[1][1][0][2][3][4][5] = SIF3456;	comb3freq[1][1][0][2][3][4][6] = SIF3457;	comb3freq[1][1][0][2][3][4][7] = SIF3458;	comb3freq[1][1][0][2][3][4][8] = SIF3459;
+		comb3freq[1][1][0][2][3][5][6] = SIF3467;	comb3freq[1][1][0][2][3][5][7] = SIF3468;	comb3freq[1][1][0][2][3][5][8] = SIF3469;	comb3freq[1][1][0][2][3][6][7] = SIF3478;
+		comb3freq[1][1][0][2][3][6][8] = SIF3479;	comb3freq[1][1][0][2][3][7][8] = SIF3489;	comb3freq[1][1][0][2][4][5][6] = SIF3567;	comb3freq[1][1][0][2][4][5][7] = SIF3568;
+		comb3freq[1][1][0][2][4][5][8] = SIF3569;	comb3freq[1][1][0][2][4][6][7] = SIF3578;	comb3freq[1][1][0][2][4][6][8] = SIF3579;	comb3freq[1][1][0][2][4][7][8] = SIF3589;
+		comb3freq[1][1][0][2][5][6][7] = SIF3678;	comb3freq[1][1][0][2][5][6][8] = SIF3679;	comb3freq[1][1][0][2][5][7][8] = SIF3689;	comb3freq[1][1][0][2][6][7][8] = SIF3789;
+		comb3freq[1][1][0][3][0][1][9] = SIF4120;	comb3freq[1][1][0][3][0][2][9] = SIF4130;	comb3freq[1][1][0][3][1][2][9] = SIF4230;	comb3freq[1][1][0][3][4][5][6] = SIF4567;
+		comb3freq[1][1][0][3][4][5][7] = SIF4568;	comb3freq[1][1][0][3][4][5][8] = SIF4569;	comb3freq[1][1][0][3][4][6][7] = SIF4578;	comb3freq[1][1][0][3][4][6][8] = SIF4579;
+		comb3freq[1][1][0][3][4][7][8] = SIF4589;	comb3freq[1][1][0][3][5][6][7] = SIF4678;	comb3freq[1][1][0][3][5][6][8] = SIF4679;	comb3freq[1][1][0][3][5][7][8] = SIF4689;
+		comb3freq[1][1][0][3][6][7][8] = SIF4789;	comb3freq[1][1][0][4][0][1][9] = SIF5120;	comb3freq[1][1][0][4][0][2][9] = SIF5130;	comb3freq[1][1][0][4][0][3][9] = SIF5140;
+		comb3freq[1][1][0][4][1][2][9] = SIF5230;	comb3freq[1][1][0][4][1][3][9] = SIF5240;	comb3freq[1][1][0][4][2][3][9] = SIF5340;	comb3freq[1][1][0][4][5][6][7] = SIF5678;
+		comb3freq[1][1][0][4][5][6][8] = SIF5679;	comb3freq[1][1][0][4][5][7][8] = SIF5689;	comb3freq[1][1][0][4][6][7][8] = SIF5789;	comb3freq[1][1][0][5][0][1][9] = SIF6120;
+		comb3freq[1][1][0][5][0][2][9] = SIF6130;	comb3freq[1][1][0][5][0][3][9] = SIF6140;	comb3freq[1][1][0][5][0][4][9] = SIF6150;	comb3freq[1][1][0][5][1][2][9] = SIF6230;
+		comb3freq[1][1][0][5][1][3][9] = SIF6240;	comb3freq[1][1][0][5][1][4][9] = SIF6250;	comb3freq[1][1][0][5][2][3][9] = SIF6340;	comb3freq[1][1][0][5][2][4][9] = SIF6350;
+		comb3freq[1][1][0][5][3][4][9] = SIF6450;	comb3freq[1][1][0][5][6][7][8] = SIF6789;	comb3freq[1][1][0][6][0][1][9] = SIF7120;	comb3freq[1][1][0][6][0][2][9] = SIF7130;
+		comb3freq[1][1][0][6][0][3][9] = SIF7140;	comb3freq[1][1][0][6][0][4][9] = SIF7150;	comb3freq[1][1][0][6][0][5][9] = SIF7160;	comb3freq[1][1][0][6][1][2][9] = SIF7230;
+		comb3freq[1][1][0][6][1][3][9] = SIF7240;	comb3freq[1][1][0][6][1][4][9] = SIF7250;	comb3freq[1][1][0][6][1][5][9] = SIF7260;	comb3freq[1][1][0][6][2][3][9] = SIF7340;
+		comb3freq[1][1][0][6][2][4][9] = SIF7350;	comb3freq[1][1][0][6][2][5][9] = SIF7360;	comb3freq[1][1][0][6][3][4][9] = SIF7450;	comb3freq[1][1][0][6][3][5][9] = SIF7460;
+		comb3freq[1][1][0][6][4][5][9] = SIF7560;	comb3freq[1][1][0][7][0][1][9] = SIF8120;	comb3freq[1][1][0][7][0][2][9] = SIF8130;	comb3freq[1][1][0][7][0][3][9] = SIF8140;
+		comb3freq[1][1][0][7][0][4][9] = SIF8150;	comb3freq[1][1][0][7][0][5][9] = SIF8160;	comb3freq[1][1][0][7][0][6][9] = SIF8170;	comb3freq[1][1][0][7][1][2][9] = SIF8230;
+		comb3freq[1][1][0][7][1][3][9] = SIF8240;	comb3freq[1][1][0][7][1][4][9] = SIF8250;	comb3freq[1][1][0][7][1][5][9] = SIF8260;	comb3freq[1][1][0][7][1][6][9] = SIF8270;
+		comb3freq[1][1][0][7][2][3][9] = SIF8340;	comb3freq[1][1][0][7][2][4][9] = SIF8350;	comb3freq[1][1][0][7][2][5][9] = SIF8360;	comb3freq[1][1][0][7][2][6][9] = SIF8370;
+		comb3freq[1][1][0][7][3][4][9] = SIF8450;	comb3freq[1][1][0][7][3][5][9] = SIF8460;	comb3freq[1][1][0][7][3][6][9] = SIF8470;	comb3freq[1][1][0][7][4][5][9] = SIF8560;
+		comb3freq[1][1][0][7][4][6][9] = SIF8570;	comb3freq[1][1][0][7][5][6][9] = SIF8670;	comb3freq[1][1][0][8][0][1][9] = SIF9120;	comb3freq[1][1][0][8][0][2][9] = SIF9130;
+		comb3freq[1][1][0][8][0][3][9] = SIF9140;	comb3freq[1][1][0][8][0][4][9] = SIF9150;	comb3freq[1][1][0][8][0][5][9] = SIF9160;	comb3freq[1][1][0][8][0][6][9] = SIF9170;
+		comb3freq[1][1][0][8][0][7][9] = SIF9180;	comb3freq[1][1][0][8][1][2][9] = SIF9230;	comb3freq[1][1][0][8][1][3][9] = SIF9240;	comb3freq[1][1][0][8][1][4][9] = SIF9250;
+		comb3freq[1][1][0][8][1][5][9] = SIF9260;	comb3freq[1][1][0][8][1][6][9] = SIF9270;	comb3freq[1][1][0][8][1][7][9] = SIF9280;	comb3freq[1][1][0][8][2][3][9] = SIF9340;
+		comb3freq[1][1][0][8][2][4][9] = SIF9350;	comb3freq[1][1][0][8][2][5][9] = SIF9360;	comb3freq[1][1][0][8][2][6][9] = SIF9370;	comb3freq[1][1][0][8][2][7][9] = SIF9380;
+		comb3freq[1][1][0][8][3][4][9] = SIF9450;	comb3freq[1][1][0][8][3][5][9] = SIF9460;	comb3freq[1][1][0][8][3][6][9] = SIF9470;	comb3freq[1][1][0][8][3][7][9] = SIF9480;
+		comb3freq[1][1][0][8][4][5][9] = SIF9560;	comb3freq[1][1][0][8][4][6][9] = SIF9570;	comb3freq[1][1][0][8][4][7][9] = SIF9580;	comb3freq[1][1][0][8][5][6][9] = SIF9670;
+		comb3freq[1][1][0][8][5][7][9] = SIF9680;	comb3freq[1][1][0][8][6][7][9] = SIF9780;	comb3freq[1][1][0][0][2][1][3] = SIF1324;	comb3freq[1][1][0][0][2][1][4] = SIF1325;
+		comb3freq[1][1][0][0][2][1][5] = SIF1326;	comb3freq[1][1][0][0][2][1][6] = SIF1327;	comb3freq[1][1][0][0][2][1][7] = SIF1328;	comb3freq[1][1][0][0][2][1][8] = SIF1329;
+		comb3freq[1][1][0][0][3][1][4] = SIF1425;	comb3freq[1][1][0][0][3][1][5] = SIF1426;	comb3freq[1][1][0][0][3][1][6] = SIF1427;	comb3freq[1][1][0][0][3][1][7] = SIF1428;
+		comb3freq[1][1][0][0][3][1][8] = SIF1429;	comb3freq[1][1][0][0][4][1][5] = SIF1526;	comb3freq[1][1][0][0][4][1][6] = SIF1527;	comb3freq[1][1][0][0][4][1][7] = SIF1528;
+		comb3freq[1][1][0][0][4][1][8] = SIF1529;	comb3freq[1][1][0][0][5][1][6] = SIF1627;	comb3freq[1][1][0][0][5][1][7] = SIF1628;	comb3freq[1][1][0][0][5][1][8] = SIF1629;
+		comb3freq[1][1][0][0][6][1][7] = SIF1728;	comb3freq[1][1][0][0][6][1][8] = SIF1729;	comb3freq[1][1][0][0][7][1][8] = SIF1829;	comb3freq[1][1][0][0][3][2][4] = SIF1435;
+		comb3freq[1][1][0][0][3][2][5] = SIF1436;	comb3freq[1][1][0][0][3][2][6] = SIF1437;	comb3freq[1][1][0][0][3][2][7] = SIF1438;	comb3freq[1][1][0][0][3][2][8] = SIF1439;
+		comb3freq[1][1][0][0][4][2][5] = SIF1536;	comb3freq[1][1][0][0][4][2][6] = SIF1537;	comb3freq[1][1][0][0][4][2][7] = SIF1538;	comb3freq[1][1][0][0][4][2][8] = SIF1539;
+		comb3freq[1][1][0][0][5][2][6] = SIF1637;	comb3freq[1][1][0][0][5][2][7] = SIF1638;	comb3freq[1][1][0][0][5][2][8] = SIF1639;	comb3freq[1][1][0][0][6][2][7] = SIF1738;
+		comb3freq[1][1][0][0][6][2][8] = SIF1739;	comb3freq[1][1][0][0][7][2][8] = SIF1839;	comb3freq[1][1][0][0][4][3][5] = SIF1546;	comb3freq[1][1][0][0][4][3][6] = SIF1547;
+		comb3freq[1][1][0][0][4][3][7] = SIF1548;	comb3freq[1][1][0][0][4][3][8] = SIF1549;	comb3freq[1][1][0][0][5][3][6] = SIF1647;	comb3freq[1][1][0][0][5][3][7] = SIF1648;
+		comb3freq[1][1][0][0][5][3][8] = SIF1649;	comb3freq[1][1][0][0][6][3][7] = SIF1748;	comb3freq[1][1][0][0][6][3][8] = SIF1749;	comb3freq[1][1][0][0][7][3][8] = SIF1849;
+		comb3freq[1][1][0][0][5][4][6] = SIF1657;	comb3freq[1][1][0][0][5][4][7] = SIF1658;	comb3freq[1][1][0][0][5][4][8] = SIF1659;	comb3freq[1][1][0][0][6][4][7] = SIF1758;
+		comb3freq[1][1][0][0][6][4][8] = SIF1759;	comb3freq[1][1][0][0][7][4][8] = SIF1859;	comb3freq[1][1][0][0][6][5][7] = SIF1768;	comb3freq[1][1][0][0][6][5][8] = SIF1769;
+		comb3freq[1][1][0][0][7][5][8] = SIF1869;	comb3freq[1][1][0][0][7][6][8] = SIF1879;	comb3freq[1][1][0][1][3][2][4] = SIF2435;	comb3freq[1][1][0][1][3][2][5] = SIF2436;
+		comb3freq[1][1][0][1][3][2][6] = SIF2437;	comb3freq[1][1][0][1][3][2][7] = SIF2438;	comb3freq[1][1][0][1][3][2][8] = SIF2439;	comb3freq[1][1][0][1][4][2][5] = SIF2536;
+		comb3freq[1][1][0][1][4][2][6] = SIF2537;	comb3freq[1][1][0][1][4][2][7] = SIF2538;	comb3freq[1][1][0][1][4][2][8] = SIF2539;	comb3freq[1][1][0][1][5][2][6] = SIF2637;
+		comb3freq[1][1][0][1][5][2][7] = SIF2638;	comb3freq[1][1][0][1][5][2][8] = SIF2639;	comb3freq[1][1][0][1][6][2][7] = SIF2738;	comb3freq[1][1][0][1][6][2][8] = SIF2739;
+		comb3freq[1][1][0][1][7][2][8] = SIF2839;	comb3freq[1][1][0][1][4][3][5] = SIF2546;	comb3freq[1][1][0][1][4][3][6] = SIF2547;	comb3freq[1][1][0][1][4][3][7] = SIF2548;
+		comb3freq[1][1][0][1][4][3][8] = SIF2549;	comb3freq[1][1][0][1][5][3][6] = SIF2647;	comb3freq[1][1][0][1][5][3][7] = SIF2648;	comb3freq[1][1][0][1][5][3][8] = SIF2649;
+		comb3freq[1][1][0][1][6][3][7] = SIF2748;	comb3freq[1][1][0][1][6][3][8] = SIF2749;	comb3freq[1][1][0][1][7][3][8] = SIF2849;	comb3freq[1][1][0][1][5][4][6] = SIF2657;
+		comb3freq[1][1][0][1][5][4][7] = SIF2658;	comb3freq[1][1][0][1][5][4][8] = SIF2659;	comb3freq[1][1][0][1][6][4][7] = SIF2758;	comb3freq[1][1][0][1][6][4][8] = SIF2759;
+		comb3freq[1][1][0][1][7][4][8] = SIF2859;	comb3freq[1][1][0][1][6][5][7] = SIF2768;	comb3freq[1][1][0][1][6][5][8] = SIF2769;	comb3freq[1][1][0][1][7][5][8] = SIF2869;
+		comb3freq[1][1][0][1][7][6][8] = SIF2879;	comb3freq[1][1][0][2][1][0][9] = SIF3210;	comb3freq[1][1][0][2][4][3][5] = SIF3546;	comb3freq[1][1][0][2][4][3][6] = SIF3547;
+		comb3freq[1][1][0][2][4][3][7] = SIF3548;	comb3freq[1][1][0][2][4][3][8] = SIF3549;	comb3freq[1][1][0][2][5][3][6] = SIF3647;	comb3freq[1][1][0][2][5][3][7] = SIF3648;
+		comb3freq[1][1][0][2][5][3][8] = SIF3649;	comb3freq[1][1][0][2][6][3][7] = SIF3748;	comb3freq[1][1][0][2][6][3][8] = SIF3749;	comb3freq[1][1][0][2][7][3][8] = SIF3849;
+		comb3freq[1][1][0][2][5][4][6] = SIF3657;	comb3freq[1][1][0][2][5][4][7] = SIF3658;	comb3freq[1][1][0][2][5][4][8] = SIF3659;	comb3freq[1][1][0][2][6][4][7] = SIF3758;
+		comb3freq[1][1][0][2][6][4][8] = SIF3759;	comb3freq[1][1][0][2][7][4][8] = SIF3859;	comb3freq[1][1][0][2][6][5][7] = SIF3768;	comb3freq[1][1][0][2][6][5][8] = SIF3769;
+		comb3freq[1][1][0][2][7][5][8] = SIF3869;	comb3freq[1][1][0][2][7][6][8] = SIF3879;	comb3freq[1][1][0][3][1][0][9] = SIF4210;	comb3freq[1][1][0][3][2][0][9] = SIF4310;
+		comb3freq[1][1][0][3][2][1][9] = SIF4320;	comb3freq[1][1][0][3][5][4][6] = SIF4657;	comb3freq[1][1][0][3][5][4][7] = SIF4658;	comb3freq[1][1][0][3][5][4][8] = SIF4659;
+		comb3freq[1][1][0][3][6][4][7] = SIF4758;	comb3freq[1][1][0][3][6][4][8] = SIF4759;	comb3freq[1][1][0][3][7][4][8] = SIF4859;	comb3freq[1][1][0][3][6][5][7] = SIF4768;
+		comb3freq[1][1][0][3][6][5][8] = SIF4769;	comb3freq[1][1][0][3][7][5][8] = SIF4869;	comb3freq[1][1][0][3][7][6][8] = SIF4879;	comb3freq[1][1][0][4][1][0][9] = SIF5210;
+		comb3freq[1][1][0][4][2][0][9] = SIF5310;	comb3freq[1][1][0][4][3][0][9] = SIF5410;	comb3freq[1][1][0][4][2][1][9] = SIF5320;	comb3freq[1][1][0][4][3][1][9] = SIF5420;
+		comb3freq[1][1][0][4][3][2][9] = SIF5430;	comb3freq[1][1][0][4][6][5][7] = SIF5768;	comb3freq[1][1][0][4][6][5][8] = SIF5769;	comb3freq[1][1][0][4][7][5][8] = SIF5869;
+		comb3freq[1][1][0][4][7][6][8] = SIF5879;	comb3freq[1][1][0][5][1][0][9] = SIF6210;	comb3freq[1][1][0][5][2][0][9] = SIF6310;	comb3freq[1][1][0][5][3][0][9] = SIF6410;
+		comb3freq[1][1][0][5][4][0][9] = SIF6510;	comb3freq[1][1][0][5][2][1][9] = SIF6320;	comb3freq[1][1][0][5][3][1][9] = SIF6420;	comb3freq[1][1][0][5][4][1][9] = SIF6520;
+		comb3freq[1][1][0][5][3][2][9] = SIF6430;	comb3freq[1][1][0][5][4][2][9] = SIF6530;	comb3freq[1][1][0][5][4][3][9] = SIF6540;	comb3freq[1][1][0][5][7][6][8] = SIF6879;
+		comb3freq[1][1][0][6][1][0][9] = SIF7210;	comb3freq[1][1][0][6][2][0][9] = SIF7310;	comb3freq[1][1][0][6][3][0][9] = SIF7410;	comb3freq[1][1][0][6][4][0][9] = SIF7510;
+		comb3freq[1][1][0][6][5][0][9] = SIF7610;	comb3freq[1][1][0][6][2][1][9] = SIF7320;	comb3freq[1][1][0][6][3][1][9] = SIF7420;	comb3freq[1][1][0][6][4][1][9] = SIF7520;
+		comb3freq[1][1][0][6][5][1][9] = SIF7620;	comb3freq[1][1][0][6][3][2][9] = SIF7430;	comb3freq[1][1][0][6][4][2][9] = SIF7530;	comb3freq[1][1][0][6][5][2][9] = SIF7630;
+		comb3freq[1][1][0][6][4][3][9] = SIF7540;	comb3freq[1][1][0][6][5][3][9] = SIF7640;	comb3freq[1][1][0][6][5][4][9] = SIF7650;	comb3freq[1][1][0][7][1][0][9] = SIF8210;
+		comb3freq[1][1][0][7][2][0][9] = SIF8310;	comb3freq[1][1][0][7][3][0][9] = SIF8410;	comb3freq[1][1][0][7][4][0][9] = SIF8510;	comb3freq[1][1][0][7][5][0][9] = SIF8610;
+		comb3freq[1][1][0][7][6][0][9] = SIF8710;	comb3freq[1][1][0][7][2][1][9] = SIF8320;	comb3freq[1][1][0][7][3][1][9] = SIF8420;	comb3freq[1][1][0][7][4][1][9] = SIF8520;
+		comb3freq[1][1][0][7][5][1][9] = SIF8620;	comb3freq[1][1][0][7][6][1][9] = SIF8720;	comb3freq[1][1][0][7][3][2][9] = SIF8430;	comb3freq[1][1][0][7][4][2][9] = SIF8530;
+		comb3freq[1][1][0][7][5][2][9] = SIF8630;	comb3freq[1][1][0][7][6][2][9] = SIF8730;	comb3freq[1][1][0][7][4][3][9] = SIF8540;	comb3freq[1][1][0][7][5][3][9] = SIF8640;
+		comb3freq[1][1][0][7][6][3][9] = SIF8740;	comb3freq[1][1][0][7][5][4][9] = SIF8650;	comb3freq[1][1][0][7][6][4][9] = SIF8750;	comb3freq[1][1][0][7][6][5][9] = SIF8760;
+		comb3freq[1][1][0][8][1][0][9] = SIF9210;	comb3freq[1][1][0][8][2][0][9] = SIF9310;	comb3freq[1][1][0][8][3][0][9] = SIF9410;	comb3freq[1][1][0][8][4][0][9] = SIF9510;
+		comb3freq[1][1][0][8][5][0][9] = SIF9610;	comb3freq[1][1][0][8][6][0][9] = SIF9710;	comb3freq[1][1][0][8][7][0][9] = SIF9810;	comb3freq[1][1][0][8][2][1][9] = SIF9320;
+		comb3freq[1][1][0][8][3][1][9] = SIF9420;	comb3freq[1][1][0][8][4][1][9] = SIF9520;	comb3freq[1][1][0][8][5][1][9] = SIF9620;	comb3freq[1][1][0][8][6][1][9] = SIF9720;
+		comb3freq[1][1][0][8][7][1][9] = SIF9820;	comb3freq[1][1][0][8][3][2][9] = SIF9430;	comb3freq[1][1][0][8][4][2][9] = SIF9530;	comb3freq[1][1][0][8][5][2][9] = SIF9630;
+		comb3freq[1][1][0][8][6][2][9] = SIF9730;	comb3freq[1][1][0][8][7][2][9] = SIF9830;	comb3freq[1][1][0][8][4][3][9] = SIF9540;	comb3freq[1][1][0][8][5][3][9] = SIF9640;
+		comb3freq[1][1][0][8][6][3][9] = SIF9740;	comb3freq[1][1][0][8][7][3][9] = SIF9840;	comb3freq[1][1][0][8][5][4][9] = SIF9650;	comb3freq[1][1][0][8][6][4][9] = SIF9750;
+		comb3freq[1][1][0][8][7][4][9] = SIF9850;	comb3freq[1][1][0][8][6][5][9] = SIF9760;	comb3freq[1][1][0][8][7][5][9] = SIF9860;	comb3freq[1][1][0][8][7][6][9] = SIF9870;
+		comb3freq[1][1][0][0][3][1][2] = SIF1423;	comb3freq[1][1][0][0][4][1][2] = SIF1523;	comb3freq[1][1][0][0][5][1][2] = SIF1623;	comb3freq[1][1][0][0][6][1][2] = SIF1723;
+		comb3freq[1][1][0][0][7][1][2] = SIF1823;	comb3freq[1][1][0][0][8][1][2] = SIF1923;	comb3freq[1][1][0][0][4][1][3] = SIF1524;	comb3freq[1][1][0][0][5][1][3] = SIF1624;
+		comb3freq[1][1][0][0][6][1][3] = SIF1724;	comb3freq[1][1][0][0][7][1][3] = SIF1824;	comb3freq[1][1][0][0][8][1][3] = SIF1924;	comb3freq[1][1][0][0][5][1][4] = SIF1625;
+		comb3freq[1][1][0][0][6][1][4] = SIF1725;	comb3freq[1][1][0][0][7][1][4] = SIF1825;	comb3freq[1][1][0][0][8][1][4] = SIF1925;	comb3freq[1][1][0][0][6][1][5] = SIF1726;
+		comb3freq[1][1][0][0][7][1][5] = SIF1826;	comb3freq[1][1][0][0][8][1][5] = SIF1926;	comb3freq[1][1][0][0][7][1][6] = SIF1827;	comb3freq[1][1][0][0][8][1][6] = SIF1927;
+		comb3freq[1][1][0][0][8][1][7] = SIF1928;	comb3freq[1][1][0][0][4][2][3] = SIF1534;	comb3freq[1][1][0][0][5][2][3] = SIF1634;	comb3freq[1][1][0][0][6][2][3] = SIF1734;
+		comb3freq[1][1][0][0][7][2][3] = SIF1834;	comb3freq[1][1][0][0][8][2][3] = SIF1934;	comb3freq[1][1][0][0][5][2][4] = SIF1635;	comb3freq[1][1][0][0][6][2][4] = SIF1735;
+		comb3freq[1][1][0][0][7][2][4] = SIF1835;	comb3freq[1][1][0][0][8][2][4] = SIF1935;	comb3freq[1][1][0][0][6][2][5] = SIF1736;	comb3freq[1][1][0][0][7][2][5] = SIF1836;
+		comb3freq[1][1][0][0][8][2][5] = SIF1936;	comb3freq[1][1][0][0][7][2][6] = SIF1837;	comb3freq[1][1][0][0][8][2][6] = SIF1937;	comb3freq[1][1][0][0][8][2][7] = SIF1938;
+		comb3freq[1][1][0][0][5][3][4] = SIF1645;	comb3freq[1][1][0][0][6][3][4] = SIF1745;	comb3freq[1][1][0][0][7][3][4] = SIF1845;	comb3freq[1][1][0][0][8][3][4] = SIF1945;
+		comb3freq[1][1][0][0][6][3][5] = SIF1746;	comb3freq[1][1][0][0][7][3][5] = SIF1846;	comb3freq[1][1][0][0][8][3][5] = SIF1946;	comb3freq[1][1][0][0][7][3][6] = SIF1847;
+		comb3freq[1][1][0][0][8][3][6] = SIF1947;	comb3freq[1][1][0][0][8][3][7] = SIF1948;	comb3freq[1][1][0][0][6][4][5] = SIF1756;	comb3freq[1][1][0][0][7][4][5] = SIF1856;
+		comb3freq[1][1][0][0][8][4][5] = SIF1956;	comb3freq[1][1][0][0][7][4][6] = SIF1857;	comb3freq[1][1][0][0][8][4][6] = SIF1957;	comb3freq[1][1][0][0][8][4][7] = SIF1958;
+		comb3freq[1][1][0][0][7][5][6] = SIF1867;	comb3freq[1][1][0][0][8][5][6] = SIF1967;	comb3freq[1][1][0][0][8][5][7] = SIF1968;	comb3freq[1][1][0][0][8][6][7] = SIF1978;
+		comb3freq[1][1][0][1][4][2][3] = SIF2534;	comb3freq[1][1][0][1][5][2][3] = SIF2634;	comb3freq[1][1][0][1][6][2][3] = SIF2734;	comb3freq[1][1][0][1][7][2][3] = SIF2834;
+		comb3freq[1][1][0][1][8][2][3] = SIF2934;	comb3freq[1][1][0][1][5][2][4] = SIF2635;	comb3freq[1][1][0][1][6][2][4] = SIF2735;	comb3freq[1][1][0][1][7][2][4] = SIF2835;
+		comb3freq[1][1][0][1][8][2][4] = SIF2935;	comb3freq[1][1][0][1][6][2][5] = SIF2736;	comb3freq[1][1][0][1][7][2][5] = SIF2836;	comb3freq[1][1][0][1][8][2][5] = SIF2936;
+		comb3freq[1][1][0][1][7][2][6] = SIF2837;	comb3freq[1][1][0][1][8][2][6] = SIF2937;	comb3freq[1][1][0][1][8][2][7] = SIF2938;	comb3freq[1][1][0][1][5][3][4] = SIF2645;
+		comb3freq[1][1][0][1][6][3][4] = SIF2745;	comb3freq[1][1][0][1][7][3][4] = SIF2845;	comb3freq[1][1][0][1][8][3][4] = SIF2945;	comb3freq[1][1][0][1][6][3][5] = SIF2746;
+		comb3freq[1][1][0][1][7][3][5] = SIF2846;	comb3freq[1][1][0][1][8][3][5] = SIF2946;	comb3freq[1][1][0][1][7][3][6] = SIF2847;	comb3freq[1][1][0][1][8][3][6] = SIF2947;
+		comb3freq[1][1][0][1][8][3][7] = SIF2948;	comb3freq[1][1][0][1][6][4][5] = SIF2756;	comb3freq[1][1][0][1][7][4][5] = SIF2856;	comb3freq[1][1][0][1][8][4][5] = SIF2956;
+		comb3freq[1][1][0][1][7][4][6] = SIF2857;	comb3freq[1][1][0][1][8][4][6] = SIF2957;	comb3freq[1][1][0][1][8][4][7] = SIF2958;	comb3freq[1][1][0][1][7][5][6] = SIF2867;
+		comb3freq[1][1][0][1][8][5][6] = SIF2967;	comb3freq[1][1][0][1][8][5][7] = SIF2968;	comb3freq[1][1][0][1][8][6][7] = SIF2978;	comb3freq[1][1][0][2][9][0][1] = SIF3012;
+		comb3freq[1][1][0][2][5][3][4] = SIF3645;	comb3freq[1][1][0][2][6][3][4] = SIF3745;	comb3freq[1][1][0][2][7][3][4] = SIF3845;	comb3freq[1][1][0][2][8][3][4] = SIF3945;
+		comb3freq[1][1][0][2][6][3][5] = SIF3746;	comb3freq[1][1][0][2][7][3][5] = SIF3846;	comb3freq[1][1][0][2][8][3][5] = SIF3946;	comb3freq[1][1][0][2][7][3][6] = SIF3847;
+		comb3freq[1][1][0][2][8][3][6] = SIF3947;	comb3freq[1][1][0][2][8][3][7] = SIF3948;	comb3freq[1][1][0][2][6][4][5] = SIF3756;	comb3freq[1][1][0][2][7][4][5] = SIF3856;
+		comb3freq[1][1][0][2][8][4][5] = SIF3956;	comb3freq[1][1][0][2][7][4][6] = SIF3857;	comb3freq[1][1][0][2][8][4][6] = SIF3957;	comb3freq[1][1][0][2][8][4][7] = SIF3958;
+		comb3freq[1][1][0][2][7][5][6] = SIF3867;	comb3freq[1][1][0][2][8][5][6] = SIF3967;	comb3freq[1][1][0][2][8][5][7] = SIF3968;	comb3freq[1][1][0][2][8][6][7] = SIF3978;
+		comb3freq[1][1][0][3][9][0][1] = SIF4012;	comb3freq[1][1][0][3][9][0][2] = SIF4013;	comb3freq[1][1][0][3][9][1][2] = SIF4023;	comb3freq[1][1][0][3][6][4][5] = SIF4756;
+		comb3freq[1][1][0][3][7][4][5] = SIF4856;	comb3freq[1][1][0][3][8][4][5] = SIF4956;	comb3freq[1][1][0][3][7][4][6] = SIF4857;	comb3freq[1][1][0][3][8][4][6] = SIF4957;
+		comb3freq[1][1][0][3][8][4][7] = SIF4958;	comb3freq[1][1][0][3][7][5][6] = SIF4867;	comb3freq[1][1][0][3][8][5][6] = SIF4967;	comb3freq[1][1][0][3][8][5][7] = SIF4968;
+		comb3freq[1][1][0][3][8][6][7] = SIF4978;	comb3freq[1][1][0][4][9][0][1] = SIF5012;	comb3freq[1][1][0][4][9][0][2] = SIF5013;	comb3freq[1][1][0][4][9][0][3] = SIF5014;
+		comb3freq[1][1][0][4][9][1][2] = SIF5023;	comb3freq[1][1][0][4][9][1][3] = SIF5024;	comb3freq[1][1][0][4][9][2][3] = SIF5034;	comb3freq[1][1][0][4][7][5][6] = SIF5867;
+		comb3freq[1][1][0][4][8][5][6] = SIF5967;	comb3freq[1][1][0][4][8][5][7] = SIF5968;	comb3freq[1][1][0][4][8][6][7] = SIF5978;	comb3freq[1][1][0][5][9][0][1] = SIF6012;
+		comb3freq[1][1][0][5][9][0][2] = SIF6013;	comb3freq[1][1][0][5][9][0][3] = SIF6014;	comb3freq[1][1][0][5][9][0][4] = SIF6015;	comb3freq[1][1][0][5][9][1][2] = SIF6023;
+		comb3freq[1][1][0][5][9][1][3] = SIF6024;	comb3freq[1][1][0][5][9][1][4] = SIF6025;	comb3freq[1][1][0][5][9][2][3] = SIF6034;	comb3freq[1][1][0][5][9][2][4] = SIF6035;
+		comb3freq[1][1][0][5][9][3][4] = SIF6045;	comb3freq[1][1][0][5][8][6][7] = SIF6978;	comb3freq[1][1][0][6][9][0][1] = SIF7012;	comb3freq[1][1][0][6][9][0][2] = SIF7013;
+		comb3freq[1][1][0][6][9][0][3] = SIF7014;	comb3freq[1][1][0][6][9][0][4] = SIF7015;	comb3freq[1][1][0][6][9][0][5] = SIF7016;	comb3freq[1][1][0][6][9][1][2] = SIF7023;
+		comb3freq[1][1][0][6][9][1][3] = SIF7024;	comb3freq[1][1][0][6][9][1][4] = SIF7025;	comb3freq[1][1][0][6][9][1][5] = SIF7026;	comb3freq[1][1][0][6][9][2][3] = SIF7034;
+		comb3freq[1][1][0][6][9][2][4] = SIF7035;	comb3freq[1][1][0][6][9][2][5] = SIF7036;	comb3freq[1][1][0][6][9][3][4] = SIF7045;	comb3freq[1][1][0][6][9][3][5] = SIF7046;
+		comb3freq[1][1][0][6][9][4][5] = SIF7056;	comb3freq[1][1][0][7][9][0][1] = SIF8012;	comb3freq[1][1][0][7][9][0][2] = SIF8013;	comb3freq[1][1][0][7][9][0][3] = SIF8014;
+		comb3freq[1][1][0][7][9][0][4] = SIF8015;	comb3freq[1][1][0][7][9][0][5] = SIF8016;	comb3freq[1][1][0][7][9][0][6] = SIF8017;	comb3freq[1][1][0][7][9][1][2] = SIF8023;
+		comb3freq[1][1][0][7][9][1][3] = SIF8024;	comb3freq[1][1][0][7][9][1][4] = SIF8025;	comb3freq[1][1][0][7][9][1][5] = SIF8026;	comb3freq[1][1][0][7][9][1][6] = SIF8027;
+		comb3freq[1][1][0][7][9][2][3] = SIF8034;	comb3freq[1][1][0][7][9][2][4] = SIF8035;	comb3freq[1][1][0][7][9][2][5] = SIF8036;	comb3freq[1][1][0][7][9][2][6] = SIF8037;
+		comb3freq[1][1][0][7][9][3][4] = SIF8045;	comb3freq[1][1][0][7][9][3][5] = SIF8046;	comb3freq[1][1][0][7][9][3][6] = SIF8047;	comb3freq[1][1][0][7][9][4][5] = SIF8056;
+		comb3freq[1][1][0][7][9][4][6] = SIF8057;	comb3freq[1][1][0][7][9][5][6] = SIF8067;	comb3freq[1][1][0][8][9][0][1] = SIF9012;	comb3freq[1][1][0][8][9][0][2] = SIF9013;
+		comb3freq[1][1][0][8][9][0][3] = SIF9014;	comb3freq[1][1][0][8][9][0][4] = SIF9015;	comb3freq[1][1][0][8][9][0][5] = SIF9016;	comb3freq[1][1][0][8][9][0][6] = SIF9017;
+		comb3freq[1][1][0][8][9][0][7] = SIF9018;	comb3freq[1][1][0][8][9][1][2] = SIF9023;	comb3freq[1][1][0][8][9][1][3] = SIF9024;	comb3freq[1][1][0][8][9][1][4] = SIF9025;
+		comb3freq[1][1][0][8][9][1][5] = SIF9026;	comb3freq[1][1][0][8][9][1][6] = SIF9027;	comb3freq[1][1][0][8][9][1][7] = SIF9028;	comb3freq[1][1][0][8][9][2][3] = SIF9034;
+		comb3freq[1][1][0][8][9][2][4] = SIF9035;	comb3freq[1][1][0][8][9][2][5] = SIF9036;	comb3freq[1][1][0][8][9][2][6] = SIF9037;	comb3freq[1][1][0][8][9][2][7] = SIF9038;
+		comb3freq[1][1][0][8][9][3][4] = SIF9045;	comb3freq[1][1][0][8][9][3][5] = SIF9046;	comb3freq[1][1][0][8][9][3][6] = SIF9047;	comb3freq[1][1][0][8][9][3][7] = SIF9048;
+		comb3freq[1][1][0][8][9][4][5] = SIF9056;	comb3freq[1][1][0][8][9][4][6] = SIF9057;	comb3freq[1][1][0][8][9][4][7] = SIF9058;	comb3freq[1][1][0][8][9][5][6] = SIF9067;
+		////// End of automatically generated code block quadruple frequency combinations/////
+		
 		// RINEX 2.11
 		s2t[0][0][0] = C1C; // C1
 		s2t[4][0][0] = C1P; // P1
@@ -3700,69 +8303,535 @@ enum MeasurementType measstr2meastype (char *str) {
 		s2t[2][1][0] = D2P;	// D2
 		s2t[3][1][0] = S2P; // S2
 		
-		s2t[0][2][0] = C5X; // C5
-		s2t[1][2][0] = L5X; // L5
-		s2t[2][2][0] = D5X; // D5
-		s2t[3][2][0] = S5X; // S5
+		s2t[0][2][0] = C3X; // C3
+		s2t[1][2][0] = L3X; // L3
+		s2t[2][2][0] = D3X; // D3
+		s2t[3][2][0] = S3X; // S3
+
+		s2t[0][3][0] = C4X; // C4
+		s2t[1][3][0] = L4X; // L4
+		s2t[2][3][0] = D4X; // D4
+		s2t[3][3][0] = S4X; // S4
+
+		s2t[0][4][0] = C5X; // C5
+		s2t[1][4][0] = L5X; // L5
+		s2t[2][4][0] = D5X; // D5
+		s2t[3][4][0] = S5X; // S5
 		
-		s2t[0][3][0] = C6X; // C6
-		s2t[1][3][0] = L6X; // L6
-		s2t[2][3][0] = D6X; // D6
-		s2t[3][3][0] = S6X; // S6
+		s2t[0][5][0] = C6X; // C6
+		s2t[1][5][0] = L6X; // L6
+		s2t[2][5][0] = D6X; // D6
+		s2t[3][5][0] = S6X; // S6
 		
-		s2t[0][4][0] = C7X; // C7
-		s2t[1][4][0] = L7X; // L7
-		s2t[2][4][0] = D7X; // D7
-		s2t[3][4][0] = S7X; // S7
+		s2t[0][6][0] = C7X; // C7
+		s2t[1][6][0] = L7X; // L7
+		s2t[2][6][0] = D7X; // D7
+		s2t[3][6][0] = S7X; // S7
 		
-		s2t[0][5][0] = C8X; // C8
-		s2t[1][5][0] = L8X; // L8
-		s2t[2][5][0] = D8X; // D8
-		s2t[3][5][0] = S8X; // S8
+		s2t[0][7][0] = C8X; // C8
+		s2t[1][7][0] = L8X; // L8
+		s2t[2][7][0] = D8X; // D8
+		s2t[3][7][0] = S8X; // S8
+
+		s2t[0][8][0] = C9X; // C9
+		s2t[1][8][0] = L9X; // L9
+		s2t[2][8][0] = D9X; // D9
+		s2t[3][8][0] = S9X; // S9
 
 		initialized = 1;
 	}
 
-	if (str[0]=='C') a1=0;
-	else if (str[0]=='L') a1=1;
-	else if (str[0]=='D') a1=2;
-	else if (str[0]=='S') a1=3;
-	else if (str[0]=='P') a1=4;
-	else if (str[0]=='G') a1=5;
-	else if (str[0]=='B') a1=6;
-	else return NA;
+	len=strlen(str);
 
-	if (str[1]=='1') a2=0;
-	else if (str[1]=='2') a2=1;
-	else if (str[1]=='5') a2=2;
-	else if (str[1]=='6') a2=3;
-	else if (str[1]=='7') a2=4;
-	else if (str[1]=='8') a2=5;
-	else if (str[1]=='W') a2=6;
-	else if (str[1]=='I') a2=7;
-	else if (str[1]=='C') a2=8;
-	else if (str[1]=='F') a2=9;
-	else return NA;
+	switch(len) {
+		case 4:
+			//Dual frequency combinations
+			switch(str[0]) {
+				case 'P': case 'p':
+					a1=0;
+					break;
+				case 'L': case 'l':
+					a1=1;
+					break;
+				case 'B': case 'M': case 'b': case 'm':
+					a1=2;
+					break;
+				case 'D': case 'd':
+					a1=3;
+					break;
+				case 'I': case 'i':
+					a1=4;
+					break;
+				default:
+					return NA;
+					break;
+			}
 
-	if (str[2]=='\0') a3=0;
-	else if (str[2]=='A') a3=1;
-	else if (str[2]=='B') a3=2;
-	else if (str[2]=='C') a3=3;
-	else if (str[2]=='D') a3=4;
-	else if (str[2]=='I') a3=5;
-	else if (str[2]=='L') a3=6;
-	else if (str[2]=='M') a3=7;
-	else if (str[2]=='N') a3=8;
-	else if (str[2]=='P') a3=9;
-	else if (str[2]=='Q') a3=10;
-	else if (str[2]=='S') a3=11;
-	else if (str[2]=='W') a3=12;
-	else if (str[2]=='X') a3=13;
-	else if (str[2]=='Y') a3=14;
-	else if (str[2]=='Z') a3=15;
-	else return NA;
-	
-	if (strncmp(str,"L1C",3)==0 && ReadL1CAsItself==0) {return s2t[1][0][0];} //Trick to make gLAB believe L1C is L1P 
+			switch(str[1]) {
+				case 'W': case 'w':
+					a2=0;
+					break;
+				case 'I': case 'i':
+					a2=1;
+					break;
+				case 'C': case 'c':
+					a2=2;
+					break;
+				case 'F': case 'f':
+					a2=3;
+					break;
+				case 'N': case 'n':
+					a2=4;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[2]) {
+				case '1':
+					a3=0;
+					break;
+				case '2':
+					a3=1;
+					break;
+				case '3':
+					a3=2;
+					break;
+				case '4':
+					a3=3;
+					break;
+				case '5':
+					a3=4;
+					break;
+				case '6':
+					a3=5;
+					break;
+				case '7':
+					a3=6;
+					break;
+				case '8':
+					a3=7;
+					break;
+				case '9':
+					a3=8;
+					break;
+				case '0':
+					a3=9;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[3]) {
+				case '1':
+					a4=0;
+					break;
+				case '2':
+					a4=1;
+					break;
+				case '3':
+					a4=2;
+					break;
+				case '4':
+					a4=3;
+					break;
+				case '5':
+					a4=4;
+					break;
+				case '6':
+					a4=5;
+					break;
+				case '7':
+					a4=6;
+					break;
+				case '8':
+					a4=7;
+					break;
+				case '9':
+					a4=8;
+					break;
+				case '0':
+					a4=9;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			return comb2freq[a1][a2][a3][a4];
+
+			break;
+		case 7:
+			//Triple or quadruple frequency combinations
+			switch(str[0]) {
+				case 'I': case 'i':
+					a1=0;
+					break;
+				case 'S': case 's':
+					a1=1;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[1]) {
+				case 'G': case 'g':
+					a2=0;
+					break;
+				case 'I': case 'i':
+					a2=1;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[2]) {
+				case 'F': case 'f':
+					a3=0;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[3]) {
+				case '1':
+					a4=0;
+					break;
+				case '2':
+					a4=1;
+					break;
+				case '3':
+					a4=2;
+					break;
+				case '4':
+					a4=3;
+					break;
+				case '5':
+					a4=4;
+					break;
+				case '6':
+					a4=5;
+					break;
+				case '7':
+					a4=6;
+					break;
+				case '8':
+					a4=7;
+					break;
+				case '9':
+					a4=8;
+					break;
+				case '0':
+					a4=9;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[4]) {
+				case '1':
+					a5=0;
+					break;
+				case '2':
+					a5=1;
+					break;
+				case '3':
+					a5=2;
+					break;
+				case '4':
+					a5=3;
+					break;
+				case '5':
+					a5=4;
+					break;
+				case '6':
+					a5=5;
+					break;
+				case '7':
+					a5=6;
+					break;
+				case '8':
+					a5=7;
+					break;
+				case '9':
+					a5=8;
+					break;
+				case '0':
+					a5=9;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[5]) {
+				case '1':
+					a6=0;
+					break;
+				case '2':
+					a6=1;
+					break;
+				case '3':
+					a6=2;
+					break;
+				case '4':
+					a6=3;
+					break;
+				case '5':
+					a6=4;
+					break;
+				case '6':
+					a6=5;
+					break;
+				case '7':
+					a6=6;
+					break;
+				case '8':
+					a6=7;
+					break;
+				case '9':
+					a6=8;
+					break;
+				case '0':
+					a6=9;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[6]) {
+				case '1':
+					a7=0;
+					break;
+				case '2':
+					a7=1;
+					break;
+				case '3':
+					a7=2;
+					break;
+				case '4':
+					a7=3;
+					break;
+				case '5':
+					a7=4;
+					break;
+				case '6':
+					a7=5;
+					break;
+				case '7':
+					a7=6;
+					break;
+				case '8':
+					a7=7;
+					break;
+				case '9':
+					a7=8;
+					break;
+				case '0':
+					a7=9;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			return comb3freq[a1][a2][a3][a4][a5][a6][a7];
+			break;
+		case 8:
+			//Graphic combination with word "GRAPHIC"
+			freqletter=str[7];
+			str[7]='\0';
+			if (strcasecmp(str,"GRAPHIC")!=0) return NA;
+			switch (freqletter) {
+				case '1':
+					return G1;
+					break;
+				case '2':
+					return G2;
+					break;
+				case '3':
+					return G3;
+					break;
+				case '4':
+					return G4;
+					break;
+				case '5':
+					return G5;
+					break;
+				case '6':
+					return G6;
+					break;
+				case '7':
+					return G7;
+					break;
+				case '8':
+					return G8;
+					break;
+				case '9':
+					return G9;
+					break;
+				case '0':
+					return G0;
+					break;
+				default:
+					return NA;
+					break;
+			}
+			break;
+		case 2: case 3:
+			switch(str[0]) {
+				case 'C': case 'c':
+					a1=0;
+					break;
+				case 'L': case 'l':
+					a1=1;
+					break;
+				case 'D': case 'd':
+					a1=2;
+					break;
+				case 'S': case 's':
+					a1=3;
+					break;
+				case 'P': case 'p':
+					a1=4;
+					break;
+				case 'G': case 'g':
+					a1=5;
+					break;
+				case 'B': case 'M': case 'b': case 'm':
+					a1=6;
+					break;
+				case 'I': case 'i':
+					a1=7;
+					break;
+				case 'X': case 'x':
+					a1=8;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[1]) {
+				case '1':
+					a2=0;
+					break;
+				case '2':
+					a2=1;
+					break;
+				case '3':
+					a2=2;
+					break;
+				case '4':
+					a2=3;
+					break;
+				case '5':
+					a2=4;
+					break;
+				case '6':
+					a2=5;
+					break;
+				case '7':
+					a2=6;
+					break;
+				case '8':
+					a2=7;
+					break;
+				case '9':
+					a2=8;
+					break;
+				case '0':
+					a2=9;
+					break;
+				case 'W': case 'w':
+					a2=10;
+					break;
+				case 'I': case 'i':
+					a2=11;
+					break;
+				case 'C': case 'c':
+					a2=12;
+					break;
+				case 'F': case 'f':
+					a2=13;
+					break;
+				case 'N': case 'n':
+					a2=14;
+					break;
+				default:
+					return NA;
+					break;
+			}
+
+			switch(str[2]) {
+				case '\0':
+					a3=0;
+					break;
+				case 'A': case 'a':
+					a3=1;
+					break;
+				case 'B': case 'b':
+					a3=2;
+					break;
+				case 'C': case 'c':
+					a3=3;
+					break;
+				case 'D': case 'd':
+					a3=4;
+					break;
+				case 'E': case 'e':
+					a3=5;
+					break;
+				case 'S': case 's':
+					a3=6;
+					break;
+				case 'L': case 'l':
+					a3=7;
+					break;
+				case 'I': case 'i':
+					a3=8;
+					break;
+				case 'Q': case 'q':
+					a3=9;
+					break;
+				case 'X': case 'x':
+					a3=10;
+					break;
+				case 'P': case 'p':
+					a3=11;
+					break;
+				case 'W': case 'w':
+					a3=12;
+					break;
+				case 'Y': case 'y':
+					a3=13;
+					break;
+				case 'Z': case 'z':
+					a3=14;
+					break;
+				case 'M': case 'm':
+					a3=15;
+					break;
+				case 'N': case 'n':
+					a3=16;
+					break;
+				default:
+					return NA;
+					break;
+			}
+			break;
+		default:
+			return NA;
+			break;
+	}
+
 	return s2t[a1][a2][a3];
 }
 
@@ -3779,114 +8848,385 @@ char *meastype2measstr (enum MeasurementType meas) {
 	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
 	//directive to make OpenMP create a local (static) copy for each thread
 	static char str[10];
-	//Static variables below are initalized at compile and not modified during execution, so no race conditions occur
 	#pragma omp threadprivate(str)
-	static int	initialized = 0;
-	#pragma omp threadprivate(initialized)
-	static char	l[34];
-	#pragma omp threadprivate(l)
+	const char	l[160]={'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N',  //Freq 1
+						'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N',  //Freq 2
+						'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N',  //Freq 3
+						'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N',  //Freq 4
+						'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N',  //Freq 5
+						'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N',  //Freq 6
+						'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N',  //Freq 7
+						'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N',  //Freq 8
+						'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N',  //Freq 9
+						'A','B','C','D','E','S','L','I','Q','X','P','W','Y','Z','M','N'}; //Freq 0
+	
+	const  char comb2name[10][3]={"PN","PI","PC","LW","LI","LC","MW","IF","DF","DF"};
+	
+	const  char	comb2freq[45][3]={"12","13","14","15","16","17","18","19","10",
+									   "23","24","25","26","27","28","29","20",
+											"34","35","36","37","38","39","30",
+												 "45","46","47","48","49","40",
+													  "56","57","58","59","50",
+														   "67","68","69","60",
+																"78","79","70",
+																	 "89","80",
+																		  "90"};
+
+	const  char	comb2freqinvert[45][3]={"21","31","41","51","61","71","81","91","01",
+											 "32","42","52","62","72","82","92","02",
+												  "43","53","63","73","83","93","03",
+													   "54","64","74","84","94","04",
+															"65","75","85","95","05",
+																 "76","86","96","06",
+																	  "87","97","07",
+																		   "98","08",
+																				"09"};
+
+	const  char	Gcombfreq[10]={'1','2','3','4','5','6','7','8','9','0'};
+
+	const  char comb3name[2][4]={"IGF","SIF"};
+
+	const  char comb3freq[360][5]={ "1012","1013","1014","1015","1016","1017","1018","1019",
+									"1020","1030","1040","1050","1060","1070","1080","1090",
+									"1213","1214","1215","1216","1217","1218","1219","1220",
+									"1223","1224","1225","1226","1227","1228","1229","1314",
+									"1315","1316","1317","1318","1319","1323","1330","1334",
+									"1335","1336","1337","1338","1339","1415","1416","1417",
+									"1418","1419","1424","1434","1440","1445","1446","1447",
+									"1448","1449","1516","1517","1518","1519","1525","1535",
+									"1545","1550","1556","1557","1558","1559","1617","1618",
+									"1619","1626","1636","1646","1656","1660","1667","1668",
+									"1669","1718","1719","1727","1737","1747","1757","1767",
+									"1770","1778","1779","1819","1828","1838","1848","1858",
+									"1868","1878","1880","1889","1929","1939","1949","1959",
+									"1969","1979","1989","1990","2023","2024","2025","2026",
+									"2027","2028","2029","2030","2040","2050","2060","2070",
+									"2080","2090","2324","2325","2326","2327","2328","2329",
+									"2330","2334","2335","2336","2337","2338","2339","2425",
+									"2426","2427","2428","2429","2434","2440","2445","2446",
+									"2447","2448","2449","2526","2527","2528","2529","2535",
+									"2545","2550","2556","2557","2558","2559","2627","2628",
+									"2629","2636","2646","2656","2660","2667","2668","2669",
+									"2728","2729","2737","2747","2757","2767","2770","2778",
+									"2779","2829","2838","2848","2858","2868","2878","2880",
+									"2889","2939","2949","2959","2969","2979","2989","2990",
+									"3034","3035","3036","3037","3038","3039","3040","3050",
+									"3060","3070","3080","3090","3435","3436","3437","3438",
+									"3439","3440","3445","3446","3447","3448","3449","3536",
+									"3537","3538","3539","3545","3550","3556","3557","3558",
+									"3559","3637","3638","3639","3646","3656","3660","3667",
+									"3668","3669","3738","3739","3747","3757","3767","3770",
+									"3778","3779","3839","3848","3858","3868","3878","3880",
+									"3889","3949","3959","3969","3979","3989","3990","4045",
+									"4046","4047","4048","4049","4050","4060","4070","4080",
+									"4090","4546","4547","4548","4549","4550","4556","4557",
+									"4558","4559","4647","4648","4649","4656","4660","4667",
+									"4668","4669","4748","4749","4757","4767","4770","4778",
+									"4779","4849","4858","4868","4878","4880","4889","4959",
+									"4969","4979","4989","4990","5056","5057","5058","5059",
+									"5060","5070","5080","5090","5657","5658","5659","5660",
+									"5667","5668","5669","5758","5759","5767","5770","5778",
+									"5779","5859","5868","5878","5880","5889","5969","5979",
+									"5989","5990","6067","6068","6069","6070","6080","6090",
+									"6768","6769","6770","6778","6779","6869","6878","6880",
+									"6889","6979","6989","6990","7078","7079","7080","7090",
+									"7879","7880","7889","7989","7990","8089","8090","8990"};
+
+	const  char comb4name[2][4]={"IGF","SIF"};
+
+	const  char comb4freq[630][5]={ "1234","1235","1236","1237","1238","1239","1245","1246",
+									"1247","1248","1249","1256","1257","1258","1259","1267",
+									"1268","1269","1278","1279","1289","1345","1346","1347",
+									"1348","1349","1356","1357","1358","1359","1367","1368",
+									"1369","1378","1379","1389","1456","1457","1458","1459",
+									"1467","1468","1469","1478","1479","1489","1567","1568",
+									"1569","1578","1579","1589","1678","1679","1689","1789",
+									"2345","2346","2347","2348","2349","2356","2357","2358",
+									"2359","2367","2368","2369","2378","2379","2389","2456",
+									"2457","2458","2459","2467","2468","2469","2478","2479",
+									"2489","2567","2568","2569","2578","2579","2589","2678",
+									"2679","2689","2789","3120","3456","3457","3458","3459",
+									"3467","3468","3469","3478","3479","3489","3567","3568",
+									"3569","3578","3579","3589","3678","3679","3689","3789",
+									"4120","4130","4230","4567","4568","4569","4578","4579",
+									"4589","4678","4679","4689","4789","5120","5130","5140",
+									"5230","5240","5340","5678","5679","5689","5789","6120",
+									"6130","6140","6150","6230","6240","6250","6340","6350",
+									"6450","6789","7120","7130","7140","7150","7160","7230",
+									"7240","7250","7260","7340","7350","7360","7450","7460",
+									"7560","8120","8130","8140","8150","8160","8170","8230",
+									"8240","8250","8260","8270","8340","8350","8360","8370",
+									"8450","8460","8470","8560","8570","8670","9120","9130",
+									"9140","9150","9160","9170","9180","9230","9240","9250",
+									"9260","9270","9280","9340","9350","9360","9370","9380",
+									"9450","9460","9470","9480","9560","9570","9580","9670",
+									"9680","9780",
+									"1324","1325","1326","1327","1328","1329","1425","1426",
+									"1427","1428","1429","1526","1527","1528","1529","1627",
+									"1628","1629","1728","1729","1829","1435","1436","1437",
+									"1438","1439","1536","1537","1538","1539","1637","1638",
+									"1639","1738","1739","1839","1546","1547","1548","1549",
+									"1647","1648","1649","1748","1749","1849","1657","1658",
+									"1659","1758","1759","1859","1768","1769","1869","1879",
+									"2435","2436","2437","2438","2439","2536","2537","2538",
+									"2539","2637","2638","2639","2738","2739","2839","2546",
+									"2547","2548","2549","2647","2648","2649","2748","2749",
+									"2849","2657","2658","2659","2758","2759","2859","2768",
+									"2769","2869","2879","3210","3546","3547","3548","3549",
+									"3647","3648","3649","3748","3749","3849","3657","3658",
+									"3659","3758","3759","3859","3768","3769","3869","3879",
+									"4210","4310","4320","4657","4658","4659","4758","4759",
+									"4859","4768","4769","4869","4879","5210","5310","5410",
+									"5320","5420","5430","5768","5769","5869","5879","6210",
+									"6310","6410","6510","6320","6420","6520","6430","6530",
+									"6540","6879","7210","7310","7410","7510","7610","7320",
+									"7420","7520","7620","7430","7530","7630","7540","7640",
+									"7650","8210","8310","8410","8510","8610","8710","8320",
+									"8420","8520","8620","8720","8430","8530","8630","8730",
+									"8540","8640","8740","8650","8750","8760","9210","9310",
+									"9410","9510","9610","9710","9810","9320","9420","9520",
+									"9620","9720","9820","9430","9530","9630","9730","9830",
+									"9540","9640","9740","9840","9650","9750","9850","9760",
+									"9860","9870",
+									"1423","1523","1623","1723","1823","1923","1524","1624",
+									"1724","1824","1924","1625","1725","1825","1925","1726",
+									"1826","1926","1827","1927","1928","1534","1634","1734",
+									"1834","1934","1635","1735","1835","1935","1736","1836",
+									"1936","1837","1937","1938","1645","1745","1845","1945",
+									"1746","1846","1946","1847","1947","1948","1756","1856",
+									"1956","1857","1957","1958","1867","1967","1968","1978",
+									"2534","2634","2734","2834","2934","2635","2735","2835",
+									"2935","2736","2836","2936","2837","2937","2938","2645",
+									"2745","2845","2945","2746","2846","2946","2847","2947",
+									"2948","2756","2856","2956","2857","2957","2958","2867",
+									"2967","2968","2978","3012","3645","3745","3845","3945",
+									"3746","3846","3946","3847","3947","3948","3756","3856",
+									"3956","3857","3957","3958","3867","3967","3968","3978",
+									"4012","4013","4023","4756","4856","4956","4857","4957",
+									"4958","4867","4967","4968","4978","5012","5013","5014",
+									"5023","5024","5034","5867","5967","5968","5978","6012",
+									"6013","6014","6015","6023","6024","6025","6034","6035",
+									"6045","6978","7012","7013","7014","7015","7016","7023",
+									"7024","7025","7026","7034","7035","7036","7045","7046",
+									"7056","8012","8013","8014","8015","8016","8017","8023",
+									"8024","8025","8026","8027","8034","8035","8036","8037",
+									"8045","8046","8047","8056","8057","8067","9012","9013",
+									"9014","9015","9016","9017","9018","9023","9024","9025",
+									"9026","9027","9028","9034","9035","9036","9037","9038",
+									"9045","9046","9047","9048","9056","9057","9058","9067",
+									"9068","9078"};
+
 	char		type;
 	int			aux;
 	
-	strcpy(str,"NAN");
 
-	if (!initialized) {
-		initialized = 1;
-		l[0]='A'; l[1]='B'; l[2]='C'; l[3]='P'; l[4]='W'; l[5]='X'; l[6]='Y'; l[7]='Z'; l[8]='M'; l[9]='N';
-		l[10]='C'; l[11]='D'; l[12]='S'; l[13]='L'; l[14]='X'; l[15]='P'; l[16]='W'; l[17]='Y'; l[18]='M'; l[19]='N';
-		l[20]='I'; l[21]='Q'; l[22]='X'; l[23]='I'; l[24]='Q'; l[25]='X'; l[26]='I'; l[27]='Q'; l[28]='X'; l[29]='A';
-		l[30]='B'; l[31]='C'; l[32]='X'; l[33]='Z';
-	}
-
+	#if defined RANGECASEENABLED
+	switch (meas) {
+		case NA ... S9N:
+	#else
 	if (meas<ENDMEAS) {
-		switch (whatIs(meas)) {
-			case Pseudorange:
-				type='C';
-				break;
-			case CarrierPhase:
-				type='L';
-				break;
-			case Doppler:
-				type='D';
-				break;
-			case SNR:
-				type='S';
-				break;
-			default:
-				return str;
-				break;
-		}
-		aux = getFrequencyInt(meas);
-		sprintf(str,"%1c%1d%1c",type,aux,l[(int)((meas-1)/4)]);
+	#endif
+			aux = getFrequencyInt(meas);
+			switch (whatIs(meas)) {
+				case Pseudorange:
+					type='C';
+					sprintf(str,"%1c%1d%1c",type,aux,l[(int)(meas-1)/4]);
+					break;
+				case CarrierPhase:
+					type='L';
+					sprintf(str,"%1c%1d%1c",type,aux,l[(int)(meas-1)/4]);
+					break;
+				case Doppler:
+					type='D';
+					sprintf(str,"%1c%1d%1c",type,aux,l[(int)(meas-1)/4]);
+					break;
+				case SNR:
+					type='S';
+					sprintf(str,"%1c%1d%1c",type,aux,l[(int)(meas-1)/4]);
+					break;
+				case Ionosphere:
+					type='I';
+					sprintf(str,"%1c%1d",type,aux);
+					break;
+				case Channels:
+					type='X';
+					sprintf(str,"%1c%1d",type,aux);
+					break;
+				default:
+					//NA value
+					strcpy(str,"NAN");
+					return str;
+					break;
+			}
+	#if defined RANGECASEENABLED
+			break;
+		case ENDMEAS ... DF:
+	#else
+	} else if (meas<G1) {
+	#endif
+			switch (meas) {
+				case PN:
+					strcpy(str,"PN");
+					break;
+				case PI:
+					strcpy(str,"PI");
+					break;
+				case PC:
+					strcpy(str,"PC");
+					break;
+				case PCC:
+					strcpy(str,"PCC");
+					break;
+				case LW:
+					strcpy(str,"LW");
+					break;
+				case LI:
+					strcpy(str,"LI");
+					break;
+				case LC:
+					strcpy(str,"LC");
+					break;
+				case MW:
+					strcpy(str,"MW");
+					break;
+				case IF:
+					strcpy(str,"IF");
+					break;
+				case DF:
+					strcpy(str,"DF");
+					break;
+				default:
+					//ENDMEAS value
+					strcpy(str,"NAN");
+					return str;
+					break;
+			}
+	#if defined RANGECASEENABLED
+			break;
+		case G1 ... G0:
+	#else
+	} else if (meas<PN12) {
+	#endif
+			//Graphic combinations
+			sprintf(str,"G%c",Gcombfreq[meas-G1]);
+			return str;
+	#if defined RANGECASEENABLED
+			break;
+		case PN12 ... DF90:
+	#else
+	} else if (meas<DF21) {
+	#endif
+			//2 frequency Combinations and below DF21
+			aux=meas-PN12;
+			sprintf(str,"%s%s",comb2name[(int)(aux/45)],comb2freq[aux%45]);
+			return str;
+	#if defined RANGECASEENABLED
+			break;
+		case DF21 ... DF09:
+	#else
+	} else if (meas<IGF1012) {
+	#endif
+			//2 frequency Combinations and above DF21
+			aux=meas-PN12;
+			sprintf(str,"%s%s",comb2name[(int)(aux/45)],comb2freqinvert[aux%45]);
+			return str;
+	#if defined RANGECASEENABLED
+			break;
+		case IGF1012 ... SIF8990:
+	#else
+	} else if (meas<IGF1234) {
+	#endif
+			//3 frequency combinations
+			aux=meas-IGF1012;
+			sprintf(str,"%s%s",comb3name[(int)(aux/360)],comb3freq[aux%360]);
+			return str;
+	#if defined RANGECASEENABLED
+			break;
+		default:
+	#else
 	} else {
-		switch (meas) {
-			case 138:
-				strcpy(str,"LW");
-				break;
-			case 139:
-				strcpy(str,"BW");
-				break;
-			case 140:
-				strcpy(str,"PW");
-				break;
-			case 141:
-				strcpy(str,"LI");
-				break;
-			case 142:
-				strcpy(str,"PI");
-				break;
-			case 143:
-				strcpy(str,"LC");
-				break;
-			case 144:
-				strcpy(str,"PC");
-				break;
-			case 145:
-				strcpy(str,"PCC");
-				break;
-			case 146:
-				strcpy(str,"G1C");
-				break;
-			case 147:
-				strcpy(str,"G1P");
-				break;
-			case 148:
-				strcpy(str,"G2C");
-				break;
-			case 149:
-				strcpy(str,"G2P");
-				break;
-			case 150:
-				strcpy(str,"DF");
-				break;
-			default:
-				return str;
-				break;
-		}
+	#endif
+			//4 frequency combinations
+			aux=meas-IGF1234;
+			sprintf(str,"%s%s",comb4name[(int)(aux/630)],comb4freq[aux%630]);
+	#if defined RANGECASEENABLED
+			break;
 	}
+	#else
+	}
+	#endif
 
 	return str;
 }
 
 /*****************************************************************************
  * Name        : gnsschar2gnsstype
- * Description : Transform from string to internal GNSS System type
+ * Description : Transform from char to internal GNSS System type
  * Parameters  :
  * Name                           |Da|Unit|Description
- * char  *system                   I  N/A  GNSS System string
+ * char  *GNSS                     I  N/A  GNSS System char
  * Returned value (GNSSystem)      O  N/A  GNSSystem type
  *****************************************************************************/
-enum GNSSystem gnsschar2gnsstype (char system) {
-	if (system=='G' || system==' ') return GPS;
-	else if (system=='E') return Galileo;
-	else if (system=='R') return GLONASS;
-	else if (system=='S') return GEO;
-	else if (system=='C') return BDS;
-	else if (system=='J') return QZSS;
-	else if (system=='I') return IRNSS;
+enum GNSSystem gnsschar2gnsstype (char GNSS) {
 
-	return GPS; // Default value
+	switch(GNSS) {
+		case 'G': case 'g': case ' ':
+			return GPS;
+			break;
+		case 'E': case 'e':
+			return Galileo;
+			break;
+		case 'R': case 'r':
+			return GLONASS;
+			break;
+		case 'S': case 's':
+			return GEO;
+			break;
+		case 'C': case 'c':
+			return BDS;
+			break;
+		case 'J': case 'j':
+			return QZSS;
+			break;
+		case 'I': case 'i':
+			return IRNSS;
+			break;
+		default:
+			return GPS; //Default value
+			break;
+	}
 }
+
+/*****************************************************************************
+ * Name        : gnssstr2gnsstype
+ * Description : Transform from short string (three letters) to internal 
+ *                GNSS System type
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * char  *GNSS                     I  N/A  GNSS System short string
+ * Returned value (GNSSystem)      O  N/A  GNSSystem type
+ *****************************************************************************/
+enum GNSSystem gnssstr2gnsstype (char *GNSS) {
+
+	if (strcasecmp(GNSS,"GPS")==0) {
+		return GPS;
+	} else if (strcasecmp(GNSS,"GAL")==0) {
+		return Galileo;
+	} else if (strcasecmp(GNSS,"GLO")==0) {
+		return GLONASS;
+	} else if (strcasecmp(GNSS,"GEO")==0) {
+		return GEO;
+	} else if (strcasecmp(GNSS,"BDT")==0||strcasecmp(GNSS,"BDS")==0) {
+		return BDS;
+	} else if (strcasecmp(GNSS,"QZS")==0) {
+		return QZSS;
+	} else if (strcasecmp(GNSS,"IRN")==0) {
+		return IRNSS;
+	} else {
+		return GPS; //Default to GPS
+	}
+}
+
 
 /*****************************************************************************
  * Name        : gnsstype2gnssstr
@@ -3900,38 +9240,10 @@ char *gnsstype2gnssstr (enum GNSSystem GNSS) {
 	//Static variables are shared between threads (as they are saved in the data segment).
 	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
 	//directive to make OpenMP create a local (static) copy for each thread
-	static char str[10];
+	static char str[MAX_GNSS][4]={"GPS","GAL","GLO","GEO","BDS","QZS","IRN"};
 	#pragma omp threadprivate(str)
 
-	strcpy(str,"NAN");
-
-	switch (GNSS) {
-		case GPS:
-			strcpy(str,"GPS");
-			break;
-		case Galileo:
-			strcpy(str,"GAL");
-			break;
-		case GLONASS:
-			strcpy(str,"GLO");
-			break;
-		case GEO:
-			strcpy(str,"GEO");
-			break;
-		case BDS:
-			strcpy(str,"BDS");
-			break;
-		case QZSS:
-			strcpy(str,"QZS");
-			break;
-		case IRNSS:
-			strcpy(str,"IRN");
-			break;
-		default:
-			strcpy(str,"NAN");
-	}
-
-	return str;
+	return str[GNSS];
 }
 
 /*****************************************************************************
@@ -3946,36 +9258,10 @@ char *gnsstype2gnssname (enum GNSSystem GNSS) {
 	//Static variables are shared between threads (as they are saved in the data segment).
 	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
 	//directive to make OpenMP create a local (static) copy for each thread
-	static char str[10];
+	static char str[MAX_GNSS][10]={"GPS","Galileo","GLONASS","SBAS","BeiDou","QZSS","IRNSS"};
 	#pragma omp threadprivate(str)
 
-    switch (GNSS) {
-        case GPS:
-            strcpy(str,"GPS");
-            break;
-        case Galileo:
-            strcpy(str,"Galileo");
-            break;
-        case GLONASS:
-            strcpy(str,"GLONASS");
-            break;
-        case GEO:
-            strcpy(str,"SBAS");
-            break;
-        case BDS:
-            strcpy(str,"BeiDou");
-            break;
-        case QZSS:
-            strcpy(str,"QZSS");
-            break;
-        case IRNSS:
-            strcpy(str,"IRNSS");
-            break;
-        default:
-			strcpy(str,"NAN");
-    }
-
-    return str;
+	return str[GNSS];
 }
 
 /*****************************************************************************
@@ -3988,33 +9274,13 @@ char *gnsstype2gnssname (enum GNSSystem GNSS) {
  *****************************************************************************/
 char gnsstype2char (enum GNSSystem GNSS) {
 	
-	switch (GNSS) {
-		case GPS:
-			return 'G';
-			break;
-		case Galileo:
-			return 'E';
-			break;
-		case GLONASS:
-			return 'R';
-			break;
-		case GEO:
-			return 'S';
-			break;
-		case BDS:
-			return 'C';
-			break;
-		case QZSS:
-			return 'J';
-			break;
-		case IRNSS:
-			return 'I';
-			break;
-		default:
-			return 'N';
-	}
+	//Static variables are shared between threads (as they are saved in the data segment).
+	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
+	//directive to make OpenMP create a local (static) copy for each thread
+	static char str[MAX_GNSS]={'G','E','R','S','C','J','I'};
+	#pragma omp threadprivate(str)
 
-	return 'N';
+	return str[GNSS];
 }
 
 /*****************************************************************************
@@ -4026,32 +9292,108 @@ char gnsstype2char (enum GNSSystem GNSS) {
  * char  *str                      I  N/A  Satellite block string
  * Returned value (SatelliteBlock) O  N/A  Internal satellite block
  *****************************************************************************/
-enum SatelliteBlock satblockstr2satblock (char *str) {
-	if (strcmp(str,"BLOCK I")==0) {
-		return GPS_BLOCK_I;
-	} else if (strcmp(str,"BLOCK II")==0) {
-		return GPS_BLOCK_II;
-	} else if (strcmp(str,"BLOCK IIA")==0) {
-		return GPS_BLOCK_IIA;
-	} else if (strcmp(str,"BLOCK IIR")==0) {
-		return GPS_BLOCK_IIR;
-	} else if (strcmp(str,"BLOCK IIR-A")==0) {
-		return GPS_BLOCK_IIR;
-	} else if (strcmp(str,"BLOCK IIR-B")==0) {
-		return GPS_BLOCK_IIR;
-	} else if (strcmp(str,"BLOCK IIR-M")==0) {
-		return GPS_BLOCK_IIRM;
-	} else if (strcmp(str,"GLONASS")==0) {
-		return GLONASS_BLOCK;
-	} else if (strcmp(str,"GLONASS-M")==0) {
-		return GLONASS_BLOCK_M;
-	}
+enum SatelliteBlock satblockstr2satblock (char *str, enum GNSSystem GNSS) {
+
+	switch(GNSS) {
+		case GPS:
+			if (strcmp(str,"BLOCK I")==0) {
+				return GPS_BLOCK_I;
+			} else if (strcmp(str,"BLOCK II")==0) {
+				return GPS_BLOCK_II;
+			} else if (strcmp(str,"BLOCK IIA")==0) {
+				return GPS_BLOCK_IIA;
+			} else if (strcmp(str,"BLOCK IIR")==0) {
+				return GPS_BLOCK_IIR;
+			} else if (strcmp(str,"BLOCK IIR-A")==0) {
+				return GPS_BLOCK_IIRA;
+			} else if (strcmp(str,"BLOCK IIR-B")==0) {
+				return GPS_BLOCK_IIRB;
+			} else if (strcmp(str,"BLOCK IIR-M")==0) {
+				return GPS_BLOCK_IIRM;
+			} else if (strcmp(str,"BLOCK IIF")==0) {
+				return GPS_BLOCK_IIF;
+			} else if (strcmp(str,"BLOCK IIIA")==0) {
+				return GPS_BLOCK_IIIA;
+			} else if (strcmp(str,"BLOCK IIIF")==0) {
+				return GPS_BLOCK_IIIF;
+			}
+			break;
+		case GLONASS:
+			if (strcmp(str,"GLONASS")==0) {
+				return GLONASS_BLOCK;
+			} else if (strcmp(str,"GLONASS-M")==0) {
+				return GLONASS_BLOCK_M;
+			} else if (strcmp(str,"GLONASS-M+")==0) {
+				return GLONASS_BLOCK_M2;
+			} else if (strcmp(str,"GLONASS-K1")==0) {
+				return GLONASS_BLOCK_K1;
+			} else if (strcmp(str,"GLONASS-K2")==0) {
+				return GLONASS_BLOCK_K2;
+			} else if (strcmp(str,"GLONASS-V")==0) {
+				return GLONASS_BLOCK_V;
+			}
+			break;
+		case Galileo:
+			if (strcmp(str,"GALILEO-0A")==0) {
+				return GALILEO_BLOCK_0A;
+			} else if (strcmp(str,"GALILEO-0B")==0) {
+				return GALILEO_BLOCK_0B;
+			} else if (strcmp(str,"GALILEO-1")==0) {
+				return GALILEO_BLOCK_1;
+			} else if (strcmp(str,"GALILEO-2")==0) {
+				return GALILEO_BLOCK_2;
+			}
+			break;
+		case BDS:
+			if (strcmp(str,"BEIDOU-2M")==0) {
+				return BEIDOU_BLOCK_2M;
+			} else if (strcmp(str,"BEIDOU-2I")==0) {
+				return BEIDOU_BLOCK_2I;
+			} else if (strcmp(str,"BEIDOU-2G")==0) {
+				return BEIDOU_BLOCK_2G;
+			} else if (strcmp(str,"BEIDOU-3SI-CAST")==0) {
+				return BEIDOU_BLOCK_3SI_CAST;
+			} else if (strcmp(str,"BEIDOU-3SI-SECM")==0) {
+				return BEIDOU_BLOCK_3SI_SECM;
+			} else if (strcmp(str,"BEIDOU-3SM-CAST")==0) {
+				return BEIDOU_BLOCK_3SM_CAST;
+			} else if (strcmp(str,"BEIDOU-3SM-SECM")==0) {
+				return BEIDOU_BLOCK_3SM_SECM;
+			} else if (strcmp(str,"BEIDOU-3M-CAST")==0) {
+				return BEIDOU_BLOCK_3M_CAST;
+			} else if (strcmp(str,"BEIDOU-3M-SECM")==0) {
+				return BEIDOU_BLOCK_3M_SECM;
+			} else if (strcmp(str,"BEIDOU-3G-CAST")==0 || strcmp(str,"BEIDOU-3G")==0) {
+				return BEIDOU_BLOCK_3G_CAST;
+			} else if (strcmp(str,"BEIDOU-3I")==0) {
+				return BEIDOU_BLOCK_3I;
+			}
+			break;
+		case QZSS:
+			if (strcmp(str,"QZSS")==0) {
+				return QZSS_BLOCK;
+			} else if (strcmp(str,"QZSS-2G")==0) {
+				return QZSS_BLOCK_2G;
+			} else if (strcmp(str,"QZSS-2I")==0) {
+				return QZSS_BLOCK_2I;
+			}
+			break;
+		case IRNSS:
+			if (strcmp(str,"IRNSS-1IGSO")==0) {
+				return IRNSS_BLOCK_1IGSO;
+			} else if (strcmp(str,"IRNSS-1GEO")==0) {
+				return IRNSS_BLOCK_1GEO;
+			}
+			break;
+		default:
+			break;
+	}	
 	
 	return UNKNOWN_BLOCK;
 }
 
 /*****************************************************************************
- * Name        : satblockstr2satblock
+ * Name        : satblock2satblockstr 
  * Description : Transform from an internal satellite block to a satellite  
  *               block string
  * Parameters  :
@@ -4063,38 +9405,16 @@ char *satblock2satblockstr (enum SatelliteBlock satBlock) {
 	//Static variables are shared between threads (as they are saved in the data segment).
 	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
 	//directive to make OpenMP create a local (static) copy for each thread
-	static char str[20];
+	static char str[MAX_SATELLITES_BLOCK][30]= {"UNKNOWN_BLOCK",
+	/*GPS*/		"BLOCK_I","BLOCK_II","BLOCK_IIA","BLOCK_IIR","BLOCK_IIR-A","BLOCK_IIR-B","BLOCK_IIR-M","BLOCK_IIF","BLOCK_IIIA","BLOCK_IIIF",
+	/*GLONASS*/	"GLONASS","GLONASS-M","GLONASS-M+","GLONASS-K1","GLONASS-K2","GLONASS-V",
+	/*Galileo*/	"GALILEO-0A","GALILEO-0B","GALILEO-1","GALILEO-2",
+	/*BeiDou*/	"BEIDOU-2M","BEIDOU-2I","BEIDOU-2G","BEIDOU-3SI-CAST","BEIDOU-3SI-SECM","BEIDOU-3SM-CAST","BEIDOU-3SM-SECM","BEIDOU-3M-CAST","BEIDOU-3M-SECM","BEIDOU-3G-CAST","BEIDOU-3I",
+	/*QZSS*/	"QZSS","QZSS-2G","QZSS-2I",
+	/*IRNSS*/	"IRNSS-1IGSO","IRNSS-1GEO"};
 	#pragma omp threadprivate(str)
 
-	strcpy(str,"NAN");
-
-	switch (satBlock) {
-		case GPS_BLOCK_I:
-			strcpy(str,"BLOCK I");
-			break;
-		case GPS_BLOCK_II:
-			strcpy(str,"BLOCK II");
-			break;
-		case GPS_BLOCK_IIA:
-			strcpy(str,"BLOCK IIA");
-			break;
-		case GPS_BLOCK_IIR:
-			strcpy(str,"BLOCK IIR");
-			break;
-		case GPS_BLOCK_IIRM:
-			strcpy(str,"BLOCK IIR-M");
-			break;
-		case GLONASS_BLOCK:
-			strcpy(str,"GLONASS");
-			break;
-		case GLONASS_BLOCK_M:
-			strcpy(str,"GLONASS-M");
-			break;
-		default:
-			strcpy(str,"NAN");
-	}
-
-	return str;
+	return str[satBlock];
 }
 
 /*****************************************************************************
@@ -4107,30 +9427,30 @@ char *satblock2satblockstr (enum SatelliteBlock satBlock) {
  *****************************************************************************/
 enum TimeSystemCorrection timecorrstr2timecorrtype (char *str) {
 	if (strcmp(str,"GAUT")==0) {
-				return GAUT;
-		} else if (strcmp(str,"GPUT")==0) {
-				return GPUT;
-		} else if (strcmp(str,"SBUT")==0) {
-				return SBUT;
-		} else if (strcmp(str,"GLUT")==0) {
-				return GLUT;
-		} else if (strcmp(str,"GPGA")==0) {
-				return GPGA;
-		} else if (strcmp(str,"GLGP")==0) {
-				return GLGP;
-		} else if (strcmp(str,"QZGP")==0) {
-				return QZGP;
-		} else if (strcmp(str,"QZUT")==0) {
-				return QZUT;
-		} else if (strcmp(str,"BDUT")==0) {
-				return BDUT;
-		} else if (strcmp(str,"IRUT")==0) {
-				return IRUT;
-		} else if (strcmp(str,"IRGP")==0) {
-				return IRGP;
-		}
+			return GAUT;
+	} else if (strcmp(str,"GPUT")==0) {
+			return GPUT;
+	} else if (strcmp(str,"SBUT")==0) {
+			return SBUT;
+	} else if (strcmp(str,"GLUT")==0) {
+			return GLUT;
+	} else if (strcmp(str,"GPGA")==0 || strcmp(str,"GAGP")==0) { //Prior to RINEX 3.04, GAGP was named GPGA
+			return GAGP;
+	} else if (strcmp(str,"GLGP")==0) {
+			return GLGP;
+	} else if (strcmp(str,"QZGP")==0) {
+			return QZGP;
+	} else if (strcmp(str,"QZUT")==0) {
+			return QZUT;
+	} else if (strcmp(str,"BDUT")==0) {
+			return BDUT;
+	} else if (strcmp(str,"IRUT")==0) {
+			return IRUT;
+	} else if (strcmp(str,"IRGP")==0) {
+			return IRGP;
+	}
 
-		return UNKNOWN_TIME_CORR;
+	return UNKNOWN_TIME_CORR;
 }
 
 /*****************************************************************************
@@ -4145,50 +9465,10 @@ char *timecorrtype2timecorrstr (enum TimeSystemCorrection timecorr) {
 	//Static variables are shared between threads (as they are saved in the data segment).
 	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
 	//directive to make OpenMP create a local (static) copy for each thread
-	static char str[5];
+	static char str[MAX_TIME_SYSTEM_CORRECTION][5]= {"GPUT","GAUT","GLUT","SBUT","BDUT","QZUT","IRUT","GAGP","GLGP","QZGP","IRGP","NAN"};
 	#pragma omp threadprivate(str)
 
-	strcpy(str,"NAN");
-
-	switch (timecorr) {
-			case GAUT:
-					strcpy(str,"GAUT");
-					break;
-			case GPUT:
-					strcpy(str,"GPUT");
-					break;
-			case SBUT:
-					strcpy(str,"SBUT");
-					break;
-			case GLUT:
-					strcpy(str,"GLUT");
-					break;
-			case GPGA:
-					strcpy(str,"GPGA");
-					break;
-			case GLGP:
-					strcpy(str,"GLGP");
-					break;
-			case QZGP:
-					strcpy(str,"QZGP");
-					break;
-			case QZUT:
-					strcpy(str,"QZUT");
-					break;
-			case BDUT:
-					strcpy(str,"BDUT");
-					break;
-			case IRUT:
-					strcpy(str,"IRUT");
-					break;
-			case IRGP:
-					strcpy(str,"IRGP");
-					break;
-			default:
-					strcpy(str,"NAN");
-	}
-
-	return str;
+	return str[timecorr];
 }
 
 /*****************************************************************************
@@ -4204,28 +9484,10 @@ char *SolutionModeNum2SolutionModeChar(enum SolutionMode numsol) {
 	//Static variables are shared between threads (as they are saved in the data segment).
 	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
 	//directive to make OpenMP create a local (static) copy for each thread
-	static char str[10];
+	static char str[MAX_SOLUTION_MODES][15]= {"SPP","PPP","PPP-Fix","FPPP-Float","FPPP-Fix","SBAS1F","SBASDFMC","DGNSS"};
 	#pragma omp threadprivate(str)
 
-	switch (numsol) {
-		case SPPMode:
-			strcpy(str,"SPP");
-			break;
-		case PPPMode:
-			strcpy(str,"PPP");
-			break;
-		case SBASMode:
-			strcpy(str,"SBAS");
-			break;
-		case DGNSSMode:
-			strcpy(str,"DGNSS");
-			break;
-		default:
-			strcpy(str,"Unknown");
-			break;
-	}
-
-	return str;
+	return str[numsol];
 
 }
 
@@ -4276,222 +9538,442 @@ char *WeightModeNum2WeightModestr(enum WeightMode weightMode) {
 }
 
 /*****************************************************************************
+ * Name        : GPSrecType2str
+ * Description : Transform from internal GPS receiver type to string
+ * Parameters  :
+ * Name                            |Da|Unit|Description
+ * enum ReceiverType recType        I  N/A  Receiver type
+ * Returned value (char*)           O  N/A  Receiver type string
+ *****************************************************************************/
+char *GPSrecType2str(enum ReceiverType recType) {
+
+	static char str[5][30]={"Unknown","Unknown","1-Cross-correlated","2-No P1","3-Consistent measurements"};
+	#pragma omp threadprivate(str)
+
+	return str[recType];
+}
+
+/*****************************************************************************
+ * Name        : getGLOFreqOffsets
+ * Description : Get the GLONASS frequency offsets from a RINEX navigation file
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TEpoch  *epoch                  I  N/A  TEpoch structure
+ * char *NavFile                   I  N/A  Navigation filename
+ * char *gloNavFile                I  N/A  Glonass navigation filename
+ * FILE **fdRNXglonav              IO N/A  File descriptor for GLONASS navigation file
+ * int  nextgloNav                 I  N/A  To indicate if GLONASS navigation file is concatenated
+ * TGNSSproducts *products         I  N/A  Products read from navigation file
+ * TGNSSproducts *productsGLO      IO N/A  Products read from GLONASS navigation file
+ * TOptions  *options              I  N/A  TOptions structure
+ *****************************************************************************/
+void getGLOFreqOffsets (TEpoch *epoch, char *NavFile, char *gloNavFile, FILE **fdRNXglonav, int *nextgloNav, TGNSSproducts *products, TGNSSproducts *productsGLO, TOptions *options) {
+	
+	int					i,j,k;
+	int					ret1;
+	int 				indexVal;
+	static int			firstRead=1; //This function is executed by a single thread, so no race conditions occur
+	double				rinexNavVersion;
+	TBRDCblock			*GLOblock;
+	TGNSSproducts		*productsUsed;
+
+	//Check if a glonass navigation file was provided (priority is given to GLONASS naviation file)
+	if(gloNavFile[0]!='\0') {
+		if (*fdRNXglonav==NULL && firstRead==1) {
+			firstRead=0;
+			//GLONASS navigation file provided
+			*fdRNXglonav = fopen(gloNavFile,"rb");
+			if (*fdRNXglonav == NULL) {
+				sprintf(messagestr,"Opening RINEX navigation file [%s] for GLONASS data",gloNavFile);
+				printError(messagestr,options);
+			} else if (whatFileTypeIs(gloNavFile)!=ftRINEXbroadcast) {
+				sprintf(messagestr,"Reading RINEX navigation file [%s] for GLONASS data",gloNavFile);
+				printError(messagestr,options);
+			}
+		}
+		if (*fdRNXglonav!=NULL) {
+			if (printProgress==1) {	
+				if (options->ProgressEndCharac=='\r') {
+					//Printing to a terminal
+					fprintf(options->terminalStream,"Reading navigation file for GLONASS frequencies%50s%c","",options->ProgressEndCharac);
+					fflush_function(options->terminalStream);
+				}
+			}
+			ret1=readRinexNav(*fdRNXglonav,gloNavFile,productsGLO,&rinexNavVersion,NEWDAYNAV,options);
+			if ( ret1 < 1 ) {
+				if ( (int)rinexNavVersion > 3 && rinexNavVersion != 0 ) {
+					sprintf(messagestr,"RINEX navigation version %1.2f from file [%s] is not supported. Supported versions are 2 and 3",rinexNavVersion,gloNavFile);
+					printError(messagestr,options);
+				} else {
+					sprintf(messagestr,"Reading RINEX navigation message file [%s]",gloNavFile);
+					printError(messagestr,options);
+				}
+			} else if (ret1==2) {
+				*nextgloNav=1;
+			} else {
+				*nextgloNav=0;
+				fclose(*fdRNXglonav);
+				*fdRNXglonav=NULL;
+			}
+			//GLONASS navigation file read correctly.
+			productsUsed=productsGLO;
+		} else {
+			//Glonass file not concatenated. Read RINEX navigation file
+			productsUsed=products;
+		}
+	} else if (NavFile[0]!='\0') {	
+		productsUsed=products;
+	} else {
+		return;
+	}
+
+	//Loop two times, so if with GLONASS navigation file does not contain data, try to read it from normal navigation file
+	for(j=0;j<2;j++) {
+		if (j==0 && productsUsed==products) continue; //No GLONASS navigation file available
+		if (j==1 && NavFile[0]=='\0') continue; //No navigation file available
+		if (productsUsed==NULL) continue;
+		ret1=0;
+		for(i=1;i<=listMaxSatGNSS[GLONASS];i++) {
+			//Search for a valid navigation package
+			//Search for any package with the same day as the current date (the second of day does not matter as it will not change during a day)
+			indexVal=productsUsed->BRDC->index[GLONASS][i];
+			if (indexVal==-1) continue; //No data for this satellite
+			GLOblock=NULL;
+			for(k=0;k<productsUsed->BRDC->numblocks[indexVal][GLOFDMA];k++) {
+				GLOblock=&productsUsed->BRDC->block[indexVal][GLOFDMA][k];
+				if (GLOblock->Ttoe.MJDN==epoch->t.MJDN) break; //Package with valid date found
+				else GLOblock=NULL;
+			}
+			if (GLOblock!=NULL) {
+				ret1++;
+				epoch->measOrder[GLONASS].freqMeas[1][i]=GLOf1+(double)(GLOblock->freqnumber)*1e6*9./16.;
+				epoch->measOrder[GLONASS].freqMeas[2][i]=GLOf2+(double)(GLOblock->freqnumber)*1e6*7./16.;
+				epoch->measOrder[GLONASS].lambdaMeas[1][i]=c0/(GLOf1+(double)(GLOblock->freqnumber)*1e6*9./16.);
+				epoch->measOrder[GLONASS].lambdaMeas[2][i]=c0/(GLOf2+(double)(GLOblock->freqnumber)*1e6*7./16.);
+				epoch->measOrder[GLONASS].mfreqMeas[1][i]=epoch->measOrder[GLONASS].freqMeas[1][i]/f0;
+				epoch->measOrder[GLONASS].mfreqMeas[2][i]=epoch->measOrder[GLONASS].freqMeas[2][i]/f0;
+				epoch->measOrder[GLONASS].TECU2metres[1][i]=40.3*1E16/(epoch->measOrder[GLONASS].freqMeas[1][i]*epoch->measOrder[GLONASS].freqMeas[1][i]);
+				epoch->measOrder[GLONASS].TECU2metres[2][i]=40.3*1E16/(epoch->measOrder[GLONASS].freqMeas[2][i]*epoch->measOrder[GLONASS].freqMeas[2][i]);
+				epoch->GLOfreqnumber[i]=GLOblock->freqnumber;
+			}
+		}
+		epoch->measOrder[GLONASS].hasGlonassSlotsFreq=2; //Glonass frequency offsets read from RINEX navigation file
+		if(ret1<GLONASSMINSATOFFSETREAD && j==1) {
+		} else if (ret1<GLONASSMINSATOFFSETREAD && j==0) {
+			productsUsed=products;
+			continue;
+		} else if (j==0) {
+			break;
+		}
+	}
+}
+
+/*****************************************************************************
  * Name        : getMeasModelValue
  * Description : Get the measurement and model value of a particular satellite
  * Parameters  :
  * Name                           |Da|Unit|Description
- * TEpoch  *epoch                  I  N/A  TEpoch structure
- * GNSSystem  system               I  N/A  GNSS system of the satellite
- * int  PRN                        I  N/A  PRN identifier of the satellite
- * MeasurementType  measType       I  N/A  Measurement type
- * double  *measurement            O  m    Measurement
- * double  *model                  O  m    Model
- * Returned value (int)            O  N/A  Status of the function
- *                                         1 => Measurement found
- *                                         0 => Not found
- *                                        -1 => Found, but not usable
+ * TEpoch  *epoch                        I  N/A  TEpoch structure
+ * GNSSystem GNSS                        I  N/A  GNSS system of the satellite
+ * int  PRN                              I  N/A  PRN identifier of the satellite
+ * const enum MeasurementType *measList  I  N/A  Measurement list
+ * const int *freqList                   I  N/A  Frequency list per measurement
+ * double  *measurement                  O  m    Measurement
+ * double  *model                        O  m    Model
+ * int filterMeasPos                     I  N/A  Position of the measurement in the filter list
+ *                                                This index is necessary to retrieve the correct
+ *                                                 modelled value, as it can vary depending which
+ *                                                 DCBs need to be applied to the measurement
+ *                                                If model value is not required (*model=NULL), then
+ *                                                 this parameter is not used
+ * Returned value (int)                  O  N/A  Status of the function
+ *                                                  1 => Measurement found
+ *                                                  0 => Not found
+ *                                                 -1 => Found, but no frequency offset available
+ *                                                        (only for GLONASS phase measurements)
  *****************************************************************************/
-int getMeasModelValue (TEpoch *epoch, enum GNSSystem system, int PRN, enum MeasurementType measType, double *measurement, double *model) {
+int getMeasModelValue (TEpoch *epoch, enum GNSSystem GNSS, int PRN, const enum MeasurementType *measList, const int *freqList, double *measurement, double *model, int filterMeasPos) {
 	int		ind;
 	int		i,j;
 	double	rawValue;
 	double	conversionFactor;
 	double	align;
-	double	meas1,meas2;
-	double	model1,model2;
-	int		res1,res2;
-	int		usable = 1;
+	double	meas1,meas2,meas3;
+	double	model1,model2,model3;
+	double	mf1,mf2,alpha;
+	int		res1,res2,res3;
 
-	// Check if measurement is usable
-	if ( !epoch->measOrder[system].usable[measType] ) usable = 0;
+	#if defined RANGECASEENABLED
+	switch (measList[0]) {
+		case C1A ... S9N:
+	#else
+	if ( measList[0] < ENDMEAS ) { // It is a measurement and NOT a combination
+	#endif
+			// Obtain the stored index of the measurement (-1 if not found)
+			ind = epoch->measOrder[GNSS].meas2Ind[measList[0]];
+			if ( ind == -1 ) {
+				if ( measurement != NULL ) *measurement = -1;
+				return 0; // Measurement not found
+			}
 
-	if ( measType < ENDMEAS ) { // It is a measurement and NOT a combination
-		// If it is a receiver type, that does not has P1, use C1 instead
-		if ( epoch->receiver.recType == rtNOP1 && measType == C1P ) { 
-			measType = C1C;
-		}
-		
-		// Obtain the stored index of the measurement (-1 if not found)
-		ind = epoch->measOrder[system].meas2Ind[measType];
-		
-		// If the measurement is not found, and it can make equivalences between C1 and P1
-		if ( ind == -1 && epoch->receiver.equivalentC1P1 ) { 
-			if ( measType == C1C ) {
-				measType = C1P;
-				ind = epoch->measOrder[system].meas2Ind[measType];
-			} else if ( measType == C1P ) {
-				measType = C1C;
-				ind = epoch->measOrder[system].meas2Ind[measType];
-			} 
-		}
-		if ( ind == -1 ) return 0; // Measurement not found
-	} else if ( measType == PW ) {
-		res1 = getMeasModelValue(epoch,system,PRN,C1P,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,C2P,&meas2,&model2);
-		if ( res1 && res2 ) {
-			if ( measurement != NULL ) *measurement = (GPSmf1*meas1 + GPSmf2*meas2) / (GPSmf1 + GPSmf2);
-			if ( model != NULL ) *model =  (GPSmf1*model1 + GPSmf2*model2) / (GPSmf1 + GPSmf2);
-			if ( usable ) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if ( measType == LW ) {
-		res1 = getMeasModelValue(epoch,system,PRN,L1P,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,L2P,&meas2,&model2);
-		if ( res1 && res2 ) {
-			if ( measurement != NULL ) *measurement = (GPSmf1*meas1 - GPSmf2*meas2) / (GPSmf1 - GPSmf2);
-			if ( model != NULL ) *model =  (GPSmf1*model1 - GPSmf2*model2) / (GPSmf1 - GPSmf2);
-			if ( usable ) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==BW) {
-		res1 = getMeasModelValue(epoch,system,PRN,LW,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,PW,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = meas1 - meas2;
-			if (model!=NULL) *model =  model1 - model2;
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==PI) {
-		res1 = getMeasModelValue(epoch,system,PRN,C2P,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,C1P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = meas1 - meas2;
-			if (model!=NULL) *model =  model1 - model2;
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==LI) {
-		res1 = getMeasModelValue(epoch,system,PRN,L1P,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,L2P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = meas1 - meas2;
-			if (model!=NULL) *model =  model1 - model2;
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==DF) {
-		res1 = getMeasModelValue(epoch,system,PRN,L1P,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,L2P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = meas1 + 2.0 * ALPHAGPS12 * ( meas1 - meas2 );
-			if (model!=NULL) *model =  model1 + 2.0 * ALPHAGPS12 * ( model1 - model2 );
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==PC) {
-		res1 = getMeasModelValue(epoch,system,PRN,C1P,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,C2P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = (GPSmf1*GPSmf1*meas1 - GPSmf2*GPSmf2*meas2) / (GPSmf1*GPSmf1 - GPSmf2*GPSmf2);
-			if (model!=NULL) *model =  (GPSmf1*GPSmf1*model1 - GPSmf2*GPSmf2*model2) / (GPSmf1*GPSmf1 - GPSmf2*GPSmf2);
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==PCC) {
-		res1 = getMeasModelValue(epoch,system,PRN,C1C,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,C2P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = (GPSmf1*GPSmf1*meas1 - GPSmf2*GPSmf2*meas2) / (GPSmf1*GPSmf1 - GPSmf2*GPSmf2);
-			if (model!=NULL) *model =  (GPSmf1*GPSmf1*model1 - GPSmf2*GPSmf2*model2) / (GPSmf1*GPSmf1 - GPSmf2*GPSmf2);
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==LC) {
-		res1 = getMeasModelValue(epoch,system,PRN,L1P,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,L2P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = (GPSmf1*GPSmf1*meas1 - GPSmf2*GPSmf2*meas2) / (GPSmf1*GPSmf1 - GPSmf2*GPSmf2);
-			if (model!=NULL) *model =  (GPSmf1*GPSmf1*model1 - GPSmf2*GPSmf2*model2) / (GPSmf1*GPSmf1 - GPSmf2*GPSmf2);
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==G1C) {
-		res1 = getMeasModelValue(epoch,system,PRN,C1C,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,L1P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = (meas1 + meas2) / 2.0;
-			if (model!=NULL) *model =  (model1 + model2) / 2.0;
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==G1P) {
-		res1 = getMeasModelValue(epoch,system,PRN,C1P,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,L1P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = (meas1 + meas2) / 2.0;
-			if (model!=NULL) *model =  (model1 + model2) / 2.0;
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==G2C) {
-		res1 = getMeasModelValue(epoch,system,PRN,C2C,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,L2P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = (meas1 + meas2) / 2.0;
-			if (model!=NULL) *model =  (model1 + model2) / 2.0;
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
-	} else if (measType==G2P) {
-		res1 = getMeasModelValue(epoch,system,PRN,C2P,&meas1,&model1);
-		res2 = getMeasModelValue(epoch,system,PRN,L2P,&meas2,&model2);
-		if (res1 && res2) {
-			if (measurement!=NULL) *measurement = (meas1 + meas2) / 2.0;
-			if (model!=NULL) *model =  (model1 + model2) / 2.0;
-			if (usable) return 1;
-			else return -1;
-		} else {
-			return 0;
-		}
+	#if defined RANGECASEENABLED
+		break;
+		case PN12 ... PN90:
+	#else
+	} else if ( measList[0]>=PN12 && measList[0]<=PN90 ) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[1],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				mf1=epoch->measOrder[GNSS].mfreqMeas[freqList[0]][PRN];
+				mf2=epoch->measOrder[GNSS].mfreqMeas[freqList[1]][PRN];
+				if ( measurement != NULL ) *measurement = (mf1*meas1 + mf2*meas2) / (mf1 + mf2);
+				if ( model != NULL ) *model =  (mf1*model1 + mf2*model2) / (mf1 + mf2);
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case LW12 ... LW90:
+	#else
+	} else if ( measList[0]>=LW12 && measList[0]<=LW90 ) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[1],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				mf1=epoch->measOrder[GNSS].mfreqMeas[freqList[0]][PRN];
+				mf2=epoch->measOrder[GNSS].mfreqMeas[freqList[1]][PRN];
+				if ( measurement != NULL ) *measurement = (mf1*meas1 - mf2*meas2) / (mf1 - mf2);
+				if ( model != NULL ) *model =  (mf1*model1 - mf2*model2) / (mf1 - mf2);
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case MW12 ... MW90:
+	#else
+	} else if (measList[0]>=MW12 && measList[0]<=MW90) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[4],&freqList[2],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				if (measurement!=NULL) *measurement = meas1 - meas2;
+				if (model!=NULL) *model =  model1 - model2;
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case PI12 ... PI90:
+	#else
+	} else if (measList[0]>=PI12 && measList[0]<=PI90) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[1],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				if (measurement!=NULL) *measurement = meas1 - meas2;
+				if (model!=NULL) *model =  model1 - model2;
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case LI12 ... LI90:
+	#else
+	} else if (measList[0]>=LI12 && measList[0]<=LI90) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[1],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				if (measurement!=NULL) *measurement = meas1 - meas2;
+				if (model!=NULL) *model =  model1 - model2;
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case DF12 ... DF09:
+	#else
+	} else if (measList[0]>=DF12 && measList[0]<=DF09) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[1],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				mf1=epoch->measOrder[GNSS].mfreqMeas[freqList[0]][PRN];
+				mf2=epoch->measOrder[GNSS].mfreqMeas[freqList[1]][PRN];
+				alpha=1./(((mf1*mf1)/(mf2*mf2))-1);
+				if (measurement!=NULL) *measurement = meas1 + 2.0 * alpha * ( meas1 - meas2 );
+				if (model!=NULL) *model =  model1 + 2.0 * alpha * ( model1 - model2 );
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case PC12 ... PC90:
+	#else
+	} else if (measList[0]>=PC12 && measList[0]<=PC90) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[1],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				mf1=epoch->measOrder[GNSS].mfreqMeas[freqList[0]][PRN];
+				mf2=epoch->measOrder[GNSS].mfreqMeas[freqList[1]][PRN];
+				if (measurement!=NULL) *measurement = (mf1*mf1*meas1 - mf2*mf2*meas2) / (mf1*mf1 - mf2*mf2);
+				if (model!=NULL) *model =  (mf1*mf1*model1 - mf2*mf2*model2) / (mf1*mf1 - mf2*mf2);
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case LC12 ... LC90:
+	#else
+	} else if (measList[0]>=LC12 && measList[0]<=LC90) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[1],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				mf1=epoch->measOrder[GNSS].mfreqMeas[freqList[0]][PRN];
+				mf2=epoch->measOrder[GNSS].mfreqMeas[freqList[1]][PRN];
+				if (measurement!=NULL) *measurement = (mf1*mf1*meas1 - mf2*mf2*meas2) / (mf1*mf1 - mf2*mf2);
+				if (model!=NULL) *model =  (mf1*mf1*model1 - mf2*mf2*model2) / (mf1*mf1 - mf2*mf2);
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case IF12 ... IF90:
+	#else
+	} else if (measList[0]>=IF12 && measList[0]<=IF90) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[1],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				mf1=epoch->measOrder[GNSS].mfreqMeas[freqList[0]][PRN];
+				mf2=epoch->measOrder[GNSS].mfreqMeas[freqList[1]][PRN];
+				if (measurement!=NULL) *measurement = (mf1*mf1*meas1 - mf2*mf2*meas2) / (mf1*mf1 - mf2*mf2);
+				if (model!=NULL) *model =  (mf1*mf1*model1 - mf2*mf2*model2) / (mf1*mf1 - mf2*mf2);
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case G1 ... G0:
+	#else
+	} else if (measList[0]>=G1 && measList[0]<=G0) {
+	#endif
+			res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+			res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[1],&meas2,&model2,filterMeasPos);
+			if ( res1==1 && res2==1 ) {
+				if (measurement!=NULL) *measurement = (meas1 + meas2) / 2.0;
+				if (model!=NULL) *model =  (model1 + model2) / 2.0;
+				return 1;
+			} else {
+				return 0;
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case IGF1012 ... IGF8990:
+		case IGF1234 ... IGF9078:
+	#else
+	} else if ( (measList[0]>=IGF1012 && measList[0]<=IGF8990) || (measList[0]>=IGF1234 && measList[0]<=IGF9078) ) {
+	#endif
+			if (epoch->IGFminNoise==1) {
+				res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[2],&freqList[0],&meas1,&model1,filterMeasPos);
+				res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[3],&freqList[1],&meas2,&model2,filterMeasPos);
+				if (freqList[2]!=freqList[0] && freqList[2]!=freqList[1]) {
+					res3 = getMeasModelValue(epoch,GNSS,PRN,&measList[5],&freqList[2],&meas3,&model3,filterMeasPos);
+				} else {
+					res3 = getMeasModelValue(epoch,GNSS,PRN,&measList[6],&freqList[3],&meas3,&model3,filterMeasPos);
+				}
+				if ( res1==1 && res2==1 && res3==1 ) {
+					if (measurement!=NULL) {
+						*measurement = meas1*epoch->measOrder[GNSS].IGFcombFactors[PRN][measList[0]-IGF1012][0] + 
+							 meas2*epoch->measOrder[GNSS].IGFcombFactors[PRN][measList[0]-IGF1012][1] +
+							 meas3*epoch->measOrder[GNSS].IGFcombFactors[PRN][measList[0]-IGF1012][2];
+					}
+					if (model!=NULL) {
+						*model = model1*epoch->measOrder[GNSS].IGFcombFactors[PRN][measList[0]-IGF1012][0] + 
+							 model2*epoch->measOrder[GNSS].IGFcombFactors[PRN][measList[0]-IGF1012][1] +
+							 model3*epoch->measOrder[GNSS].IGFcombFactors[PRN][measList[0]-IGF1012][2];
+					}
+					return 1;
+				} else {
+					return 0;
+				}
+			} else {
+				res1 = getMeasModelValue(epoch,GNSS,PRN,&measList[1],&freqList[0],&meas1,&model1,filterMeasPos);
+				res2 = getMeasModelValue(epoch,GNSS,PRN,&measList[4],&freqList[2],&meas2,&model2,filterMeasPos);
+				if ( res1==1 && res2==1 ) {
+					if (measurement!=NULL) *measurement = meas1 - meas2;
+					if (model!=NULL) *model =  model1 - model2; 
+					return 1;
+				} else {
+					return 0;
+				}
+			}
+	#if defined RANGECASEENABLED
+		break;
+		case SIF1012 ... SIF8990:
+		case SIF1234 ... SIF9078:
+	#else
+	} else if ( (measList[0]>=SIF1012 && measList[0]<=SIF8990) || (measList[0]>=SIF1234 && measList[0]<=SIF9078) ) {
+	#endif
+			//To complete
+				return 0;
+	#if defined RANGECASEENABLED
+		break;
+		default:	
+	#else
 	} else {
-		return 0; // Unknown measurement
+	#endif
+			return 0; // Unknown combination
+	#if defined RANGECASEENABLED
+		break;
 	}
+	#else
+	}
+	#endif
 
 	// Seek satellite
-	i=epoch->satIndex[system][PRN];
+	i=epoch->satIndex[GNSS][PRN];
 	if (i!=-1) {
 		// Satellite found
-		rawValue = epoch->sat[i].meas[ind].value;
-		j=epoch->satCSIndex[system][PRN];
 		if ( measurement != NULL ) {
+			rawValue = epoch->sat[i].meas[ind].value;
+			if ( rawValue == -1 ) {
+				*measurement = -1;
+				return 0;
+			}
+			j=epoch->satCSIndex[GNSS][PRN];
 			align = epoch->cycleslip.preAlign[j][ind];
-			conversionFactor = epoch->measOrder[system].conversionFactor[measType];
+			switch (whatIs(measList[0])) {
+				case CarrierPhase: case Ionosphere:
+					conversionFactor = epoch->measOrder[GNSS].lambdaMeas[freqList[0]][PRN];
+					if (conversionFactor==1.) {
+						//No Glonass frequency offset available
+						return -1;
+					}
+					break;
+				default:
+					conversionFactor = 1.;
+					break;
+			}
 			*measurement =  (rawValue+align) * conversionFactor;
 		}
-		if ( model != NULL ) *model = epoch->sat[i].meas[ind].model;
-		if ( measurement != NULL && rawValue == -1 ) {
-			*measurement = -1;
-			return 0;
-		}
-		if ( usable ) return 1;
-		else return -1;
+		if ( model != NULL ) *model = epoch->sat[i].meas[ind].modelAll[filterMeasPos];
+		return 1;
 	
 	}
+	if ( measurement != NULL ) *measurement = -1;
 	return 0;
 }
 
@@ -4501,16 +9983,22 @@ int getMeasModelValue (TEpoch *epoch, enum GNSSystem system, int PRN, enum Measu
  * Parameters  :
  * Name                           |Da|Unit|Description
  * TEpoch  *epoch                  I  N/A  TEpoch structure
- * GNSSystem  system               I  N/A  GNSS system of the satellite
+ * GNSSystem  GNSS                 I  N/A  GNSS system of the satellite
  * int  PRN                        I  N/A  PRN identifier of the satellite
- * MeasurementType  measType       I  N/A  Measurement type
+ * enum MeasurementType *measList  I  N/A  Measurement list
+ * int *freqList                   I  N/A  Frequency list per measurement
+ * int filterMeasPos               I  N/A  Position of the measurement in the filter list
+ *                                           This index is necessary to retrieve the correct
+ *                                             modelled value, as it can vary depending which
+ *                                             DCBs need to be applied to the measurement
+ * Returned value (int)                  O  N/A  Status of the function
  * Returned value (double)         O  m    Model value (-1 invalid model)
  *****************************************************************************/
-double getModelValue (TEpoch *epoch, enum GNSSystem system, int PRN, enum MeasurementType measType) {
+double getModelValue (TEpoch *epoch, enum GNSSystem GNSS, int PRN, const enum MeasurementType *measList, const int *freqList, int filterMeasPos) {
 	double	model;
 	int		res;
 
-	res = getMeasModelValue(epoch,system,PRN,measType,NULL,&model);
+	res = getMeasModelValue(epoch,GNSS,PRN,measList,freqList,NULL,&model,filterMeasPos);
 
 	if ( res == 1 ) {
 		return model;
@@ -4525,16 +10013,17 @@ double getModelValue (TEpoch *epoch, enum GNSSystem system, int PRN, enum Measur
  * Parameters  :
  * Name                           |Da|Unit|Description
  * TEpoch  *epoch                  I  N/A  TEpoch structure
- * GNSSystem  system               I  N/A  GNSS system of the satellite
+ * GNSSystem  GNSS                 I  N/A  GNSS system of the satellite
  * int  PRN                        I  N/A  PRN identifier of the satellite
- * MeasurementType  measType       I  N/A  Measurement type
+ * enum MeasurementType *measList  I  N/A  Measurement list
+ * int *freqList                   I  N/A  Frequency list per measurement
  * Returned value (double)         O  m    Measurement value  (-1 invalid measurement)
  *****************************************************************************/
-double getMeasurementValue (TEpoch *epoch, enum GNSSystem system, int PRN, enum MeasurementType measType) {
+double getMeasurementValue (TEpoch *epoch, enum GNSSystem GNSS, int PRN, const enum MeasurementType *measList, const int *freqList) {
 	double	measurement;
 	int		res;
 
-	res = getMeasModelValue(epoch,system,PRN,measType,&measurement,NULL);
+	res = getMeasModelValue(epoch,GNSS,PRN,measList,freqList,&measurement,NULL,0);
 
 	if (res==1) {
 		return measurement;
@@ -4544,14 +10033,4158 @@ double getMeasurementValue (TEpoch *epoch, enum GNSSystem system, int PRN, enum 
 }
 
 /*****************************************************************************
+ * Name        : posRINEXHeaderDataUpdate 
+ * Description : Fill data after reading a header from an observation file.
+ *                 This data may (or may not) change every time a header is read
+ *                 The data updated is:
+ *                  - Receiver type
+ *                  - Antenna data
+ *                  - MEAS print list of measurements
+ *                  - GPS P1/C1 handling (receivers type 2 -No P1-)
+ *                  - Table of available measurement order
+ *                  - Measurements for automatic selection are reseted
+ *
+ *               When a new header is read, if measurements were to be automatically
+ *                 selected, it will reset this measurement selection if any of
+ *                 these cases occur:
+ *                  - The satellite which had a cycle-slip in the last epoch (so
+ *                    if in the case there are new measurements it can select them,
+ *                    but only if doesn't break the current arc). This condition
+ *                    does not affect Doppler measurements.
+ *                  - The measurements automatically selected before are not available
+ *                    in the RINEX observation file after reading the new header
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * int stationType                 I  N/A  0 -> Rover data
+ *                                         1 -> Reference station data
+ * enum ReceiverType recType       I  N/A  Receiver type set by the user
+ * char *recFile                   I  N/A  Filename with the receiver type data
+ * TReceiverList *recList          I  N/A  Receiver list data read from receiver file
+ * TAntennaList *antennaList       I  N/A  Antenna data read from ANTEX file
+ * TConstellation  *constellation  I  N/A  TConstellation structure where satellite data
+ *                                          is stored and it will be used for unselecting
+ *                                          measurements not available in current satellite block
+ * TEpoch  *epoch                  IO N/A  Structure to save the data
+ * TOptions  *options              IO N/A  TOptions structure
+ *****************************************************************************/
+void posRINEXHeaderDataUpdate (int stationType, enum ReceiverType recType, char *recFile, TReceiverList *recList, TAntennaList *antennaList, TConstellation *constellation, TEpoch  *epoch, TOptions  *options) {
+
+	int 					i,j,k,l,m,n,o;
+	int						typeOffset,AllMeasFilled;
+	int						posC1C,posC1P,posC2C,posL1P,posL2P,posL1;
+	int						measType,CSindex;
+	int						numMeasFound;
+	int						DGNSSstruct=epoch->DGNSSstruct;
+	int						freq;
+	int						len;
+	int						DopplerMeasFound=0;
+	int						measNotinSatBlock;
+	int						checkL5Meas;
+	int						enabledSat;
+	int						LLIflag[MAX_MEASUREMENTS_PER_SATELLITE];
+	static int				numHeaders=0;
+	char					mS[4][4];
+	char					auxstr[MAX_MEASUREMENTS_PER_SATELLITE*3+1];
+	double					freq1,freq2,freq3,freq4;
+	enum MeasurementType	meas,measFrom;
+	enum MeasurementType	SBASDFMCmeas[4]; //List of necessary measurements for SBAS DFMC for GPS and Galileo
+	enum MeasurementType 	measChain[MAX_MEASUREMENTS_PER_SATELLITE];
+	enum MeasurementKind	measKind;
+	enum SatelliteBlock		satBlock=UNKNOWN_BLOCK;
+	TAntenna				*ant;
+	TReceiverData			*recD;
+
+	// If receiver antenna phase centre is from ANTEX file, look for it
+	if ( options->antennaData == adANTEX) {
+			if (stationType==ROVERPOS || (stationType==REFSTAPOS && (options->RTCMmode==ProcessRINEX || options->RTCMmode==ProcessRTCM3) )) {
+			ant = getAntenna(epoch->receiver.antenna.type,antennaList,options);
+			if ( ant == NULL ) {
+				if (epoch->receiver.antenna.type[0]=='\0') {
+					sprintf(messagestr,"No antenna information found in %s file. Use '--model:recphasecenter' to disable it",stationType==REFSTAPOS?"Rover RINEX observation":(options->RTCMmode==ProcessRTCM3?"Reference station RTCM3":"Reference RINEX observation"));
+				} else {
+					sprintf(messagestr,"%s antenna phase centre type '%s' not found in ANTEX file. Use '--model:recphasecenter' to disable it",stationType==REFSTAPOS?"Rover":"Reference station",epoch->receiver.antenna.type);
+				}
+				printError(messagestr,options);
+			} else {
+				memcpy(&epoch->receiver.antenna,ant,sizeof(TAntenna));
+				//Overwrite values from the ANTEX when necessary
+				//The loop has to be done twice, so first all manual values (adSET) are set and then repeat the loop for the values which have to be copied from other sources
+				for(i=0;i<MAX_GNSS;i++) {
+					for (j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
+						if (options->antennaDataGNSSsource[i][j] == adSET) {
+							memcpy(epoch->receiver.antenna.PCO[i][j],options->receiverPCO[i][j],sizeof(double)*3);
+						}
+					}
+				}
+				//Repeat the loop for the values which have to be copied from other sources, as now values to be copied from are set
+				for(i=0;i<MAX_GNSS;i++) {
+					for (j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
+						if (options->antennaDataGNSSsource[i][j]>=100) {
+							//Copy data from another constellation
+							k=(int)((options->antennaDataGNSSsource[i][j]-100)/100); //Get the constellation
+							l=options->antennaDataGNSSsource[i][j]%100; //Get the frequency
+							//Copy PC0, azimuth and non azimith dependent values (it does not matter if values are not in ANTEX, as value 0 will be copied then)
+							memcpy(epoch->receiver.antenna.PCO[i][j],epoch->receiver.antenna.PCO[k][l],sizeof(double)*3);
+							memcpy(epoch->receiver.antenna.noazi[i][j],epoch->receiver.antenna.noazi[k][l],sizeof(double)*epoch->receiver.antenna.nzen);
+							for(m=0;m<epoch->receiver.antenna.numazi;m++) {
+								memcpy(epoch->receiver.antenna.azi[i][j][m],epoch->receiver.antenna.azi[k][l][m],sizeof(double)*epoch->receiver.antenna.nzen);
+							}
+						}
+					}
+				}
+			}
+		}
+	} else {
+		//Loop to copy user given values and the values which have to be copied from other sources, as now values to be copied from are set
+		for(i=0;i<MAX_GNSS;i++) {
+			for (j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
+				if (options->antennaDataGNSSsource[i][j] == adSET) {
+					memcpy(epoch->receiver.antenna.PCO[i][j],options->receiverPCO[i][j],sizeof(double)*3);
+				} else if (options->antennaDataGNSSsource[i][j]>=100) {
+					//Copy data from another constellation
+					k=(int)((options->antennaDataGNSSsource[i][j]-100)/100); //Get the constellation
+					l=options->antennaDataGNSSsource[i][j]%100; //Get the frequency
+					//Copy PC0 values 
+					memcpy(epoch->receiver.antenna.PCO[i][j],options->receiverPCO[k][l],sizeof(double)*3);
+				}
+			}
+		}
+	}
+
+	// If GPS Receiver types file was available, classify the receiver
+	if (stationType==ROVERPOS||(stationType==REFSTAPOS && options->RTCMmode == ProcessRINEX)) {
+		if ( recType == rtNA ) {
+			if ( recFile[0] != '\0' ) {
+				recD = getReceiverType(epoch->receiver.type,recList);
+				if ( recD == NULL ) {
+					// Added a further Check: Only print error if strict option enabled!
+					if ( options->GPSp1c1DCBModel == GPSp1c1STRICT ) {
+						sprintf(messagestr,"Strict P1-C1 DCB option enabled, but receiver type %s %s not found in GPS Receiver type file",epoch->receiver.type,stationType==REFSTAPOS?"(for rover)":"(for reference station)");
+						printError(messagestr,options); 
+					}
+				} else {
+					epoch->receiver.recType = recD->type;
+				}
+			} 
+		} else {
+			epoch->receiver.recType = recType;
+		}
+
+		//Print message if receiver type is unknown
+		if ( epoch->receiver.recType == rtUNKNOWN ) {
+			if ( recFile[0] == '\0' ) {
+				sprintf(messagestr,"WARNING GPS Receiver type for %s is unknown (no GPS_Receiver_type file provided). Assuming nominal behaviour",stationType==REFSTAPOS?"rover":"reference station");
+				printInfo(messagestr,options);
+			} else {
+				sprintf(messagestr,"WARNING GPS Receiver type for %s is unknown. Assuming nominal behaviour",stationType==REFSTAPOS?"rover":"reference station");
+				printInfo(messagestr,options);
+			}
+		}
+	}
+
+	//If print MEAS is enabled, check for Doppler measurements and build measurement list
+	if (options->printMeas==1 && stationType==ROVERPOS) {
+		//If print Doppler is enabled, check if there are any Doppler measurements available
+		//If none Doppler meas found, disable Doppler print in MEAS message
+		if (options->printMeasDoppler==1) {
+			for(i=0;i<MAX_GNSS;i++) {
+				for(j=0;j<epoch->measOrder[i].nDiffMeasurementsRINEXHeader;j++) {
+					if (whatIs(epoch->measOrder[i].ind2Meas[j])==Doppler) {
+						DopplerMeasFound=1;
+						break;
+					}
+				}
+				if (DopplerMeasFound==1) break;
+			}
+			if (DopplerMeasFound==0) {
+				options->printMeasDopplerCurrentHeader=0;
+			} else {
+				options->printMeasDopplerCurrentHeader=1;
+			}
+		}
+		
+		//Build measurement list
+		for (i=0;i<MAX_GNSS;i++) {
+			n=0;
+			len = 0;
+			auxstr[0]='\0';
+			for (j=1;j<I1;j+=4) {
+				// j=1 is a pseudorange, and then pseudoranges come every 4 identifiers.
+				// See the "enum MeasurementType" enumerator at dataHandling.h file for
+				// more details 
+				if (epoch->measOrder[i].meas2Ind[j]!=-1 || epoch->measOrder[i].meas2Ind[j+1]!=-1) {
+					// See if the Pseudorange OR the associated Carrier Phase (j+1) are available
+					measChain[n] = j;
+					measChain[n+1] = j+1;
+					LLIflag[n]=LLIflag[n+1] = 0;
+					n+=2;
+					strcpy(mS[0], meastype2measstr(j));
+					strcpy(mS[1], meastype2measstr(j+1));
+					if (len!=0) {
+						len += sprintf(&auxstr[len],":");
+					}
+					len += sprintf(&auxstr[len],"%s:%s",mS[0],mS[1]);
+					if (options->printMeasLLI==1) {
+						measChain[n] = j+1;
+						LLIflag[n] = 1;
+						n++;
+						strcpy(mS[2], &meastype2measstr(j)[1]);
+						len += sprintf(&auxstr[len],":LLI-%s",mS[2]);
+					}
+					if (options->printMeasDopplerCurrentHeader==1) {
+						measChain[n] = j+2;
+						LLIflag[n] = 0;
+						n++;
+						strcpy(mS[2+options->printMeasLLI], meastype2measstr(j+2));
+						len += sprintf(&auxstr[len],":%s",mS[2+options->printMeasLLI]);
+					}
+					if (options->printMeasSNR==1) {
+						measChain[n] = j+3;
+						LLIflag[n] = 0;
+						n++;
+						strcpy(mS[2+options->printMeasDopplerCurrentHeader+options->printMeasLLI], meastype2measstr(j+3));
+						len += sprintf(&auxstr[len],":%s",mS[2+options->printMeasDopplerCurrentHeader+options->printMeasLLI]);
+					}
+				}
+			}
+			for(j=1;j<=listMaxSatGNSS[i];j++) {
+				if (options->printMeasUserDefinedMeas[i][j]==0 && options->includeSatellite[i][j]==1) {
+					//User did not set any measurement for current satellite. Set default measurements
+					strcpy(options->printMeasStr[i][j],auxstr);
+					for(k=0;k<n;k++) {
+						options->printMeasLLIFlag[i][j][k]=LLIflag[k];
+						options->printMeasListMeas[i][j][k]=measChain[k];
+					}
+					options->printMeasNumMeas[i][j]=n;
+					if (len>options->printMeasMaxN) options->printMeasMaxN = len;
+				}
+			}
+		}
+	}
+
+	if (stationType==ROVERPOS) {
+		//Check available GLONASS frequency offset values (k). 
+		//If not available, disable GLONASS frequencies 1 and 2
+		for(i=1;i<=listMaxSatGNSS[GLONASS];i++) {
+			enabledSat=0;
+			if (options->GLOsatFDMAdisabled[GLONASS][i][1] == 1 && epoch->measOrder[GLONASS].lambdaMeas[1][i]!=1.) {
+				options->GLOsatFDMAdisabled[GLONASS][i][1] = 0;
+				options->usableFreq[GLONASS][i][1]=1;
+				enabledSat=1;
+			} else if (options->usableFreq[GLONASS][i][1]==1 && epoch->measOrder[GLONASS].lambdaMeas[1][i]==1.) {
+				options->GLOsatFDMAdisabled[GLONASS][i][1] = 1;
+				options->usableFreq[GLONASS][i][1]=0;
+			}
+			if (options->GLOsatFDMAdisabled[GLONASS][i][2] == 1 && epoch->measOrder[GLONASS].lambdaMeas[2][i]!=1.) {
+				options->GLOsatFDMAdisabled[GLONASS][i][2] = 0;
+				options->usableFreq[GLONASS][i][2]=1;
+				enabledSat=1;
+			} else if (options->usableFreq[GLONASS][i][2]==1 && epoch->measOrder[GLONASS].lambdaMeas[2][i]==1.) {
+				options->GLOsatFDMAdisabled[GLONASS][i][2] = 1;
+				options->usableFreq[GLONASS][i][2]=0;
+			}
+			//Compute IGF factors if necessary
+			if (enabledSat==1 && options->csIGF==1 && options->csIGFminNoise==1 && options->includeSatellite[GLONASS][i]==1) {
+				for(j=0;j<options->numcsIGFMeasList[ROVERPOS][GLONASS][i];j++) {
+					computeIGFfactors(epoch,GLONASS,i,options->csIGFMeasList[ROVERPOS][GLONASS][i][j][0]-IGF1012,options->csIGFMeasFreq[ROVERPOS][GLONASS][i][j]);
+				}
+				if (options->DGNSS==1) {
+					for(j=0;j<options->numcsIGFMeasList[REFSTAPOS][GLONASS][i];j++) {
+						computeIGFfactors(epoch,GLONASS,i,options->csIGFMeasList[REFSTAPOS][GLONASS][i][j][0]-IGF1012,options->csIGFMeasFreq[REFSTAPOS][GLONASS][i][j]);
+					}
+				}
+			}
+		}
+	}
+
+	//Recompute frequencies for GLONASS, as they might have changed
+	//Also enable/disable satellite if any of the frequencies is missing
+	for(j=1;j<=listMaxSatGNSS[GLONASS];j++) {
+		for(k=0;k<options->numfilterMeasList[stationType][GLONASS][j];k++) {
+			switch (options->filterMeasTypeList[stationType][GLONASS][j][k]) {
+				case IonoFreeCombCode: case IonoFreeCombPhase: 
+				case IonoFreeCombDoppler: case IonoFreeCombCodeSmoothed:
+					freq1=epoch->measOrder[GLONASS].freqMeas[options->filterMeasfreq[stationType][GLONASS][j][k][0]][j];
+					freq2=epoch->measOrder[GLONASS].freqMeas[options->filterMeasfreq[stationType][GLONASS][j][k][1]][j];
+					if (freq1==1. || freq2==1.) {
+						epoch->measOrder[GLONASS].filterMeaslambda[j][k]=0.;
+						options->filterMeasFreqMissng[GLONASS][j]=1;
+					} else {
+						epoch->measOrder[GLONASS].filterMeaslambda[j][k]=c0/(freq1+freq2);
+						options->filterMeasFreqMissng[GLONASS][j]=0;
+					}
+					break;
+				case SecondIonoFreeCode: case SecondIonoFreePhase: 
+				case SecondIonoFreeDoppler: case SecondIonoFreeCodeSmoothed:
+					freq1=epoch->measOrder[GLONASS].freqMeas[options->filterMeasfreq[stationType][GLONASS][j][k][0]][j];
+					freq2=epoch->measOrder[GLONASS].freqMeas[options->filterMeasfreq[stationType][GLONASS][j][k][1]][j];
+					freq3=epoch->measOrder[GLONASS].freqMeas[options->filterMeasfreq[stationType][GLONASS][j][k][2]][j];
+					freq4=epoch->measOrder[GLONASS].freqMeas[options->filterMeasfreq[stationType][GLONASS][j][k][3]][j];
+					if (freq1==1. || freq2==1. || freq3==1. || freq4==1.) {
+						epoch->measOrder[GLONASS].filterMeaslambda[j][k]=0.;
+						options->filterMeasFreqMissng[GLONASS][j]=1;
+					} else {
+						epoch->measOrder[GLONASS].filterMeaslambda[j][k]=epoch->measOrder[GLONASS].lambdaMeas[options->filterMeasfreq[stationType][GLONASS][j][k][0]][j];//To be revised
+						options->filterMeasFreqMissng[GLONASS][j]=0;
+					}
+					break;
+				default:
+					freq1=epoch->measOrder[GLONASS].freqMeas[options->filterMeasfreq[stationType][GLONASS][j][k][0]][j];
+					if (freq1==1.) {
+						epoch->measOrder[GLONASS].filterMeaslambda[j][k]=0.;
+						options->filterMeasFreqMissng[GLONASS][j]=1;
+					} else {
+						epoch->measOrder[GLONASS].filterMeaslambda[j][k]=epoch->measOrder[GLONASS].lambdaMeas[options->filterMeasfreq[stationType][GLONASS][j][k][0]][j];
+						options->filterMeasFreqMissng[GLONASS][j]=0;
+					}
+					break;
+			}					
+		}
+	}
+
+
+	if (stationType==ROVERPOS || (stationType==REFSTAPOS && (options->RTCMmode==ProcessRINEX || options->RTCMmode==ProcessRTCM3) )) {
+
+		epoch->measOrder[GPS].numMeasToCopy=0;
+		epoch->MeasToBeDuplicated=0;
+		//If receiver type is rtNOP1, set GPS C1P position to C1C (for rover)
+		if (epoch->receiver.recType==rtNOP1 || epoch->receiver.recType==rtCROSS) {
+			//In SBAS mode, there is need to apply P1-C1 DCB as P1 is not used, so skip it if it is SBAS mode
+			if (options->SBAScorrections<=SBASionoOnly) {
+				posC1C=epoch->measOrder[GPS].meas2Ind[C1C];	
+				posC1P=epoch->measOrder[GPS].meas2Ind[C1P];	
+				if(posC1C!=-1) {
+					//Copy C1C to C1P
+					if(posC1P==-1) {
+						epoch->measOrder[GPS].meas2Ind[C1P]=epoch->measOrder[GPS].nDiffMeasurements;
+						epoch->measOrder[GPS].ind2Meas[epoch->measOrder[GPS].nDiffMeasurements]=C1P;
+						epoch->measOrder[GPS].meas2SNRInd[C1P]=epoch->measOrder[GPS].meas2SNRInd[C1C];
+						epoch->measOrder[GPS].conversionFactor[C1P]=1.;
+						epoch->measOrder[GPS].nDiffMeasurements++;
+					}
+					epoch->measOrder[GPS].meas2SourceInd[C1P]=posC1C;
+					epoch->measOrder[GPS].measListToCopy[epoch->measOrder[GPS].numMeasToCopy]=C1P;
+					epoch->measOrder[GPS].numMeasToCopy++;
+					epoch->MeasToBeDuplicated=1;
+				} else {
+					if(posC1P!=-1) {
+						//Copy C1P to C1C
+						epoch->measOrder[GPS].meas2Ind[C1C]=epoch->measOrder[GPS].nDiffMeasurements;
+						epoch->measOrder[GPS].ind2Meas[epoch->measOrder[GPS].nDiffMeasurements]=C1C;
+						epoch->measOrder[GPS].meas2SNRInd[C1C]=epoch->measOrder[GPS].meas2SNRInd[C1P];
+						epoch->measOrder[GPS].conversionFactor[C1C]=1.;
+						epoch->measOrder[GPS].nDiffMeasurements++;
+						epoch->measOrder[GPS].meas2SourceInd[C1C]=posC1P;
+						epoch->measOrder[GPS].measListToCopy[epoch->measOrder[GPS].numMeasToCopy]=C1C;
+						epoch->measOrder[GPS].numMeasToCopy++;
+						epoch->MeasToBeDuplicated=1;
+					}
+				}
+			}
+		}
+		//If we are using a RINEX 2 observation file and we are estimating satellite or receiver DCBs, copy GPS L1P and L2P to L1C and L2C,
+		if (stationType==ROVERPOS && epoch->source==RINEX2 && (options->estimateSatDCB==1 || options->estimateRecDCB==1) ) {
+			//Copy GPS L1P to L1C
+			posL1P=epoch->measOrder[GPS].meas2Ind[L1P];
+			epoch->measOrder[GPS].meas2Ind[L1C]=epoch->measOrder[GPS].nDiffMeasurements;
+			epoch->measOrder[GPS].ind2Meas[epoch->measOrder[GPS].nDiffMeasurements]=L1C;
+			epoch->measOrder[GPS].meas2SNRInd[L1C]=epoch->measOrder[GPS].meas2SNRInd[L1P];
+			epoch->measOrder[GPS].conversionFactor[L1C]=GPSl1;
+			epoch->measOrder[GPS].nDiffMeasurements++;
+			epoch->measOrder[GPS].meas2SourceInd[L1C]=posL1P;
+			epoch->measOrder[GPS].measListToCopy[epoch->measOrder[GPS].numMeasToCopy]=L1C;
+			epoch->measOrder[GPS].numMeasToCopy++;
+			epoch->MeasToBeDuplicated=1;
+			//Copy GPS L2P to L2C if C2 exists
+			posL2P=epoch->measOrder[GPS].meas2Ind[L2P];
+			posC2C=epoch->measOrder[GPS].meas2Ind[C2C];
+			if (posC2C!=-1) {
+				epoch->measOrder[GPS].meas2Ind[L2C]=epoch->measOrder[GPS].nDiffMeasurements;
+				epoch->measOrder[GPS].ind2Meas[epoch->measOrder[GPS].nDiffMeasurements]=L2C;
+				epoch->measOrder[GPS].meas2SNRInd[L2C]=epoch->measOrder[GPS].meas2SNRInd[L2P];
+				epoch->measOrder[GPS].conversionFactor[L2C]=GPSl2;
+				epoch->measOrder[GPS].nDiffMeasurements++;
+				epoch->measOrder[GPS].meas2SourceInd[L2C]=posL2P;
+				epoch->measOrder[GPS].measListToCopy[epoch->measOrder[GPS].numMeasToCopy]=L2C;
+				epoch->measOrder[GPS].numMeasToCopy++;
+			}
+		} else if (stationType==ROVERPOS && epoch->source==RINEX3 && epoch->receiver.recType==rtNOP1 && epoch->measOrder[GPS].meas2Ind[L1P]==-1 && (options->estimateSatDCB==1 || options->estimateRecDCB==1) ) {
+			//If we are using a RINEX 3 observation file with a type 2 receiver (no P1) and we are estimating satellite or receiver DCBs, copy GPS L1W to L1P (or L1C to L1P if L1W is not available)
+			posL1=epoch->measOrder[GPS].meas2Ind[L1W];
+			measFrom=L1W;
+			if (posL1==-1) {
+				posL1=epoch->measOrder[GPS].meas2Ind[L1C];
+				measFrom=L1C;
+			}
+			if (posL1!=-1) {
+				epoch->measOrder[GPS].meas2Ind[L1P]=epoch->measOrder[GPS].nDiffMeasurements;
+				epoch->measOrder[GPS].ind2Meas[epoch->measOrder[GPS].nDiffMeasurements]=L1P;
+				epoch->measOrder[GPS].meas2SNRInd[L1P]=epoch->measOrder[GPS].meas2SNRInd[measFrom];
+				epoch->measOrder[GPS].conversionFactor[L1P]=GPSl1;
+				epoch->measOrder[GPS].nDiffMeasurements++;
+				epoch->measOrder[GPS].meas2SourceInd[L1P]=posL1;
+				epoch->measOrder[GPS].measListToCopy[epoch->measOrder[GPS].numMeasToCopy]=L1P;
+				epoch->measOrder[GPS].numMeasToCopy++;
+				epoch->MeasToBeDuplicated=1;
+			}
+		}
+		//Update tables and lists
+		for(i=0;i<MAX_GNSS;i++) {
+
+			//Rebuild list of code and carrier phase measurements per constellation
+			epoch->measOrder[i].numCodeMeasurements=0;
+			epoch->measOrder[i].numCarrierPhaseMeasurements=0;
+			for(j=0;j<epoch->measOrder[i].nDiffMeasurements;j++) {
+				meas=epoch->measOrder[i].ind2Meas[j];
+				switch(whatIs(meas)) {
+					case Pseudorange:
+						epoch->measOrder[i].CodeMeasurements[epoch->measOrder[i].numCodeMeasurements]=meas;
+						epoch->measOrder[i].numCodeMeasurements++;
+						break;
+					case CarrierPhase:
+						epoch->measOrder[i].CarrierPhaseMeasurements[epoch->measOrder[i].numCarrierPhaseMeasurements]=meas;
+						epoch->measOrder[i].numCarrierPhaseMeasurements++;
+						break;
+					default:
+						break;
+				}
+			}
+
+			//Update lists per satellite
+			for(j=1;j<=listMaxSatGNSS[i];j++) {
+				CSindex = epoch->satCSIndex[i][j];
+				if (CSindex==-1 || options->MeasSelected[DGNSSstruct][i][j]==MEASUNSELECTED) {
+					AllMeasFilled=MEASUNSELECTED;
+				} else {
+					AllMeasFilled=MEASSELECTED;
+				}
+
+				//Get satellite block type if ANTEX is available. 
+				//If not enabled or satellite block not found, default value is UNKNOWN_BLOCK, which has no missing meas
+				if (options->SatBlockMeasDiscard==1) {
+					//Get satellite block and SVN
+					if (constellation->satLastUsed[i][j]==NULL) {
+						//No previous pointer used
+						constellation->satLastUsed[i][j] = getConstellationElement(i,j,&epoch->t,constellation);
+						if (constellation->satLastUsed[i][j]!=NULL) {
+							satBlock=constellation->satLastUsed[i][j]->block;
+						} else {
+							satBlock=UNKNOWN_BLOCK;
+						} 
+					} else { 
+						//Instead of directly search for a new block, check if current block is still valid and thus no need to check for a new one
+						if (tdiff(&epoch->t,&constellation->satLastUsed[i][j]->tLaunch)<0 || tdiff(&epoch->t,&constellation->satLastUsed[i][j]->tDecommissioned)>0) {
+							//Not valid anymore, look for a new constellation element
+							constellation->satLastUsed[i][j] = getConstellationElement(i,j,&epoch->t,constellation);
+							if (constellation->satLastUsed[i][j]!=NULL) {
+								satBlock=constellation->satLastUsed[i][j]->block;
+							} else {
+								//This case will only occur when the RINEX observation file is corrupted and a wrong date is read
+								satBlock=UNKNOWN_BLOCK;
+							}
+						} else {
+							satBlock=constellation->satLastUsed[i][j]->block;
+						}
+					}
+				}
+				
+				//Update available frequencies
+				if (satBlock!=UNKNOWN_BLOCK) {
+					memcpy(options->availFreq[i][j],options->FreqAvailSatBlock[satBlock],sizeof(int)*MAX_FREQUENCIES_PER_GNSS);
+				}
+
+				//Update measurements table order
+				for(k=0;k<MAX_FREQUENCIES_PER_GNSS;k++) {
+					typeOffset=3; 	//Start with 3. First loop, substract 2 and value will be 1, as phase meas is one position after the code.
+									//In second loop, substract 2 and value will be -1, as code meas is one position before the phase
+					for(l=0;l<MEASTYPELISTS;l++) {
+						n=0;
+						typeOffset-=2;
+						for(m=0;m<options->numMeasOrder[DGNSSstruct][i][j][k][l];m++) {
+							if (epoch->measOrder[i].meas2Ind[options->MeasOrder[DGNSSstruct][i][j][k][l][m]]!=-1) {
+								measNotinSatBlock=0;
+								for(o=0;o<options->numMeasNotAvailSatBlock[satBlock][k][l];o++) {
+									if (options->MeasNotAvailSatBlock[satBlock][k][l][o]==options->MeasOrder[DGNSSstruct][i][j][k][l][m]) {
+										//Meas found in list of missing measurements of satellite block.
+										//Do not add it to priority list order (as it was not available in the RINEX header)
+										measNotinSatBlock=1;
+										break;
+									}
+								}
+								if (measNotinSatBlock==0) {
+									if (options->DiscardUnpairedMeas[DGNSSstruct]==1) {
+										if (l==DOPPLERMEAS) {
+											//If it is a doppler measurement, there is no check for paired measurement
+											//Save the measurement
+											options->MeasAvailOrder[DGNSSstruct][i][j][k][l][n]=options->MeasOrder[DGNSSstruct][i][j][k][l][m];
+											n++;
+										} else {
+											//Check if the paired meas is available. If not, do not add it to the list of available measurements
+											if (epoch->measOrder[i].meas2Ind[options->MeasOrder[DGNSSstruct][i][j][k][l][m]+typeOffset]!=-1) {
+												//The paired code or carrier phase exists or it is a doppler measurement. Save it in the ist of available measurements
+												options->MeasAvailOrder[DGNSSstruct][i][j][k][l][n]=options->MeasOrder[DGNSSstruct][i][j][k][l][m];
+												n++;
+											}
+										}
+									} else {
+										//Meas available. Save in the list of available measurements and available in the user defined list
+										options->MeasAvailOrder[DGNSSstruct][i][j][k][l][n]=options->MeasOrder[DGNSSstruct][i][j][k][l][m];
+										n++;
+									}
+								}
+							}
+						}
+						options->numMeasAvailOrder[DGNSSstruct][i][j][k][l]=n;
+					}
+				}
+
+				//In SBAS DFMC, check if we have the necessary measurements for processing
+				if (options->SBAScorrections==SBASDFMCused) {
+					if (options->useAnyMeasSBASDFMC==0) {
+						if (i==GPS||i==Galileo) {
+							SBASDFMCmeas[0]=C1C; SBASDFMCmeas[1]=L1C; SBASDFMCmeas[2]=C5Q; SBASDFMCmeas[3]=L5Q;
+							numMeasFound=0;
+							for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][i][j][1][CODEMEAS];k++) {
+								if (options->MeasAvailOrder[DGNSSstruct][i][j][1][CODEMEAS][k]==C1C){
+									SBASDFMCmeas[0]=NA;
+									numMeasFound++;
+									break;
+								}
+							}
+							for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][i][j][1][PHASEMEAS];k++) {
+								if (options->MeasAvailOrder[DGNSSstruct][i][j][1][PHASEMEAS][k]==L1C){
+									SBASDFMCmeas[1]=NA;
+									numMeasFound++;
+									break;
+								}
+							}
+							if (i==GPS && constellation->satLastUsed[i][j]!=NULL ) {
+								if (constellation->satLastUsed[i][j]->block>=GPS_BLOCK_IIF || constellation->satLastUsed[i][j]->block==UNKNOWN_BLOCK) {
+									checkL5Meas=1;
+								} else {
+									checkL5Meas=0;
+								}
+							} else {
+								checkL5Meas=0;
+							}
+							if (checkL5Meas==1) {
+								//Only check for L5 for satellites that do have L5 or the block is unknown
+								for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][i][j][5][CODEMEAS];k++) {
+									if (options->MeasAvailOrder[DGNSSstruct][i][j][5][CODEMEAS][k]==C5Q){
+										SBASDFMCmeas[2]=NA;
+										numMeasFound++;
+										break;
+									}
+								}
+								for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][i][j][5][PHASEMEAS];k++) {
+									if (options->MeasAvailOrder[DGNSSstruct][i][j][5][PHASEMEAS][k]==L5Q){
+										SBASDFMCmeas[3]=NA;
+										numMeasFound++;
+										break;
+									}
+								}
+							} else {
+								numMeasFound+=2;
+							}
+							if (numMeasFound<4) {
+								//The four necessary measurements where not found. Print an error message with the missing measurements
+								auxstr[0]='\0';
+								len=0;
+								for(k=0;k<4;k++) {
+									if(SBASDFMCmeas[k]!=NA) {
+										len+=sprintf(&auxstr[len]," %s",meastype2measstr(SBASDFMCmeas[k]));
+									}
+								}
+								sprintf(messagestr,"Missing %s measurements%s for processing with SBAS DFMC. To process with other measurements not stated in SBAS DFMC, use option '-model:sbasdfmc:anymeas', but solution will be degraded",gnsstype2gnssstr(i),auxstr);
+								printError(messagestr,options);
+							}
+						}
+					}
+				}
+
+				if (options->ModelAllMeas==1) {
+					//If option to meas all measurements is set, copy the list of measurements to the to model list
+					epoch->measOrder[i].numMeasListToBeModelled[j]=0;
+					epoch->measOrder[i].numPhaseMeasListToBeModelled[j]=0;
+					for(k=0;k<epoch->measOrder[i].nDiffMeasurements;k++) {
+						meas=epoch->measOrder[i].ind2Meas[k];
+						measKind=whatIs(meas);
+						if (measKind==Pseudorange ||measKind==CarrierPhase) {
+							epoch->measOrder[i].measListToBeModelled[j][epoch->measOrder[i].numMeasListToBeModelled[j]]=epoch->measOrder[i].ind2Meas[k];
+							epoch->measOrder[i].numMeasListToBeModelled[j]++;
+						}
+						//Repeat process for carrier phase only measurements
+						if (measKind==CarrierPhase) {
+							epoch->measOrder[i].phaseMeasListToBeModelled[j][epoch->measOrder[i].numPhaseMeasListToBeModelled[j]]=epoch->measOrder[i].ind2Meas[k];
+							epoch->measOrder[i].numPhaseMeasListToBeModelled[j]++;
+						}
+					}
+				} else {
+					//Check if in to model list any measurement has disappeared
+					for(k=0;k<epoch->measOrder[i].numMeasListToBeModelled[j];k++) {
+						if (epoch->measOrder[i].meas2Ind[epoch->measOrder[i].measListToBeModelled[j][k]]==-1) {
+							//Meas not available. Remove it from meas list
+							for(l=k;l<(epoch->measOrder[i].numMeasListToBeModelled[j]-1);l++) {
+								epoch->measOrder[i].measListToBeModelled[j][l]=epoch->measOrder[i].measListToBeModelled[j][l+1];
+							}
+							k--; //The next measurement will be in the current position, as the current position has been overwritten
+							epoch->measOrder[i].numMeasListToBeModelled[j]--;
+						}
+					}
+					//Repeat process for carrier phase only measurements
+					for(k=0;k<epoch->measOrder[i].numPhaseMeasListToBeModelled[j];k++) {
+						if (epoch->measOrder[i].meas2Ind[epoch->measOrder[i].phaseMeasListToBeModelled[j][k]]==-1) {
+							//Meas not available. Remove it from meas list
+							for(l=k;l<(epoch->measOrder[i].numPhaseMeasListToBeModelled[j]-1);l++) {
+								epoch->measOrder[i].phaseMeasListToBeModelled[j][l]=epoch->measOrder[i].phaseMeasListToBeModelled[j][l+1];
+							}
+							k--; //The next measurement will be in the current position, as the current position has been overwritten
+							epoch->measOrder[i].numPhaseMeasListToBeModelled[j]--;
+						}
+					}
+				}
+
+				//Check if in SNR list any measurement has disappeared
+				for(k=0;k<epoch->measOrder[i].numMeasListToCheckSNR[j];k++) {
+					//Check SNR list
+					if (epoch->measOrder[i].meas2Ind[epoch->measOrder[i].measListToCheckSNR[j][k]]==-1) {
+						//Meas not available. Remove it from SNR list
+						for(l=k;l<(epoch->measOrder[i].numMeasListToCheckSNR[j]-1);l++) {
+							epoch->measOrder[i].measListToCheckSNR[j][l]=epoch->measOrder[i].measListToCheckSNR[j][l+1];
+						}
+						k--; //The next measurement will be in the current position, as the current position has been overwritten
+						epoch->measOrder[i].numMeasListToCheckSNR[j]--;
+					}
+				}
+
+				//Check if in Data Gap list any measurement has disappeared
+				for(k=0;k<epoch->measOrder[i].numMeasListDataGap[j];k++) {
+					if (epoch->measOrder[i].meas2Ind[epoch->measOrder[i].measListDataGap[j][k]]==-1) {
+						//Meas not available. Remove it from Data Gap list
+						for(l=k;l<(epoch->measOrder[i].numMeasListDataGap[j]-1);l++) {
+							epoch->measOrder[i].measListDataGap[j][l]=epoch->measOrder[i].measListDataGap[j][l+1];
+							epoch->measOrder[i].measIndListDataGap[j][l]=epoch->measOrder[i].measIndListDataGap[j][l+1];
+						}
+						k--; //The next measurement will be in the current position, as the current position has been overwritten
+						epoch->measOrder[i].numMeasListDataGap[j]--;
+					} else {
+						//Order of measurements may have changed. Update order
+						epoch->measOrder[i].measIndListDataGap[j][k]=epoch->measOrder[i].meas2Ind[epoch->measOrder[i].measListDataGap[j][k]];
+					}
+				}
+
+				//Check if in LLI list any measurement has disappeared
+				for(k=0;k<epoch->measOrder[i].numMeasListToCheckLLI[j];k++) {
+					if (epoch->measOrder[i].meas2Ind[epoch->measOrder[i].measListToCheckLLI[j][k]]==-1) {
+						//Meas not available. Remove it from LLI list
+						for(l=k;l<(epoch->measOrder[i].numMeasListToCheckLLI[j]-1);l++) {
+							epoch->measOrder[i].measListToCheckLLI[j][l]=epoch->measOrder[i].measListToCheckLLI[j][l+1];
+							epoch->measOrder[i].measIndListToCheckLLI[j][l]=epoch->measOrder[i].measIndListToCheckLLI[j][l+1];
+						}
+						k--; //The next measurement will be in the current position, as the current position has been overwritten
+						epoch->measOrder[i].numMeasListToCheckLLI[j]--;
+					} else {
+						//Order of measurements may have changed. Update order
+						epoch->measOrder[i].measIndListToCheckLLI[j][k]=epoch->measOrder[i].meas2Ind[epoch->measOrder[i].measListToCheckLLI[j][k]];
+					}
+				}
+				//Reset list of phase measurements to be checked by CS (it will be filled again)
+				//The first time entered in this function it does not need to be reset, as it
+				//was filled previously by function "setDefaultMeasurements"
+				if (numHeaders>0) {
+					for(k=0;k<MAX_FREQUENCIES_PER_GNSS;k++) {
+						epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][k]=0;
+						epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][k]=0;
+						epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][k]=0;
+						epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][k]=0;
+					}
+					numHeaders++;
+				} else {
+					numHeaders++;
+				}
+
+				//Reset measurements selected for the filter and smoothing
+				for(k=0;k<options->numfilterMeasList[DGNSSstruct][i][j];k++) {
+					if (options->filterListWithMeas[DGNSSstruct][i][j][k]==0) {
+						if (options->filterListMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+							if (CSindex!=-1) {
+								if (epoch->cycleslip.CS[CSindex]==1) {
+									//Satellite had a cycle-slip. Reset measurements
+									options->filterListMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									options->filterListAllMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									if (options->filterMeasSmoothed[DGNSSstruct][i][j][k]==1 && options->filterSmoothListWithMeas[DGNSSstruct][i][j][k]==0) {
+										options->filterSmoothListMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									}
+									AllMeasFilled=MEASUNSELECTED;
+									continue;
+								}
+							}
+							measType=options->filterMeasKind[DGNSSstruct][i][j][k];
+							for(l=0;l<options->numCombfilterMeas[DGNSSstruct][i][j][k];l++) { 
+								meas=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+								freq=options->filterMeasfreq[DGNSSstruct][i][j][k][l];
+								for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType];m++) {
+									if (meas==options->MeasAvailOrder[DGNSSstruct][i][j][freq][measType][m]) {
+										break;
+									}
+								}
+								if(m==options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType]) {
+									//Measurement not found. Reset measurement selection
+									options->filterListMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									options->filterListAllMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									break;
+								}
+							}
+						} else if (options->filterListMeasSelected[DGNSSstruct][i][j][k]==MEASNOTAVAIL) {
+							//No measurement available in previous header. Reset to check if new header has data
+							options->filterListMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+							options->filterListAllMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+							AllMeasFilled=MEASUNSELECTED;
+						}
+					} else {
+						//If measurements are manually set, check if measurements exist or not
+						for(l=0;l<options->numCombfilterMeas[DGNSSstruct][i][j][k];l++) {
+							//If measurement is not in RINEX observation file or frequency is disabled, do not add it
+							if (epoch->measOrder[i].meas2Ind[options->filterMeasList[DGNSSstruct][i][j][k][l+1]]==-1
+									|| options->usableFreq[i][j][options->filterMeasfreq[DGNSSstruct][i][j][k][l]]==0) {
+								options->filterListMeasSelected[DGNSSstruct][i][j][k]=MEASNOTAVAIL;
+								options->filterListAllMeasSelected[DGNSSstruct][i][j][k]=MEASNOTAVAIL;
+								break;
+							} else {
+								if (options->includeSatellite[i][j]==1) {
+									//Only mark as selected if satellite is used, otherwise it may occur that satellite has measurements
+									//selected but internal indexes for EPOCHSAT print are not created due to satellite is unselected
+									options->filterListMeasSelected[DGNSSstruct][i][j][k]=MEASSELECTED;
+									if (options->filterMeasSmoothed[DGNSSstruct][i][j][k]==0) {
+										options->filterListAllMeasSelected[DGNSSstruct][i][j][k]=MEASSELECTED;
+									}
+								}
+							}
+						}
+						if (l==options->numCombfilterMeas[DGNSSstruct][i][j][k]) {
+							for(l=0;l<options->numCombfilterMeas[DGNSSstruct][i][j][k];l++) {
+								freq=options->filterMeasfreq[DGNSSstruct][i][j][k][l];
+								//Add measurements to Data Gap list
+								for(m=0;m<epoch->measOrder[i].numMeasListDataGap[j];m++) {
+									if (options->filterMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListDataGap[j][m]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (m==epoch->measOrder[i].numMeasListDataGap[j]) {
+									//Meas not found in list
+									epoch->measOrder[i].measListDataGap[j][m]=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+									epoch->measOrder[i].measIndListDataGap[j][l]=epoch->measOrder[i].meas2Ind[options->filterMeasList[DGNSSstruct][i][j][k][l+1]];
+									epoch->measOrder[i].numMeasListDataGap[j]++;
+								}
+								//Add measurements to SNR list
+								if (options->SNRfilter == 1 ) {
+									for(m=0;m<epoch->measOrder[i].numMeasListToCheckSNR[j];m++) {
+										if (options->filterMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListToCheckSNR[j][m] ||
+											epoch->measOrder[i].meas2SNRInd[options->filterMeasList[DGNSSstruct][i][j][k][l+1]]==epoch->measOrder[i].meas2SNRInd[epoch->measOrder[i].measListToCheckSNR[j][m]]) {
+											//Measurement already in the list or another one in the list points to the same SNR measurement
+											//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numMeasListToCheckSNR[j]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].measListToCheckSNR[j][m]=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+										epoch->measOrder[i].numMeasListToCheckSNR[j]++;
+									}
+								}
+								//Check if only measurements to model are the ones to be used in the filter
+								if (options->ModelAllMeas==0) {
+									for(m=0;m<epoch->measOrder[i].numMeasListToBeModelled[j];m++) {
+										if (options->filterMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListToBeModelled[j][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numMeasListToBeModelled[j]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].measListToBeModelled[j][m]=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+										epoch->measOrder[i].numMeasListToBeModelled[j]++;
+									}
+									//Repeat process for carrier phase only list
+
+									measKind=whatIs(options->filterMeasList[DGNSSstruct][i][j][k][l+1]);
+									if (measKind==CarrierPhase) {
+										for(m=0;m<epoch->measOrder[i].numPhaseMeasListToBeModelled[j];m++) {
+											if (options->filterMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].phaseMeasListToBeModelled[j][m]) {
+												//Measurement already in the list
+												break;
+											}
+										}
+										if (m==epoch->measOrder[i].numPhaseMeasListToBeModelled[j]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[i].phaseMeasListToBeModelled[j][m]=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+											epoch->measOrder[i].numPhaseMeasListToBeModelled[j]++;
+										}
+									}
+								}
+								//Add phase measurements to LLI list
+								if (options->csLLI==1) {
+									if (whatIs(options->filterMeasList[DGNSSstruct][i][j][k][l+1])==CarrierPhase) {
+										for(m=0;m<epoch->measOrder[i].numMeasListToCheckLLI[j];m++) {
+											if (options->filterMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListToCheckLLI[j][m]) {
+												//Measurement already in the list
+												break;
+											}
+										}
+										if (m==epoch->measOrder[i].numMeasListToCheckLLI[j]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[i].measListToCheckLLI[j][m]=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+											epoch->measOrder[i].measIndListToCheckLLI[j][m]=epoch->measOrder[i].meas2Ind[options->filterMeasList[DGNSSstruct][i][j][k][l+1]];
+											epoch->measOrder[i].numMeasListToCheckLLI[j]++;
+										}
+									}
+								}
+								//Add phase measurements to CS SF check list
+								if (options->csSF ==1 && options->autoFillcsSF==1) {
+									if (whatIs(options->filterMeasList[DGNSSstruct][i][j][k][l+1])==CarrierPhase) {
+										for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq];m++) {
+											if (options->filterMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][m]) {
+												//Measurement already in the list
+												break;
+											}
+										}
+										if (m==epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][m]=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+											epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq]++;
+										}
+									}
+								}
+								//Add phase measurements to CS MW check list
+								if (options->csMW ==1 && options->autoFillcsMW==1) {
+									if (whatIs(options->filterMeasList[DGNSSstruct][i][j][k][l+1])==CarrierPhase) {
+										for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq];m++) {
+											if (options->filterMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][m]) {
+												//Measurement already in the list
+												break;
+											}
+										}
+										if (m==epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][m]=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+											epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq]++;
+										}
+									}
+								}
+								//Add phase measurements to CS LI check list
+								if (options->csLI ==1 && options->autoFillcsLI==1) {
+									if (whatIs(options->filterMeasList[DGNSSstruct][i][j][k][l+1])==CarrierPhase) {
+										for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq];m++) {
+											if (options->filterMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][m]) {
+												//Measurement already in the list
+												break;
+											}
+										}
+										if (m==epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][m]=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+											epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq]++;
+										}
+									}
+								}
+								//Add phase measurements to CS IGF check list
+								if (options->csIGF ==1 && options->autoFillcsIGF==1) {
+									if (whatIs(options->filterMeasList[DGNSSstruct][i][j][k][l+1])==CarrierPhase) {
+										for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq];m++) {
+											if (options->filterMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][m]) {
+												//Measurement already in the list
+												break;
+											}
+										}
+										if (m==epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][m]=options->filterMeasList[DGNSSstruct][i][j][k][l+1];
+											epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq]++;
+										}
+									}
+								}
+							}
+						}
+					}
+					if (options->filterMeasSmoothed[DGNSSstruct][i][j][k]==1) {
+						if (options->filterSmoothListWithMeas[DGNSSstruct][i][j][k]==0) {
+							if (options->filterSmoothListMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+								measType=PHASEMEAS;
+								for(l=0;l<options->numCombfilterSmoothMeas[DGNSSstruct][i][j][k];l++) { 
+									meas=options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1];
+									freq=options->filterSmoothMeasfreq[DGNSSstruct][i][j][k][l];
+									for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType];m++) {
+										if (meas==options->MeasAvailOrder[DGNSSstruct][i][j][freq][measType][m]) {
+											break;
+										}
+									}
+									if(m==options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType]) {
+										//Measurement not found. Reset measurement selection
+										options->filterSmoothListMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+										options->filterListAllMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+										AllMeasFilled=MEASUNSELECTED;
+										break;
+									}
+								}
+							} else if (options->filterSmoothListMeasSelected[DGNSSstruct][i][j][k]==MEASNOTAVAIL) {
+								//No measurement available in previous header. Reset to check if new header has data
+								options->filterSmoothListMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+								options->filterListAllMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+								AllMeasFilled=MEASUNSELECTED;
+							}
+						} else {
+							//If measurements are manually set, check if measurements exist or not
+							for(l=0;l<options->numCombfilterSmoothMeas[DGNSSstruct][i][j][k];l++) {
+								//If measurement is not in RINEX observation file or frequency is unselected, do not add it
+								if (epoch->measOrder[i].meas2Ind[options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]]==-1
+									|| options->usableFreq[i][j][options->filterSmoothMeasfreq[DGNSSstruct][i][j][k][l]]==0) {
+									options->filterSmoothListMeasSelected[DGNSSstruct][i][j][k]=MEASNOTAVAIL;
+									options->filterListAllMeasSelected[DGNSSstruct][i][j][k]=MEASNOTAVAIL;
+									break;
+								} else {
+									if (options->includeSatellite[i][j]==1) {
+										//Only mark as selected if satellite is used, otherwise it may occur that satellite has measurements
+										//selected but internal indexes for EPOCHSAT print are not created due to satellite is unselected
+										options->filterSmoothListMeasSelected[DGNSSstruct][i][j][k]=MEASSELECTED;
+										if (options->filterListMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+											options->filterListAllMeasSelected[DGNSSstruct][i][j][k]=MEASSELECTED;
+										}
+									}
+								}
+							}
+							if (l<options->numCombfilterSmoothMeas[DGNSSstruct][i][j][k]) continue;
+							for(l=0;l<options->numCombfilterSmoothMeas[DGNSSstruct][i][j][k];l++) {
+								freq=options->filterSmoothMeasfreq[DGNSSstruct][i][j][k][l];
+								//Add measurements to Data Gap list
+								for(m=0;m<epoch->measOrder[i].numMeasListDataGap[j];m++) {
+									if (options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListDataGap[j][m]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (m==epoch->measOrder[i].numMeasListDataGap[j]) {
+									//Meas not found in list
+									epoch->measOrder[i].measListDataGap[j][m]=options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1];
+									epoch->measOrder[i].measIndListDataGap[j][l]=epoch->measOrder[i].meas2Ind[options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]];
+									epoch->measOrder[i].numMeasListDataGap[j]++;
+								}
+								//Add measurements to SNR list
+								if (options->SNRfilter == 1 ) {
+									for(m=0;m<epoch->measOrder[i].numMeasListToCheckSNR[j];m++) {
+										if (options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListToCheckSNR[j][m] ||
+											epoch->measOrder[i].meas2SNRInd[options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]]==epoch->measOrder[i].meas2SNRInd[epoch->measOrder[i].measListToCheckSNR[j][m]]) {
+											//Measurement already in the list or another one in the list points to the same SNR measurement
+											//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numMeasListToCheckSNR[j]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].measListToCheckSNR[j][m]=options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1];
+										epoch->measOrder[i].numMeasListToCheckSNR[j]++;
+									}
+								}
+								//Add phase measurements to LLI list
+								if (options->csLLI==1) {
+									if (whatIs(options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1])==CarrierPhase) {
+										for(m=0;m<epoch->measOrder[i].numMeasListToCheckLLI[j];m++) {
+											if (options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListToCheckLLI[j][m]) {
+												//Measurement already in the list
+												break;
+											}
+										}
+										if (m==epoch->measOrder[i].numMeasListToCheckLLI[j]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[i].measListToCheckLLI[j][m]=options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1];
+											epoch->measOrder[i].measIndListToCheckLLI[j][m]=epoch->measOrder[i].meas2Ind[options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]];
+											epoch->measOrder[i].numMeasListToCheckLLI[j]++;
+										}
+									}
+								}
+								//Add phase measurements to CS SF check list
+								if (options->csSF==1 && options->autoFillcsSF==1) {
+									for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq];m++) {
+										if (options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][m]=options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1];
+										epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq]++;
+									}
+								}
+								//Add phase measurements to CS MW check list
+								if (options->csMW==1 && options->autoFillcsMW==1) {
+									for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq];m++) {
+										if (options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][m]=options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1];
+										epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq]++;
+									}
+								}
+								//Add phase measurements to CS LI check list
+								if (options->csLI==1 && options->autoFillcsLI==1) {
+									for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq];m++) {
+										if (options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][m]=options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1];
+										epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq]++;
+									}
+								}
+								//Add phase measurements to CS IGF check list
+								if (options->csIGF==1 && options->autoFillcsIGF==1) {
+									for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq];m++) {
+										if (options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][m]=options->filterSmoothMeasList[DGNSSstruct][i][j][k][l+1];
+										epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq]++;
+									}
+								}
+							}
+						}
+					}
+				}
+
+				//Reset measurements selected for the SF cycle-slip detector if any measurement is not available or a cycle-slip ocurred
+				for(k=0;k<options->numcsSFMeasList[DGNSSstruct][i][j];k++) {
+					if (options->csSFWithMeas[DGNSSstruct][i][j][k]==0) {
+						if (options->csSFMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+							if (CSindex!=-1) {
+								if (epoch->cycleslip.CS[CSindex]==1) {
+									//Satellite had a cycle-slip. Reset measurements
+									options->csSFMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									continue;
+								}
+							}
+							for(l=0;l<NUMMEASCSSF;l++) { //SF has two measurements
+								meas=options->csSFMeasList[DGNSSstruct][i][j][k][l];
+								if (l==0) measType=CODEMEAS;
+								else measType=PHASEMEAS;
+								freq=options->csSFMeasFreq[DGNSSstruct][i][j][k][l];
+								//SF detector has first code measurement and then phase measurement
+								for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType];m++) {
+									if (meas==options->MeasAvailOrder[DGNSSstruct][i][j][freq][measType][m]) {
+										break;
+									}
+								}
+								if(m==options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType]) {
+									//Measurement not found. Reset measurement selection
+									options->csSFMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									break;
+								}
+							}
+							if (options->csSFMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+								//If measurements are selected, remove the carrier phases selected from the list to check
+								for(l=0;l<NUMMEASCSSF;l++) { //SF has two measurements
+									freq=options->csSFMeasFreq[DGNSSstruct][i][j][k][l];
+									if (options->autoFillcsSF==1 && l==1) { //Second measurement is the carrier phase
+										for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq];m++) {
+											if (options->csSFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][m]) {
+												//Phase measurement in the filter set by user in CS SF. Remove it from list
+												for(n=m;n<(epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq]-1);n++) {
+													epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][n]=epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][n+1];
+												}
+												m--; //The next measurement will be in the current position, as the current position has been overwritten
+												epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq]--;
+											}
+										}
+									}
+								}
+							}
+						} else if (options->csSFMeasSelected[DGNSSstruct][i][j][k]==MEASNOTAVAIL) {
+							//No measurement available in previous header. Reset to check if new header has data
+							options->csSFMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+							AllMeasFilled=MEASUNSELECTED;
+						}
+					} else {
+						//If measurements are manually set, check if measurements exist or not
+						for(l=0;l<NUMMEASCSSF;l++) {
+							//If measurement is not in RINEX observation file or frequency is unselected, do not add it
+							if (epoch->measOrder[i].meas2Ind[options->csSFMeasList[DGNSSstruct][i][j][k][l]]==-1
+									|| options->usableFreq[i][j][options->csSFMeasFreq[DGNSSstruct][i][j][k][l]]==0) {
+								options->csSFMeasSelected[DGNSSstruct][i][j][k]=MEASNOTAVAIL;
+								break;
+							} else {
+								if (options->includeSatellite[i][j]==1) {
+									//Only mark as selected if satellite is used, to ensure only measurements are selected
+									//only if satellite has passed through FillMeasurements function
+									options->csSFMeasSelected[DGNSSstruct][i][j][k]=MEASSELECTED;
+								}
+							}
+						}
+						if (l<NUMMEASCSSF) continue;
+						for(l=0;l<NUMMEASCSSF;l++) {
+							freq=options->csSFMeasFreq[DGNSSstruct][i][j][k][l];
+							//Add measurements to Data Gap list
+							for(m=0;m<epoch->measOrder[i].numMeasListDataGap[j];m++) {
+								if (options->csSFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].measListDataGap[j][m]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (m==epoch->measOrder[i].numMeasListDataGap[j]) {
+								//Meas not found in list
+								epoch->measOrder[i].measListDataGap[j][m]=options->csSFMeasList[DGNSSstruct][i][j][k][l];
+								epoch->measOrder[i].measIndListDataGap[j][l]=epoch->measOrder[i].meas2Ind[options->csSFMeasList[DGNSSstruct][i][j][k][l]];
+								epoch->measOrder[i].numMeasListDataGap[j]++;
+							}
+							//Add measurements to SNR list
+							if (options->SNRfilter == 1 ) {
+								for(m=0;m<epoch->measOrder[i].numMeasListToCheckSNR[j];m++) {
+									if (options->csSFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].measListToCheckSNR[j][m] ||
+										epoch->measOrder[i].meas2SNRInd[options->csSFMeasList[DGNSSstruct][i][j][k][l]]==epoch->measOrder[i].meas2SNRInd[epoch->measOrder[i].measListToCheckSNR[j][m]]) {
+										//Measurement already in the list or another one in the list points to the same SNR measurement
+										//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+										break;
+									}
+								}
+								if (m==epoch->measOrder[i].numMeasListToCheckSNR[j]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[i].measListToCheckSNR[j][m]=options->csSFMeasList[DGNSSstruct][i][j][k][l];
+									epoch->measOrder[i].numMeasListToCheckSNR[j]++;
+								}
+							}
+							//Add phase measurements to LLI list
+							if (options->csLLI==1) {
+								if (whatIs(options->csSFMeasList[DGNSSstruct][i][j][k][l])==CarrierPhase) {
+									for(m=0;m<epoch->measOrder[i].numMeasListToCheckLLI[j];m++) {
+										if (options->csSFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].measListToCheckLLI[j][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numMeasListToCheckLLI[j]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].measListToCheckLLI[j][m]=options->csSFMeasList[DGNSSstruct][i][j][k][l];
+										epoch->measOrder[i].measIndListToCheckLLI[j][m]=epoch->measOrder[i].meas2Ind[options->csSFMeasList[DGNSSstruct][i][j][k][l]];
+										epoch->measOrder[i].numMeasListToCheckLLI[j]++;
+									}
+								}
+							}
+							//If phase measurements from CS SF are set in CS SF by user, remove them from the list
+							if (options->autoFillcsSF==1 && l==1) { //Second measurement is the carrier phase
+								for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq];m++) {
+									if (options->csSFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][m]) {
+										//Phase measurement in the filter set by user in CS SF. Remove it from list
+										for(n=m;n<(epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq]-1);n++) {
+											epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][n]=epoch->measOrder[i].PhaseMeasFilterToCSSF[j][freq][n+1];
+										}
+										m--; //The next measurement will be in the current position, as the current position has been overwritten
+										epoch->measOrder[i].numPhaseMeasFilterToCSSF[j][freq]--;
+									}
+								}
+							}
+						}
+					}
+				}
+
+				//Reset measurements selected for the MW cycle-slip detector if any measurement is not available or a cycle-slip ocurred
+				for(k=0;k<options->numcsMWMeasList[DGNSSstruct][i][j];k++) {
+					if (options->csMWWithMeas[DGNSSstruct][i][j][k]==0) {
+						if (options->csMWMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+							if (CSindex!=-1) {
+								if (epoch->cycleslip.CS[CSindex]==1) {
+									//Satellite had a cycle-slip. Reset measurements
+									options->csMWMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									continue;
+								}
+							}
+							for(l=2;l<=NUMMEASCSMW+2;l++) { //MW has 4 measurements
+								if (l==4) continue;
+								meas=options->csMWMeasList[DGNSSstruct][i][j][k][l];
+								if (l<4) {
+									measType=CODEMEAS;
+									freq=options->csMWMeasFreq[DGNSSstruct][i][j][k][l-2];
+								} else { 
+									measType=PHASEMEAS;
+									freq=options->csMWMeasFreq[DGNSSstruct][i][j][k][l-3];
+								}
+								//MW detector has first two code measurements and then two phase measurements
+								for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType];m++) {
+									if (meas==options->MeasAvailOrder[DGNSSstruct][i][j][freq][measType][m]) {
+										break;
+									}
+								}
+								if(m==options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType]) {
+									//Measurement not found. Reset measurement selection
+									options->csMWMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									break;
+								}
+							}
+							if (options->csMWMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+								//If measurements are selected, remove the carrier phases selected from the list to check
+								for(l=2;l<=NUMMEASCSMW+2;l++) { //MW has 4 measurements
+									if (l==4) continue;
+									if (l<4) {
+										freq=options->csMWMeasFreq[DGNSSstruct][i][j][k][l-2];
+									} else {
+										freq=options->csMWMeasFreq[DGNSSstruct][i][j][k][l-3];
+									}
+									if (options->autoFillcsMW==1 && l>1) { //Second measurement is the carrier phase
+										for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq];m++) {
+											if (options->csMWMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][m]) {
+												//Phase measurement in the filter set by user in CS MW. Remove it from list
+												for(n=m;n<(epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq]-1);n++) {
+													epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][n]=epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][n+1];
+												}
+												m--; //The next measurement will be in the current position, as the current position has been overwritten
+												epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq]--;
+											}
+										}
+									}
+								}
+							}
+						} else if (options->csMWMeasSelected[DGNSSstruct][i][j][k]==MEASNOTAVAIL) {
+							//No measurement available in previous header. Reset to check if new header has data
+							options->csMWMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+							AllMeasFilled=MEASUNSELECTED;
+						}
+					} else {
+						//If measurements are manually set, check if measurements exist or not
+						for(l=2;l<=NUMMEASCSMW+2;l++) { //MW has 4 measurements
+							if (l==4) continue;
+							if (l<4) {
+								m=l-2;
+							} else {
+								m=l-3;
+							}
+							//If measurement is not in RINEX observation file or frequency is unselected, do not add it
+							if (epoch->measOrder[i].meas2Ind[options->csMWMeasList[DGNSSstruct][i][j][k][l]]==-1
+									|| options->usableFreq[i][j][options->csMWMeasFreq[DGNSSstruct][i][j][k][m]]==0) {
+								options->csMWMeasSelected[DGNSSstruct][i][j][k]=MEASNOTAVAIL;
+								break;
+							} else {
+								if (options->includeSatellite[i][j]==1) {
+									//Only mark as selected if satellite is used, to ensure only measurements are selected
+									//only if satellite has passed through FillMeasurements function
+									options->csMWMeasSelected[DGNSSstruct][i][j][k]=MEASSELECTED;
+								}
+							}
+						}
+						if (l<=NUMMEASCSMW+2) continue;
+						for(l=2;l<=NUMMEASCSMW+2;l++) { //MW has 4 measurements
+							if (l==4) continue;
+							if (l<4) {
+								freq=options->csMWMeasFreq[DGNSSstruct][i][j][k][l-2];
+							} else {
+								freq=options->csMWMeasFreq[DGNSSstruct][i][j][k][l-3];
+							}
+							//Add measurements to Data Gap list
+							for(m=0;m<epoch->measOrder[i].numMeasListDataGap[j];m++) {
+								if (options->csMWMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].measListDataGap[j][m]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (m==epoch->measOrder[i].numMeasListDataGap[j]) {
+								//Meas not found in list
+								epoch->measOrder[i].measListDataGap[j][m]=options->csMWMeasList[DGNSSstruct][i][j][k][l];
+								epoch->measOrder[i].measIndListDataGap[j][l]=epoch->measOrder[i].meas2Ind[options->csMWMeasList[DGNSSstruct][i][j][k][l]];
+								epoch->measOrder[i].numMeasListDataGap[j]++;
+							}
+							//Add measurements to SNR list
+							if (options->SNRfilter == 1 ) {
+								for(m=0;m<epoch->measOrder[i].numMeasListToCheckSNR[j];m++) {
+									if (options->csMWMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].measListToCheckSNR[j][m] ||
+										epoch->measOrder[i].meas2SNRInd[options->csMWMeasList[DGNSSstruct][i][j][k][l]]==epoch->measOrder[i].meas2SNRInd[epoch->measOrder[i].measListToCheckSNR[j][m]]) {
+										//Measurement already in the list or another one in the list points to the same SNR measurement
+										//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+										break;
+									}
+								}
+								if (m==epoch->measOrder[i].numMeasListToCheckSNR[j]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[i].measListToCheckSNR[j][m]=options->csMWMeasList[DGNSSstruct][i][j][k][l];
+									epoch->measOrder[i].numMeasListToCheckSNR[j]++;
+								}
+							}
+							//Add phase measurements to LLI list
+							if (options->csLLI==1) {
+								if (whatIs(options->csMWMeasList[DGNSSstruct][i][j][k][l])==CarrierPhase) {
+									for(m=0;m<epoch->measOrder[i].numMeasListToCheckLLI[j];m++) {
+										if (options->csMWMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].measListToCheckLLI[j][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numMeasListToCheckLLI[j]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].measListToCheckLLI[j][m]=options->csMWMeasList[DGNSSstruct][i][j][k][l];
+										epoch->measOrder[i].measIndListToCheckLLI[j][m]=epoch->measOrder[i].meas2Ind[options->csMWMeasList[DGNSSstruct][i][j][k][l]];
+										epoch->measOrder[i].numMeasListToCheckLLI[j]++;
+									}
+								}
+							}
+							//If phase measurements from CS MW are set in CS MW by user, remove them from the list
+							if (options->autoFillcsMW==1 && l>1) { //Second measurement is the carrier phase
+								for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq];m++) {
+									if (options->csMWMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][m]) {
+										//Phase measurement in the filter set by user in CS MW. Remove it from list
+										for(n=m;n<(epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq]-1);n++) {
+											epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][n]=epoch->measOrder[i].PhaseMeasFilterToCSMW[j][freq][n+1];
+										}
+										m--; //The next measurement will be in the current position, as the current position has been overwritten
+										epoch->measOrder[i].numPhaseMeasFilterToCSMW[j][freq]--;
+									}
+								}
+							}
+						}
+					}
+				}
+
+				//Reset measurements selected for the LI cycle-slip detector if any measurement is not available or a cycle-slip ocurred
+				for(k=0;k<options->numcsLIMeasList[DGNSSstruct][i][j];k++) {
+					if (options->csLIWithMeas[DGNSSstruct][i][j][k]==0) {
+						if (options->csLIMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+							if (CSindex!=-1) {
+								if (epoch->cycleslip.CS[CSindex]==1) {
+									//Satellite had a cycle-slip. Reset measurements
+									options->csLIMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									continue;
+								}
+							}
+							//LI detector has two phase measurements
+							for(l=0;l<NUMMEASCSLI;l++) { //LI has 4 measurements
+								meas=options->csLIMeasList[DGNSSstruct][i][j][k][l+1];
+								freq=options->csLIMeasFreq[DGNSSstruct][i][j][k][l];
+								for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType];m++) {
+									if (meas==options->MeasAvailOrder[DGNSSstruct][i][j][freq][PHASEMEAS][m]) {
+										break;
+									}
+								}
+								if(m==options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType]) {
+									//Measurement not found. Reset measurement selection
+									options->csLIMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									break;
+								}
+							}
+							if (options->csLIMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+								//If measurements are selected, remove the carrier phases selected from the list to check
+								for(l=0;l<NUMMEASCSLI;l++) { //LI has two measurements
+									freq=options->csLIMeasFreq[DGNSSstruct][i][j][k][l];
+									if (options->autoFillcsLI==1) { //Second measurement is the carrier phase
+										for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq];m++) {
+											if (options->csLIMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][m]) {
+												//Phase measurement in the filter set by user in CS LI. Remove it from list
+												for(n=m;n<(epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq]-1);n++) {
+													epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][n]=epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][n+1];
+												}
+												m--; //The next measurement will be in the current position, as the current position has been overwritten
+												epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq]--;
+											}
+										}
+									}
+								}
+							}
+						} else if (options->csLIMeasSelected[DGNSSstruct][i][j][k]==MEASNOTAVAIL) {
+							//No measurement available in previous header. Reset to check if new header has data
+							options->csLIMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+							AllMeasFilled=MEASUNSELECTED;
+						}
+					} else {
+						//If measurements are manually set, check if measurements exist or not
+						for(l=0;l<NUMMEASCSLI;l++) {
+							//If measurement is not in RINEX observation file or frequency is unselected, do not add it
+							if (epoch->measOrder[i].meas2Ind[options->csLIMeasList[DGNSSstruct][i][j][k][l+1]]==-1
+									|| options->usableFreq[i][j][options->csLIMeasFreq[DGNSSstruct][i][j][k][l]]==0) {
+								options->csLIMeasSelected[DGNSSstruct][i][j][k]=MEASNOTAVAIL;
+								break;
+							} else {
+								if (options->includeSatellite[i][j]==1) {
+									//Only mark as selected if satellite is used, to ensure only measurements are selected
+									//only if satellite has passed through FillMeasurements function
+									options->csLIMeasSelected[DGNSSstruct][i][j][k]=MEASSELECTED;
+								}
+							}
+						}
+						if (l<NUMMEASCSLI) continue;
+						for(l=0;l<NUMMEASCSLI;l++) {
+							freq=options->csLIMeasFreq[DGNSSstruct][i][j][k][l];
+							//Add measurements to Data Gap list
+							for(m=0;m<epoch->measOrder[i].numMeasListDataGap[j];m++) {
+								if (options->csLIMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListDataGap[j][m]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (m==epoch->measOrder[i].numMeasListDataGap[j]) {
+								//Meas not found in list
+								epoch->measOrder[i].measListDataGap[j][m]=options->csLIMeasList[DGNSSstruct][i][j][k][l+1];
+								epoch->measOrder[i].measIndListDataGap[j][l]=epoch->measOrder[i].meas2Ind[options->csLIMeasList[DGNSSstruct][i][j][k][l+1]];
+								epoch->measOrder[i].numMeasListDataGap[j]++;
+							}
+							//Add measurements to SNR list
+							if (options->SNRfilter == 1 ) {
+								for(m=0;m<epoch->measOrder[i].numMeasListToCheckSNR[j];m++) {
+									if (options->csLIMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListToCheckSNR[j][m] ||
+										epoch->measOrder[i].meas2SNRInd[options->csLIMeasList[DGNSSstruct][i][j][k][l+1]]==epoch->measOrder[i].meas2SNRInd[epoch->measOrder[i].measListToCheckSNR[j][m]]) {
+										//Measurement already in the list or another one in the list points to the same SNR measurement
+										//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+										break;
+									}
+								}
+								if (m==epoch->measOrder[i].numMeasListToCheckSNR[j]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[i].measListToCheckSNR[j][m]=options->csLIMeasList[DGNSSstruct][i][j][k][l+1];
+									epoch->measOrder[i].numMeasListToCheckSNR[j]++;
+								}
+							}
+							//Add phase measurements to LLI list
+							if (options->csLLI==1) {
+								for(m=0;m<epoch->measOrder[i].numMeasListToCheckLLI[j];m++) {
+									if (options->csLIMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListToCheckLLI[j][m]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (m==epoch->measOrder[i].numMeasListToCheckLLI[j]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[i].measListToCheckLLI[j][m]=options->csLIMeasList[DGNSSstruct][i][j][k][l+1];
+									epoch->measOrder[i].measIndListToCheckLLI[j][m]=epoch->measOrder[i].meas2Ind[options->csLIMeasList[DGNSSstruct][i][j][k][l+1]];
+									epoch->measOrder[i].numMeasListToCheckLLI[j]++;
+								}
+							}
+							//If phase measurements from CS LI are set in CS LI by user, remove them from the list
+							if (options->autoFillcsLI==1) { 
+								for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq];m++) {
+									if (options->csLIMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][m]) {
+										//Phase measurement in the filter set by user in CS LI. Remove it from list
+										for(n=m;n<(epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq]-1);n++) {
+											epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][n]=epoch->measOrder[i].PhaseMeasFilterToCSLI[j][freq][n+1];
+										}
+										m--; //The next measurement will be in the current position, as the current position has been overwritten
+										epoch->measOrder[i].numPhaseMeasFilterToCSLI[j][freq]--;
+									}
+								}
+							}
+						}
+					}
+				}
+
+				//Reset measurements selected for the IGF cycle-slip detector if any measurement is not available or a cycle-slip ocurred
+				for(k=0;k<options->numcsIGFMeasList[DGNSSstruct][i][j];k++) {
+					if (options->csIGFWithMeas[DGNSSstruct][i][j][k]==0) {
+						if (options->csIGFMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+							if (CSindex!=-1) {
+								if (epoch->cycleslip.CS[CSindex]==1) {
+									//Satellite had a cycle-slip. Reset measurements
+									options->csIGFMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									continue;
+								}
+							}
+							//IGF detector has four phase measurements
+							for(l=2;l<=NUMMEASCSIGF+2;l++) { //IGF has 4 measurements
+								if(l==4) continue;
+								if (l<4) {
+									freq=options->csIGFMeasFreq[DGNSSstruct][i][j][k][l-2];
+								} else {
+									freq=options->csIGFMeasFreq[DGNSSstruct][i][j][k][l-3];
+								}
+								meas=options->csIGFMeasList[DGNSSstruct][i][j][k][l];
+								for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType];m++) {
+									if (meas==options->MeasAvailOrder[DGNSSstruct][i][j][freq][PHASEMEAS][m]) {
+										break;
+									}
+								}
+								if(m==options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType]) {
+									//Measurement not found. Reset measurement selection
+									options->csIGFMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									break;
+								}
+							}
+							if (options->csIGFMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+								//If measurements are selected, remove the carrier phases selected from the list to check
+								for(l=2;l<=NUMMEASCSIGF+2;l++) { //IGF has two measurements
+									if(l==4) continue;
+									if (l<4) {
+										freq=options->csIGFMeasFreq[DGNSSstruct][i][j][k][l-2];
+									} else {
+										freq=options->csIGFMeasFreq[DGNSSstruct][i][j][k][l-3];
+									}
+									if (options->autoFillcsIGF==1) { //Second measurement is the carrier phase
+										for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq];m++) {
+											if (options->csIGFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][m]) {
+												//Phase measurement in the filter set by user in CS IGF. Remove it from list
+												for(n=m;n<(epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq]-1);n++) {
+													epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][n]=epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][n+1];
+												}
+												m--; //The next measurement will be in the current position, as the current position has been overwritten
+												epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq]--;
+											}
+										}
+									}
+								}
+							}
+						} else if (options->csIGFMeasSelected[DGNSSstruct][i][j][k]==MEASNOTAVAIL) {
+							//No measurement available in previous header. Reset to check if new header has data
+							options->csIGFMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+							AllMeasFilled=MEASUNSELECTED;
+						}
+					} else {
+						//If measurements are manually set, check if measurements exist or not
+						for(l=2;l<=NUMMEASCSIGF+2;l++) {
+							if (l==4) continue;
+							if (l<4) {
+								m=l-2;
+							} else {
+								m=l-3;
+							}
+							//If measurement is not in RINEX observation file or frequency is unselected, do not add it
+							if (epoch->measOrder[i].meas2Ind[options->csIGFMeasList[DGNSSstruct][i][j][k][l]]==-1
+									|| options->usableFreq[i][j][options->csIGFMeasFreq[DGNSSstruct][i][j][k][m]]==0) {
+								options->csIGFMeasSelected[DGNSSstruct][i][j][k]=MEASNOTAVAIL;
+								break;
+							} else {
+								if (options->includeSatellite[i][j]==1) {
+									//Only mark as selected if satellite is used, to ensure only measurements are selected
+									//only if satellite has passed through FillMeasurements function
+									options->csIGFMeasSelected[DGNSSstruct][i][j][k]=MEASSELECTED;
+								}
+							}
+						}
+						if (l<=NUMMEASCSIGF+2) continue;
+						for(l=2;l<=NUMMEASCSIGF+2;l++) {
+							if(l==4) continue;
+							if (l<4) {
+								freq=options->csIGFMeasFreq[DGNSSstruct][i][j][k][l-2];
+							} else {
+								freq=options->csIGFMeasFreq[DGNSSstruct][i][j][k][l-3];
+							}
+							//Add measurements to Data Gap list
+							for(m=0;m<epoch->measOrder[i].numMeasListDataGap[j];m++) {
+								if (options->csIGFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].measListDataGap[j][m]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (m==epoch->measOrder[i].numMeasListDataGap[j]) {
+								//Meas not found in list
+								epoch->measOrder[i].measListDataGap[j][m]=options->csIGFMeasList[DGNSSstruct][i][j][k][l];
+								epoch->measOrder[i].measIndListDataGap[j][l]=epoch->measOrder[i].meas2Ind[options->csIGFMeasList[DGNSSstruct][i][j][k][l]];
+								epoch->measOrder[i].numMeasListDataGap[j]++;
+							}
+							//Add measurements to SNR list
+							if (options->SNRfilter == 1 ) {
+								for(m=0;m<epoch->measOrder[i].numMeasListToCheckSNR[j];m++) {
+									if (options->csIGFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].measListToCheckSNR[j][m] ||
+										epoch->measOrder[i].meas2SNRInd[options->csIGFMeasList[DGNSSstruct][i][j][k][l]]==epoch->measOrder[i].meas2SNRInd[epoch->measOrder[i].measListToCheckSNR[j][m]]) {
+										//Measurement already in the list or another one in the list points to the same SNR measurement
+										//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+										break;
+									}
+								}
+								if (m==epoch->measOrder[i].numMeasListToCheckSNR[j]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[i].measListToCheckSNR[j][m]=options->csIGFMeasList[DGNSSstruct][i][j][k][l];
+									epoch->measOrder[i].numMeasListToCheckSNR[j]++;
+								}
+							}
+							//Add phase measurements to LLI list
+							if (options->csLLI==1) {
+								for(m=0;m<epoch->measOrder[i].numMeasListToCheckLLI[j];m++) {
+									if (options->csIGFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].measListToCheckLLI[j][m]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (m==epoch->measOrder[i].numMeasListToCheckLLI[j]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[i].measListToCheckLLI[j][m]=options->csIGFMeasList[DGNSSstruct][i][j][k][l];
+									epoch->measOrder[i].measIndListToCheckLLI[j][m]=epoch->measOrder[i].meas2Ind[options->csIGFMeasList[DGNSSstruct][i][j][k][l]];
+									epoch->measOrder[i].numMeasListToCheckLLI[j]++;
+								}
+							}
+							//If phase measurements from CS IGF are set in CS IGF by user, remove them from the list
+							if (options->autoFillcsIGF==1) { 
+								for(m=0;m<epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq];m++) {
+									if (options->csIGFMeasList[DGNSSstruct][i][j][k][l]==epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][m]) {
+										//Phase measurement in the filter set by user in CS IGF. Remove it from list
+										for(n=m;n<(epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq]-1);n++) {
+											epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][n]=epoch->measOrder[i].PhaseMeasFilterToCSIGF[j][freq][n+1];
+										}
+										m--; //The next measurement will be in the current position, as the current position has been overwritten
+										epoch->measOrder[i].numPhaseMeasFilterToCSIGF[j][freq]--;
+									}
+								}
+							}
+						}
+					}
+				}
+
+				//Reset measurements selected for Doppler if any measurement is not available
+				for(k=0;k<options->numDopplerMeasList[DGNSSstruct][i][j];k++) {
+					if (options->DopplerListWithMeas[DGNSSstruct][i][j][k]==0) {
+						if (options->DopplerListMeasSelected[DGNSSstruct][i][j][k]==MEASSELECTED) {
+							measType=DOPPLERMEAS;
+							for(l=0;l<options->numCombDopplerMeas[DGNSSstruct][i][j][k];l++) { 
+								meas=options->DopplerMeasList[DGNSSstruct][i][j][k][l+1];
+								freq=options->DopplerMeasfreq[DGNSSstruct][i][j][k][l];
+								for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType];m++) {
+									if (meas==options->MeasAvailOrder[DGNSSstruct][i][j][freq][measType][m]) {
+										break;
+									}
+								}
+								if(m==options->numMeasAvailOrder[DGNSSstruct][i][j][freq][measType]) {
+									//Measurement not found. Reset measurement selection
+									options->DopplerListMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+									AllMeasFilled=MEASUNSELECTED;
+									break;
+								}
+							}
+						} else if (options->DopplerListMeasSelected[DGNSSstruct][i][j][k]==MEASNOTAVAIL) {
+							//No measurement available in previous header. Reset to check if new header has data
+							options->DopplerListMeasSelected[DGNSSstruct][i][j][k]=MEASUNSELECTED;
+							AllMeasFilled=MEASUNSELECTED;
+						}
+					} else {
+						//If measurements are manually set, check if measurements exist or not
+						for(l=0;l<options->numCombDopplerMeas[DGNSSstruct][i][j][k];l++) {
+							//If measurement is not in RINEX observation file or frequency is unselected, do not add it
+							if (epoch->measOrder[i].meas2Ind[options->DopplerMeasList[DGNSSstruct][i][j][k][l+1]]==-1
+									|| options->usableFreq[i][j][options->DopplerMeasfreq[DGNSSstruct][i][j][k][l]]==0) {
+								options->DopplerListMeasSelected[DGNSSstruct][i][j][k]=MEASNOTAVAIL;
+								break;
+							} else {
+								if (options->includeSatellite[i][j]==1) {
+									//Only mark as selected if satellite is used, to ensure only measurements are selected
+									//only if satellite has passed through FillMeasurements function
+									options->DopplerListMeasSelected[DGNSSstruct][i][j][k]=MEASSELECTED;
+								}
+							}
+						}
+						if (l==options->numCombDopplerMeas[DGNSSstruct][i][j][k]) {
+							for(l=0;l<options->numCombDopplerMeas[DGNSSstruct][i][j][k];l++) {
+								freq=options->DopplerMeasfreq[DGNSSstruct][i][j][k][l];
+								//Add measurements to Data Gap list
+								for(m=0;m<epoch->measOrder[i].numMeasListDataGap[j];m++) {
+									if (options->DopplerMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListDataGap[j][m]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (m==epoch->measOrder[i].numMeasListDataGap[j]) {
+									//Meas not found in list
+									epoch->measOrder[i].measListDataGap[j][m]=options->DopplerMeasList[DGNSSstruct][i][j][k][l+1];
+									epoch->measOrder[i].measIndListDataGap[j][l]=epoch->measOrder[i].meas2Ind[options->DopplerMeasList[DGNSSstruct][i][j][k][l+1]];
+									epoch->measOrder[i].numMeasListDataGap[j]++;
+								}
+								//Add measurements to SNR list
+								if (options->SNRfilter == 1 ) {
+									for(m=0;m<epoch->measOrder[i].numMeasListToCheckSNR[j];m++) {
+										if (options->DopplerMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListToCheckSNR[j][m] ||
+											epoch->measOrder[i].meas2SNRInd[options->DopplerMeasList[DGNSSstruct][i][j][k][l+1]]==epoch->measOrder[i].meas2SNRInd[epoch->measOrder[i].measListToCheckSNR[j][m]]) {
+											//Measurement already in the list or another one in the list points to the same SNR measurement
+											//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numMeasListToCheckSNR[j]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].measListToCheckSNR[j][m]=options->DopplerMeasList[DGNSSstruct][i][j][k][l+1];
+										epoch->measOrder[i].numMeasListToCheckSNR[j]++;
+									}
+								}
+								//Check if only measurements to model are the ones to be used in the filter
+								//The code is commented in case in the the future Doppler needs to be modelled
+								/*if (options->ModelAllMeas==0) {
+									for(m=0;m<epoch->measOrder[i].numMeasListToBeModelled[j];m++) {
+										if (options->DopplerMeasList[DGNSSstruct][i][j][k][l+1]==epoch->measOrder[i].measListToBeModelled[j][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[i].numMeasListToBeModelled[j]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[i].measListToBeModelled[j][m]=options->DopplerMeasList[DGNSSstruct][i][j][k][l+1];
+										epoch->measOrder[i].numMeasListToBeModelled[j]++;
+									}
+								}*/
+							}
+						}
+					}
+				}
+				//Reset global flag of measurements selected
+				options->MeasSelected[DGNSSstruct][i][j]=AllMeasFilled;
+			}
+		}
+	} else if (stationType==REFSTAPOS && options->RTCMmode==ProcessRTCM2) {
+		//If processing in RTCM2 mode, set all reference measurements selected,
+		//as there is no observation data for the reference station (only corrections)
+		for(i=0;i<MAX_GNSS;i++) {
+			for(j=1;j<=listMaxSatGNSS[i];j++) {
+				options->MeasSelected[REFSTAPOS][i][j]=MEASSELECTED;	
+				for(k=0;k<options->numfilterMeasList[REFSTAPOS][i][j];k++) {
+					options->filterListMeasSelected[REFSTAPOS][i][j][k]=MEASSELECTED;
+					options->filterSmoothListMeasSelected[REFSTAPOS][i][j][k]=MEASSELECTED;
+					options->filterListAllMeasSelected[REFSTAPOS][i][j][k]=MEASSELECTED;
+				}
+			}
+		}
+	}
+}
+
+/*****************************************************************************
+ * Name        : FillMeasurements
+ * Description : Fill measurements for a given satellite. To select the
+ *                 measurements, it uses data from the current epoch.
+ *                 If in a given frequency there is only one measurement,
+ *                   that measurement will be selected (independently if
+ *                   there is data available or not for that measurement).
+ *                 If there is more than one measurement for a given
+ *                   frequency, the measurement will be selected according
+ *                   to the priority list. If the first measurement from
+ *                   the priority list has data it will selected, otherwise
+ *                   it will continue checking all measurements in the priority
+ *                   list.
+ *                 If all measurements from a given frequency have no data,
+ *                   then no measurement will be selected for that frequency.
+ *                   It will be checked again in the last epoch
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * enum GNSSystem  GNSS            I  N/A  GNSS system of the satellite
+ * int  PRN                        I  N/A  PRN identifier of the satellite
+ * int  satIndex                   I  N/A  Index of the satellite
+ * TEpoch  *epoch                  I  N/A  Structure to save the data
+ * TOptions  *options              IO N/A  TOptions structure
+ *****************************************************************************/
+void FillMeasurements (enum GNSSystem GNSS, int  PRN, int  satIndex, TEpoch  *epoch, TOptions  *options) {
+
+	int 					i,j,k,l,m,n;
+	int						aux1,quadmeas,numIter,measFound,measFoundSingleFreq;
+	int						numToSelcsSF=0,numSelcsSF=0;
+	int						numToSelcsMW=0,numSelcsMW=0;
+	int						numToSelcsLI=0,numSelcsLI=0;
+	int						numToSelcsIGF=0,numSelcsIGF=0;
+	int						numToSelFilter=0,numToSelSmoothFilter=0,numSelFilter=0,numSelSmoothFilter=0;
+	int						numToSelDoppler=0,numSelDoppler=0;
+	int						DGNSSstruct=epoch->DGNSSstruct;
+	int						codesSelected[2];
+	int						freq,freq2,freqIGF[4],measPos,numMeasSel,MissingMeas;
+	int						FreqNum,DualFreqDCBRequired;
+	int						smooth;
+	long long int			MeasCode,MeasCodeSmooth;
+	double					measValue;
+	char					auxstr[10],auxstr2[10],auxstr3[10];
+	char 					meas1str[10],meas2str[10],meas3str[10],meas4str[10];
+	enum MeasurementKind 	measType;
+	enum MeasurementType	meas,meas2,meas3,meas4,meas5,measlist[2],measlistIGF[4];
+	enum MeasurementKind    measKind;
+
+
+	if (options->includeSatellite[GNSS][PRN]==0) {
+
+		options->MeasSelected[DGNSSstruct][GNSS][PRN]=MEASSELECTED; //Set measurements as selected to avoid entering this function
+		return;
+	}
+
+	//Select filter and smoothing measurements
+	for(i=0;i<options->numfilterMeasList[DGNSSstruct][GNSS][PRN];i++) {
+		if (options->filterListMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASUNSELECTED) {
+			if (options->filterMeasTypeList[DGNSSstruct][GNSS][PRN][i]==GraphicComb) {
+				measType=Pseudorange;
+			} else {
+				measType=options->filterMeasKind[DGNSSstruct][GNSS][PRN][i];
+			}
+			numMeasSel=0;
+			MissingMeas=0;
+			numToSelFilter++;
+			for(j=0;j<options->numCombfilterMeas[DGNSSstruct][GNSS][PRN][i];j++) {
+				freq=options->filterMeasfreq[DGNSSstruct][GNSS][PRN][i][j];
+				switch (options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType]) {
+					case 0:	
+						//No measurements available
+						//Leave the measurement as NAN and mark it as selected, so it is not in each epoch looking for measurements
+						options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=NA;
+						numMeasSel++;
+						MissingMeas=1;
+						break;
+					case 1:
+						//Only one measurement for this frequency. 
+						//Select it regardless there is data available or not
+						options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][0];
+						numMeasSel++;
+						break;
+					default:
+						//Loop through all available measurements. The first with data from the priority list will be selected
+						for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];k++) {
+							measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k]];
+							if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+								options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k];
+								numMeasSel++;
+								break;
+							}
+						}
+						break;
+				}
+				if (options->filterMeasTypeList[DGNSSstruct][GNSS][PRN][i]==GraphicComb) {
+					measType=CarrierPhase;
+				}
+			}
+			if (numMeasSel==options->numCombfilterMeas[DGNSSstruct][GNSS][PRN][i]) {
+				//All measurements from the current combination selected. Mark measurement as selected
+				//The "+MissingMeas" is to mark the measurement as selected but with some of them missing (that is, do not use it)
+				options->filterListMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED+MissingMeas;
+				if (options->filterMeasSmoothed[DGNSSstruct][GNSS][PRN][i]==0||MissingMeas==1) {
+					options->filterListAllMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED+MissingMeas;
+				}
+				numSelFilter++;
+				if (numMeasSel==1) {
+					//Single measurements need to save the measurement in the first position, as it had values with NA
+					options->filterMeasList[DGNSSstruct][GNSS][PRN][i][0]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1];
+				}
+				//Add measurement to SNR list to check and MODEL meas to check. Do not add it if any measurement is missing
+				if (MissingMeas==0) {
+					for(j=0;j<numMeasSel;j++) {
+						freq=options->filterMeasfreq[DGNSSstruct][GNSS][PRN][i][j];
+						//Add measurements to Data Gap list
+						for(k=0;k<epoch->measOrder[GNSS].numMeasListDataGap[PRN];k++) {
+							if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListDataGap[PRN][k]) {
+								//Measurement already in the list
+								break;
+							}
+						}
+						if (k==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+							//Meas not found in list
+							epoch->measOrder[GNSS].measListDataGap[PRN][k]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+							epoch->measOrder[GNSS].measIndListDataGap[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]];
+							epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+						}
+						if (options->SNRfilter == 1 ) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];k++) {
+								if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][k] ||
+									epoch->measOrder[GNSS].meas2SNRInd[options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]]) {
+									//Measurement already in the list or another one in the list points to the same SNR measurement
+									//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+								epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+							}
+						}
+						//Check if only measurements to model are the ones to be used in the filter
+						if (options->ModelAllMeas==0) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToBeModelled[PRN];k++) {
+								if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListToBeModelled[PRN][k]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToBeModelled[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToBeModelled[PRN][k]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+								epoch->measOrder[GNSS].numMeasListToBeModelled[PRN]++;
+							}
+							//Repeat process for carrier phase only list
+							measKind=whatIs(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]);
+							if (measKind==CarrierPhase) {
+								for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasListToBeModelled[PRN];k++) {
+									if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].phaseMeasListToBeModelled[PRN][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numPhaseMeasListToBeModelled[PRN]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[GNSS].phaseMeasListToBeModelled[PRN][k]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numPhaseMeasListToBeModelled[PRN]++;
+								}
+							}
+						}
+						//Add phase measurements to LLI list
+						if (options->csLLI==1) {
+							if (whatIs(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1])==CarrierPhase) {
+								for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];k++) {
+									if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]];
+									epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+								}
+							}
+						}
+						//Add phase measurements to CS SF check list
+						if (options->csSF ==1 && options->autoFillcsSF==1) {
+							if (whatIs(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1])==CarrierPhase) {
+								for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq];k++) {
+									if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].PhaseMeasFilterToCSSF[PRN][freq][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]) {
+									//Meas not found in list
+									epoch->measOrder[GNSS].PhaseMeasFilterToCSSF[PRN][freq][k]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]++;
+								}
+							}
+						}
+						//Add phase measurements to CS MW check list
+						if (options->csMW ==1 && options->autoFillcsMW==1) {
+							if (whatIs(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1])==CarrierPhase) {
+								for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq];k++) {
+									if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]) {
+									//Meas not found in list
+									epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq][k]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]++;
+								}
+							}
+						}
+						//Add phase measurements to CS LI check list
+						if (options->csLI ==1 && options->autoFillcsLI==1) {
+							if (whatIs(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1])==CarrierPhase) {
+								for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq];k++) {
+									if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]) {
+									//Meas not found in list
+									epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq][k]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]++;
+								}
+							}
+						}
+						//Add phase measurements to CS IGF check list
+						if (options->csIGF ==1 && options->autoFillcsIGF==1) {
+							if (whatIs(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1])==CarrierPhase) {
+								for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq];k++) {
+									if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freq][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]) {
+									//Meas not found in list
+									epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freq][k]=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]++;
+								}
+							}
+						}
+					}
+				}
+
+			}
+		}
+		//Check if measurement is smoothed and needs measurements to be checked
+		if (options->filterMeasSmoothed[DGNSSstruct][GNSS][PRN][i]==1) {
+			if (options->filterSmoothListMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASUNSELECTED) {
+				if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][0]>=G1 && options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][0]<=G0) {
+					measType=Pseudorange;
+				} else {
+					measType=CarrierPhase; //Measurements for smoothing are always carrierphases
+				}
+				numMeasSel=0;
+				MissingMeas=0;
+				numToSelSmoothFilter++;
+				for(j=0;j<options->numCombfilterSmoothMeas[DGNSSstruct][GNSS][PRN][i];j++) {
+					freq=options->filterSmoothMeasfreq[DGNSSstruct][GNSS][PRN][i][j];
+					switch(options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType]) {
+						case 0:
+							//No measurements available
+							//Leave the measurement as NAN and mark it as selected, so it is not in each epoch looking for measurements
+							options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=NA;
+							MissingMeas=1;
+							numMeasSel++;
+							break;
+						case 1:	
+							//Only one measurement for this frequency. 
+							//Select it regardless there is data available or not
+							options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][0];
+							numMeasSel++;
+							break;
+						default:
+							//Loop through all available measurements. The first with data from the priority list will be selected
+							for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];k++) {
+								measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k]];
+								if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+									options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k];
+									numMeasSel++;
+									break;
+								}
+							}
+							break;
+					}
+					measType=CarrierPhase; //For the case of graphic combination, the first measurement is code and the second carrier phase
+				}
+				if (numMeasSel==options->numCombfilterSmoothMeas[DGNSSstruct][GNSS][PRN][i]) {
+					//All measurements from the current combination selected. Mark measurement as selected
+					//The "+MissingMeas" is to mark the measurement as selected but with some of them missing (that is, do not use it)
+					options->filterSmoothListMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED+MissingMeas;
+					if (options->filterListMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASSELECTED||MissingMeas==1) {
+						options->filterListAllMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED+MissingMeas;
+					}
+					numSelSmoothFilter++;
+					if (numMeasSel==1) {
+						//Single measurements need to save the measurement in the first position, as it had values with NA
+						options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][0]=options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][1];
+					}
+					//Add measurement to lists to check. Do not add it if any measurement is missing
+					if (MissingMeas==0) {
+						for(j=0;j<numMeasSel;j++) {
+							freq=options->filterSmoothMeasfreq[DGNSSstruct][GNSS][PRN][i][j];
+							//Add measurements to Data Gap list
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListDataGap[PRN];k++) {
+								if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListDataGap[PRN][k]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+								//Meas not found in list
+								epoch->measOrder[GNSS].measListDataGap[PRN][k]=options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+								epoch->measOrder[GNSS].measIndListDataGap[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]];
+								epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+							}
+							if (options->SNRfilter == 1) {
+								for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];k++) {
+									if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][k] ||
+										epoch->measOrder[GNSS].meas2SNRInd[options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]]) {
+										//Measurement already in the list or another one in the list points to the same SNR measurement
+										//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]=options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+								}
+							}
+							//Add phase measurements to LLI list
+							if (options->csLLI==1) {
+								for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];k++) {
+									if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]=options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]];
+									epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+								}
+							}
+							//Add phase measurements to CS SF check list
+							if (options->csSF ==1 && options->autoFillcsSF==1) {
+								for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq];k++) {
+									if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].PhaseMeasFilterToCSSF[PRN][freq][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]) {
+									//Meas not found in list
+									epoch->measOrder[GNSS].PhaseMeasFilterToCSSF[PRN][freq][k]=options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]++;
+								}
+							}
+							//Add phase measurements to CS MW check list
+							if (options->csMW ==1 && options->autoFillcsMW==1) {
+								for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq];k++) {
+									if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]) {
+									//Meas not found in list
+									epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq][k]=options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]++;
+								}
+							}
+							//Add phase measurements to CS LI check list
+							if (options->csLI ==1 && options->autoFillcsLI==1) {
+								for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq];k++) {
+									if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]) {
+									//Meas not found in list
+									epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq][k]=options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]++;
+								}
+							}
+							//Add phase measurements to CS IGF check list
+							if (options->csIGF ==1 && options->autoFillcsIGF==1) {
+								for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq];k++) {
+									if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freq][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]) {
+									//Meas not found in list
+									epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freq][k]=options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]++;
+								}
+							}
+						}
+					}
+				}
+			} else if (options->filterListMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASSELECTED
+					&& options->filterSmoothListMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASSELECTED) {
+				options->filterListAllMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED;
+			}
+		}
+	}
+
+	//
+	if (options->DualFreqDCBModel[GNSS]==DCBRINEX) {
+		epoch->measOrder[GNSS].numDualFreqDCBFreqList[PRN]=0;
+		for(i=0;i<options->numfilterMeasList[DGNSSstruct][GNSS][PRN];i++) {
+			//Check that it is a dual frequency pseudorange combination
+			if ((options->filterMeasTypeList[DGNSSstruct][GNSS][PRN][i]==IonoFreeCombCode || 
+					options->filterMeasTypeList[DGNSSstruct][GNSS][PRN][i]==IonoFreeCombCodeSmoothed) &&
+					options->filterListAllMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASSELECTED) {
+				//Check if combination requires dual frequency DCB computation
+				FreqNum=10*options->filterMeasfreq[DGNSSstruct][GNSS][PRN][i][0]+options->filterMeasfreq[DGNSSstruct][GNSS][PRN][i][1];
+				switch(GNSS) {
+					case GPS:
+						switch(FreqNum) {
+							case 12:
+								if ((options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]==C1W||options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]==C1P) &&
+										(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]==C2W||options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]==C2P) ) {
+									//This is the only combination in GPS not requiring dual frequency DCBs
+									DualFreqDCBRequired=0;
+									//For the case of C1C with C2P or C2W, a ISC will be applied for C1C (if CNAV is available) to convert it to C1P.
+								} else {
+									 DualFreqDCBRequired=1;
+								}
+								break;
+							default:
+								DualFreqDCBRequired=1;
+								break;
+						}
+						break;
+					case QZSS:
+						switch(FreqNum) {
+							case 12:
+								//This is the only combination in QZSS not requiring dual frequency DCBs
+								if ((options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]==C1C) &&
+									(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]==C2L||options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]==C2S) ) {
+									DualFreqDCBRequired=0;
+								} else {
+									DualFreqDCBRequired=1;
+								}
+								break;
+							default:
+								DualFreqDCBRequired=1;
+								break;
+						}
+						break;
+					case BDS:
+						DualFreqDCBRequired=1;
+						break;
+					default:
+						//Not implemented for other constellations
+						DualFreqDCBRequired=0;	
+						break;
+				}
+				if (DualFreqDCBRequired==1) {
+					//Save the frequencies and position for computing the dual frequency DCB value
+					epoch->measOrder[GNSS].DualFreqDCBFreqList[PRN][epoch->measOrder[GNSS].numDualFreqDCBFreqList[PRN]]=FreqNum;
+					epoch->measOrder[GNSS].DualFreqDCBFilterMeasPos[PRN][epoch->measOrder[GNSS].numDualFreqDCBFreqList[PRN]]=i;
+					epoch->measOrder[GNSS].numDualFreqDCBFreqList[PRN]++;
+				}
+			}
+		}
+	}
+
+
+
+	//Select SF cycle-slip measurements
+	for(i=0;i<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];i++) {
+		if (options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASUNSELECTED) {
+			measType=CarrierPhase; //First measurement to select is a carrier phase
+			numMeasSel=0;
+			MissingMeas=0;
+			numToSelcsSF++;
+			for(j=NUMMEASCSSF-1;j>=0;j--) { //cs SF detector always has two measurements to select
+				//Selection is done in reverse order, so first carrier phase is selected
+				freq=options->csSFMeasFreq[DGNSSstruct][GNSS][PRN][i][j];
+				switch (options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType]) {
+					case 0:	
+						//No measurements available
+						//Leave the measurement as NAN and mark it as selected, so it is not in each epoch looking for measurements
+						options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]=NA;
+						numMeasSel++;
+						MissingMeas=1;
+						break;
+					case 1:
+						//Only one measurement for this frequency. 
+						//Select it regardless there is data available or not
+						options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][0];
+						numMeasSel++;
+						//Remove from PhaseMeas list if measurement was there
+						if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]>0 && j>0) {
+							for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq];k++) {
+								if (options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].PhaseMeasFilterToCSSF[PRN][freq][k]) {
+									for(l=k;l<(epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]-1);l++) {
+										epoch->measOrder[GNSS].PhaseMeasFilterToCSSF[PRN][freq][l]=epoch->measOrder[GNSS].PhaseMeasFilterToCSSF[PRN][freq][l+1];
+									}
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]--;
+									break;
+								}
+							}
+						}
+						break;
+					default:
+						//Loop through all available measurements. 
+						//First measurement selected will be from the CheckPhase list (these are the measurements selected by
+						//the user that must be checked. When this list is empty, the first measurement with data from the
+						//the priority list will be selected
+						if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]>0 && j>0) {
+							//Select the last element in the list, so there is no need to move the following elements when one is selected
+							epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]--;
+							meas=epoch->measOrder[GNSS].PhaseMeasFilterToCSSF[PRN][freq][epoch->measOrder[GNSS].numPhaseMeasFilterToCSSF[PRN][freq]];
+							options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]=meas;
+							numMeasSel++;
+							j--;
+							//Try to select the paired code for the selected phase measurement. Otherwise use the priority list
+							measPos=epoch->measOrder[GNSS].meas2Ind[meas-1];
+							if (measPos!=-1) {
+								measValue=epoch->sat[satIndex].meas[measPos].value;
+							} else {
+								measValue=-1.;
+							}
+							if (measValue!=-1.) {
+								options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]=meas-1;
+								numMeasSel++;
+							} else {
+								measType=Pseudorange;
+								for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];k++) {
+									measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k]];
+									if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+										options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k];
+										numMeasSel++;
+										break;
+									}
+								}
+							}
+						} else {
+							for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];k++) {
+								measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k]];
+								if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+									options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k];
+									numMeasSel++;
+									break;
+								}
+							}
+						}
+						break;
+				}
+				measType=Pseudorange; //Second measurement is a pseudorange
+			}
+			if (numMeasSel==NUMMEASCSSF) {
+				//All measurements from the current combination selected. Mark measurement as selected
+				//The "+MissingMeas" is to mark the measurement as selected but with some of them missing (that is, do not use it)
+				options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED+MissingMeas;
+				numSelcsSF++;
+				//Add measurement to lists. Do not add it if any measurement is missing
+				if (MissingMeas==0) {
+					for(j=0;j<NUMMEASCSSF;j++) {
+						//Add measurements to Data Gap list
+						for(k=0;k<epoch->measOrder[GNSS].numMeasListDataGap[PRN];k++) {
+							if (options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].measListDataGap[PRN][k]) {
+								//Measurement already in the list
+								break;
+							}
+						}
+						if (k==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+							//Meas not found in list
+							epoch->measOrder[GNSS].measListDataGap[PRN][k]=options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j];
+							epoch->measOrder[GNSS].measIndListDataGap[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]];
+							epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+						}
+						//Add measurement to SNR list
+						if (options->SNRfilter == 1) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];k++) {
+								if (options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][k] ||
+									epoch->measOrder[GNSS].meas2SNRInd[options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]]) {
+									//Measurement already in the list or another one in the list points to the same SNR measurement
+									//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]=options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j];
+								epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+							}
+						}
+						//Add phase measurements to LLI list
+						if (options->csLLI==1) {
+							if (whatIs(options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j])==CarrierPhase) {
+								for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];k++) {
+									if (options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]=options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j];
+									epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][j]];
+									epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	//Select MW cycle-slip measurements
+	for(i=0;i<options->numcsMWMeasList[DGNSSstruct][GNSS][PRN];i++) {
+		if (options->csMWMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASUNSELECTED) {
+			measType=CarrierPhase; //First and second measurement to select are carrier phases
+			numMeasSel=0;
+			MissingMeas=0;
+			numToSelcsMW++;
+			codesSelected[0]=codesSelected[1]=0;
+			for(j=NUMMEASCSMW+2;j>1;j--) { //cs MW detector always has four measurements to select
+				if (j==4) continue;
+				if (j>4) {
+					freq=options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][i][j-3];
+				} else {
+					freq=options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][i][j-2];
+				}
+				if (j<4) {
+					//Selecting code measurements. Check if already selected
+					if (codesSelected[j-2]==1) continue;
+				}
+				switch (options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType]) {
+					case 0:	
+						//No measurements available
+						//Leave the measurement as NAN and mark it as selected, so it is not in each epoch looking for measurements
+						options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]=NA;
+						numMeasSel++;
+						MissingMeas=1;
+						break;
+					case 1:
+						//Only one measurement for this frequency. 
+						//Select it regardless there is data available or not
+						options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][0];
+						numMeasSel++;
+						//Remove measurement from PhaseMeasFilterToCSMW list if the measurement was in the list
+						if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]>0 && j>4) {
+							for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq];k++) {
+								if (options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq][k]) {
+									for(l=k;l<(epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]-1);l++) {
+										epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq][l]=epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq][l+1];
+									}
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]--;
+									break;
+								}
+							}
+						}
+						break;
+					default:
+						//Loop through all available measurements. 
+						//First measurement selected will be from the CheckPhase list (these are the measurements selected by
+						//the user that must be checked. When this list is empty, the first measurement with data from the
+						//the priority list will be selected
+						if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]>0 && j>4) {
+							//Select the last element in the list, so there is no need to move the following elements when one is selected
+							epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]--;
+							meas=epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq][epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq]];
+							options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]=meas;
+							numMeasSel++;
+							//Try to select the paired code for the selected phase measurement. Otherwise use the priority list
+							measPos=epoch->measOrder[GNSS].meas2Ind[meas-1];
+							if (measPos!=-1) {
+								measValue=epoch->sat[satIndex].meas[measPos].value;
+							} else {
+								measValue=-1.;
+							}
+							if (measValue!=-1.) {
+								options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j-3]=meas-1;
+								numMeasSel++;
+								codesSelected[j-5]=1;
+							} else {
+								measType=Pseudorange;
+								for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];k++) {
+									measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k]];
+									if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+										options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j-3]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k];
+										codesSelected[j-5]=1;
+										numMeasSel++;
+										break;
+									}
+								}
+								measType=CarrierPhase;
+							}
+						} else {
+							for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];k++) {
+								measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k]];
+								if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k];
+									numMeasSel++;
+									break;
+								}
+							}
+						}
+						break;
+				}
+				if (j==5) {
+					measType=Pseudorange; //Last measurements to select are pseudoranges
+				}
+			}
+			if (numMeasSel==NUMMEASCSMW) {
+				//All measurements from the current combination selected. Mark measurement as selected
+				//The "+MissingMeas" is to mark the measurement as selected but with some of them missing (that is, do not use it)
+				options->csMWMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED+MissingMeas;
+				numSelcsMW++;
+				//Add measurement to lists to check. Do not add it if any measurement is missing
+				if (MissingMeas==0) {
+					for(j=2;j<=NUMMEASCSMW+2;j++) {
+						if (j==4) continue;
+						//Add measurements to Data Gap list
+						for(k=0;k<epoch->measOrder[GNSS].numMeasListDataGap[PRN];k++) {
+							if (options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].measListDataGap[PRN][k]) {
+								//Measurement already in the list
+								break;
+							}
+						}
+						if (k==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+							//Meas not found in list
+							epoch->measOrder[GNSS].measListDataGap[PRN][k]=options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j];
+							epoch->measOrder[GNSS].measIndListDataGap[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]];
+							epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+						}
+						//Add measurement to SNR list
+						if (options->SNRfilter == 1) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];k++) {
+								if (options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][k] ||
+									epoch->measOrder[GNSS].meas2SNRInd[options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]]) {
+									//Measurement already in the list or another one in the list points to the same SNR measurement
+									//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]=options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j];
+								epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+							}
+						}
+						//Add phase measurements to LLI list
+						if (options->csLLI==1) {
+							if (whatIs(options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j])==CarrierPhase) {
+								for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];k++) {
+									if (options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]) {
+										//Measurement already in the list
+										break;
+									}
+								}
+								if (k==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]=options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j];
+									epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][j]];
+									epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	//Select LI cycle-slip measurements
+	for(i=0;i<options->numcsLIMeasList[DGNSSstruct][GNSS][PRN];i++) {
+		if (options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASUNSELECTED) {
+			measType=CarrierPhase; //Measurements to select are CarrierPhases
+			numMeasSel=0;
+			MissingMeas=0;
+			numToSelcsLI++;
+			for(j=0;j<NUMMEASCSLI;j++) { //cs LI detector always has two measurements to select
+				freq=options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][i][j];
+				switch (options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType]) {
+					case 0:	
+						//No measurements available
+						//Leave the measurement as NAN and mark it as selected, so it is not in each epoch looking for measurements
+						options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=NA;
+						numMeasSel++;
+						MissingMeas=1;
+						break;
+					case 1:
+						//Only one measurement for this frequency. 
+						//Select it regardless there is data available or not
+						options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][0];
+						numMeasSel++;
+						if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]>0) {
+							for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq];k++) {
+								if (options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq][k]) {
+									for(l=k;l<(epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]-1);l++) {
+										epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq][l]=epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq][l+1];
+									}
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]--;
+									break;
+								}
+							}
+						}
+						break;
+					default:
+						//Loop through all available measurements. 
+						//First measurement selected will be from the CheckPhase list (these are the measurements selected by
+						//the user that must be checked. When this list is empty, the first measurement with data from the
+						//the priority list will be selected
+						if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]>0) {
+							//Select the last element in the list, so there is no need to move the following elements when one is selected
+							epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]--;
+							meas=epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq][epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq]];
+							options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=meas;
+							numMeasSel++;
+						} else {
+							for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];k++) {
+								measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k]];
+								if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+									options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k];
+									numMeasSel++;
+									break;
+								}
+							}
+						}
+						break;
+				}
+			}
+			if (numMeasSel==NUMMEASCSLI) {
+				//All measurements from the current combination selected. Mark measurement as selected
+				//The "+MissingMeas" is to mark the measurement as selected but with some of them missing (that is, do not use it)
+				options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED+MissingMeas;
+				numSelcsLI++;
+				//Add measurement to lists to check. Do not add it if any measurement is missing
+				if (MissingMeas==0) {
+					for(j=0;j<NUMMEASCSLI;j++) {
+						//Add measurements to Data Gap list
+						for(k=0;k<epoch->measOrder[GNSS].numMeasListDataGap[PRN];k++) {
+							if (options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListDataGap[PRN][k]) {
+								//Measurement already in the list
+								break;
+							}
+						}
+						if (k==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+							//Meas not found in list
+							epoch->measOrder[GNSS].measListDataGap[PRN][k]=options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+							epoch->measOrder[GNSS].measIndListDataGap[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]];
+							epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+						}
+						//Add measurement to SNR list
+						if (options->SNRfilter == 1) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];k++) {
+								if (options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][k] ||
+									epoch->measOrder[GNSS].meas2SNRInd[options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]]) {
+									//Measurement already in the list or another one in the list points to the same SNR measurement
+									//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]=options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+								epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+							}
+						}
+						//Add phase measurements to LLI list
+						if (options->csLLI==1) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];k++) {
+								if (options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]=options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+								epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][j+1]];
+								epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	//Select IGF cycle-slip measurements
+	for(i=0;i<options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN];i++) {
+		if (options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASUNSELECTED) {
+			measType=CarrierPhase; //Measurements to select are CarrierPhases
+			numMeasSel=0;
+			MissingMeas=0;
+			numToSelcsIGF++;
+			for(j=2;j<=NUMMEASCSIGF+2;j++) { //cs IGF detector always has four measurements to select
+				if (j==4) continue;
+				if(j<4) {
+					freq=options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][i][j-2];
+				} else {
+					freq=options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][i][j-3];
+				}
+				switch (options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType]) {
+					case 0:	
+						//No measurements available
+						//Leave the measurement as NAN and mark it as selected, so it is not in each epoch looking for measurements
+						options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]=NA;
+						numMeasSel++;
+						MissingMeas=1;
+						break;
+					case 1:
+						//Only one measurement for this frequency. 
+						//Select it regardless there is data available or not
+						options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][0];
+						numMeasSel++;
+						if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]>0) {
+							for(k=0;k<epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq];k++) {
+								if (options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freq][k]) {
+									for(l=k;l<(epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]-1);l++) {
+										epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freq][l]=epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freq][l+1];
+									}
+									epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]--;
+									break;
+								}
+							}
+						}
+						break;
+					default:
+						//Loop through all available measurements. 
+						//First measurement selected will be from the CheckPhase list (these are the measurements selected by
+						//the user that must be checked. When this list is empty, the first measurement with data from the
+						//the priority list will be selected
+						if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]>0) {
+							//Select the last element in the list, so there is no need to move the following elements when one is selected
+							epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]--;
+							meas=epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freq][epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freq]];
+							options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]=meas;
+							numMeasSel++;
+						} else {
+							for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];k++) {
+								measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k]];
+								if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+									options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k];
+									numMeasSel++;
+									break;
+								}
+							}
+						}
+						break;
+				}
+			}
+			if (numMeasSel==NUMMEASCSIGF) {
+				//All measurements from the current combination selected. Mark measurement as selected
+				//The "+MissingMeas" is to mark the measurement as selected but with some of them missing (that is, do not use it)
+				options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED+MissingMeas;
+				numSelcsIGF++;
+				//Add measurement to lists to check. Do not add it if any measurement is missing
+				if (MissingMeas==0) {
+					for(j=2;j<=NUMMEASCSIGF+2;j++) {
+						if(j==4) continue;
+						//Add measurements to Data Gap list
+						for(k=0;k<epoch->measOrder[GNSS].numMeasListDataGap[PRN];k++) {
+							if (options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].measListDataGap[PRN][k]) {
+								//Measurement already in the list
+								break;
+							}
+						}
+						if (k==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+							//Meas not found in list
+							epoch->measOrder[GNSS].measListDataGap[PRN][k]=options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j];
+							epoch->measOrder[GNSS].measIndListDataGap[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]];
+							epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+						}
+						//Add measurement to SNR list
+						if (options->SNRfilter == 1) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];k++) {
+								if (options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][k] ||
+									epoch->measOrder[GNSS].meas2SNRInd[options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]]) {
+									//Measurement already in the list or another one in the list points to the same SNR measurement
+									//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]=options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j];
+								epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+							}
+						}
+						//Add phase measurements to LLI list
+						if (options->csLLI==1) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];k++) {
+								if (options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToCheckLLI[PRN][k]=options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j];
+								epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][j]];
+								epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	//Select Doppler measurements
+	for(i=0;i<options->numDopplerMeasList[DGNSSstruct][GNSS][PRN];i++) {
+		if (options->DopplerListMeasSelected[DGNSSstruct][GNSS][PRN][i]==MEASUNSELECTED) {
+			measType=Doppler; //Measurements are always Doppler type
+			numMeasSel=0;
+			MissingMeas=0;
+			numToSelDoppler++;
+			for(j=0;j<options->numCombDopplerMeas[DGNSSstruct][GNSS][PRN][i];j++) {
+				freq=options->DopplerMeasfreq[DGNSSstruct][GNSS][PRN][i][j];
+				switch (options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType]) {
+					case 0:	
+						//No measurements available
+						//Leave the measurement as NAN and mark it as selected, so it is not in each epoch looking for measurements
+						options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=NA;
+						numMeasSel++;
+						MissingMeas=1;
+						break;
+					case 1:
+						//Only one measurement for this frequency. 
+						//Select it regardless there is data available or not
+						options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][0];
+						numMeasSel++;
+						break;
+					default:
+						//Loop through all available measurements. The first with data from the priority list will be selected
+						for(k=0;k<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];k++) {
+							measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k]];
+							if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+								options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][k];
+								numMeasSel++;
+								break;
+							}
+						}
+						break;
+				}
+			}
+			if (numMeasSel==options->numCombDopplerMeas[DGNSSstruct][GNSS][PRN][i]) {
+				//All measurements from the current combination selected. Mark measurement as selected
+				//The "+MissingMeas" is to mark the measurement as selected but with some of them missing (that is, do not use it)
+				options->DopplerListMeasSelected[DGNSSstruct][GNSS][PRN][i]=MEASSELECTED+MissingMeas;
+				numSelDoppler++;
+				if (numMeasSel==1) {
+					//Single measurements need to save the measurement in the first position, as it had values with NA
+					options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][0]=options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][1];
+				}
+				if (MissingMeas==0) {
+					for(j=0;j<numMeasSel;j++) {
+						//Add measurements to Data Gap list
+						for(k=0;k<epoch->measOrder[GNSS].numMeasListDataGap[PRN];k++) {
+							if (options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListDataGap[PRN][k]) {
+								//Measurement already in the list
+								break;
+							}
+						}
+						if (k==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+							//Meas not found in list
+							epoch->measOrder[GNSS].measListDataGap[PRN][k]=options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+							epoch->measOrder[GNSS].measIndListDataGap[PRN][k]=epoch->measOrder[GNSS].meas2Ind[options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1]];
+							epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+						}
+						//Add measurements to SNR list
+						if (options->SNRfilter == 1) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];k++) {
+								if (options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][k] ||
+									epoch->measOrder[GNSS].meas2SNRInd[options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]]) {
+									//Measurement already in the list or another one in the list points to the same SNR measurement
+									//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToCheckSNR[PRN][k]=options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+								epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+							}
+						}
+						//Check if only measurements to model are the ones to be used in the filter
+						//The code is commented in case in the the future Doppler needs to be modelled
+/*						if (options->ModelAllMeas==0) {
+							for(k=0;k<epoch->measOrder[GNSS].numMeasListToBeModelled[PRN];k++) {
+								if (options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1]==epoch->measOrder[GNSS].measListToBeModelled[PRN][k]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (k==epoch->measOrder[GNSS].numMeasListToBeModelled[PRN]) {
+								//Meas not found in list. Add it
+								epoch->measOrder[GNSS].measListToBeModelled[PRN][k]=options->DopplerMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+								epoch->measOrder[GNSS].numMeasListToBeModelled[PRN]++;
+							}
+						}*/
+					}
+				}
+			}
+		}
+	}
+
+		//Check if all measurements have been selected
+	if (numToSelFilter==numSelFilter && numToSelSmoothFilter==numSelSmoothFilter &&
+				numToSelcsSF==numSelcsSF && numToSelcsMW==numSelcsMW &&
+				numToSelcsLI==numSelcsLI && numToSelcsIGF==numSelcsIGF &&
+				numToSelDoppler==numSelDoppler) {
+			//All measurements have been selected.
+			//Set the flag to avoid entering this function every epoch
+			options->MeasSelected[DGNSSstruct][GNSS][PRN]=MEASSELECTED;
+
+			//Sort measurements to model, so the loop where all meas are modelled are in order code/phase with each paired attribute
+			qsort(epoch->measOrder[GNSS].measListToBeModelled[PRN],epoch->measOrder[GNSS].numMeasListToBeModelled[PRN],sizeof(enum MeasurementType),qsort_compare_int);
+
+			if (epoch->measOrder[GNSS].measListToBeModelled[PRN][0]==L1C && epoch->measOrder[GNSS].measListToBeModelled[PRN][1]==C1W) {
+			//Special case for RINEX 3 with Septentrio receivers, which provide C1W but not L1W, so L1C is used instead.
+			//Move C1W to first position so order code/phase is respected
+			epoch->measOrder[GNSS].measListToBeModelled[PRN][0]=C1W;
+			epoch->measOrder[GNSS].measListToBeModelled[PRN][1]=L1C;
+		}
+
+		//If print MODEL is enabled, save the measurement in text format for printing
+		if (options->printModel==1) {
+			for (i=0;i<epoch->measOrder[GNSS].numMeasListToBeModelled[PRN];i++) {
+				strcpy(epoch->measOrder[GNSS].measListToBeModelledStr[PRN][i],meastype2measstr(epoch->measOrder[GNSS].measListToBeModelled[PRN][i]));
+			}
+		}
+
+
+		//Save for each measurement to be modelled, the positions where it appears in the filter measurement list
+		for(j=0;j<epoch->measOrder[GNSS].numMeasListToBeModelled[PRN];j++) {
+			epoch->measOrder[GNSS].numMeasPosToFilterPos[PRN][j]=0;
+			epoch->measOrder[GNSS].numMeasPosToFilterPosSingleFreq[PRN][j]=0;
+			meas=epoch->measOrder[GNSS].measListToBeModelled[PRN][j];
+			for(i=0;i<options->numfilterMeasList[DGNSSstruct][GNSS][PRN];i++) {
+				//Check that current measurement is in the filter
+				measFound=0;
+				measFoundSingleFreq=0;
+				switch(options->filterMeasTypeList[DGNSSstruct][GNSS][PRN][i]) {
+					case SinglePseudorange: case SinglePseudorangeSmoothed: case SingleCarrierPhase: 
+						if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]==meas) {
+							measFound=1;
+							measFoundSingleFreq=1;
+						}
+						break;
+					case IonoFreeCombCode: case IonoFreeCombCodeSmoothed: case IonoFreeCombPhase:
+						if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]==meas || options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]==meas) {
+							measFound=1;
+						}
+						break;
+					case DivergenceFreeCode: case DivergenceFreeCodeSmoothed: 
+					case DivergenceFreePhase: case GraphicComb:
+						if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]==meas || options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]==meas) {
+							measFound=1;
+							measFoundSingleFreq=1;
+						}
+						break;
+					case SecondIonoFreeCode: case SecondIonoFreeCodeSmoothed: case SecondIonoFreePhase:
+						if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]==meas || options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]==meas
+						  || options->filterMeasList[DGNSSstruct][GNSS][PRN][i][3]==meas || options->filterMeasList[DGNSSstruct][GNSS][PRN][i][4]==meas) {
+							measFound=1;
+						}
+						break;
+					default://Doppler measurements
+						break;
+				}
+				if (measFound==1) {
+					epoch->measOrder[GNSS].MeasPosToFilterPos[PRN][j][epoch->measOrder[GNSS].numMeasPosToFilterPos[PRN][j]]=i;
+					epoch->measOrder[GNSS].numMeasPosToFilterPos[PRN][j]++;
+				}
+				if (measFoundSingleFreq==1) {
+					epoch->measOrder[GNSS].MeasPosToFilterPosSingleFreq[PRN][j][epoch->measOrder[GNSS].numMeasPosToFilterPosSingleFreq[PRN][j]]=i;
+					epoch->measOrder[GNSS].numMeasPosToFilterPosSingleFreq[PRN][j]++;
+				}
+			}
+		}
+
+
+		//Last check: In order to enforce that all carrier phase measurements in the filter are parsed in the
+		//cycle-slip detectors it is necessary to loop through of all the carrier phase measurements selected
+		//in the filter and check if they are also selected in all the enabled cycle-slip detectors. 
+		//A typical case where a carrier phase measurement can be selected in the filter but not in the cycle-slip
+		//detector it is when the user has manually set two carrier phase measurements from the same frequency in the
+		//filter, but did not set any measurement in the cycle-slip detector. In this case, as only one measurement
+	   	//per frequency is auto set to be checked per frequency, only one of the carrier phases would be checked.
+		//Also, fill the list of measurements to be smoothed and with measurements selected
+
+		//Reset total number of measurements selected
+		options->numfilterMeasSelected[DGNSSstruct][GNSS][PRN]=0;
+
+		//Reset number of measurements to be smoothed
+		options->numfilterMeasWithSmoothing[DGNSSstruct][GNSS][PRN]=0;
+
+		//Reset number of carrier phase measurements used (to account for the number of ambiguities)
+		options->numfilterCarrierPhaseMeas[DGNSSstruct][GNSS][PRN]=0;
+
+		for(i=0;i<options->numfilterMeasList[DGNSSstruct][GNSS][PRN];i++) {
+			//Only check filter measurements which have both the filter and the smooth (if smoothed) measurements selected
+			numIter=options->numCombfilterMeas[DGNSSstruct][GNSS][PRN][i]+
+					options->numCombfilterSmoothMeas[DGNSSstruct][GNSS][PRN][i]*options->filterMeasSmoothed[DGNSSstruct][GNSS][PRN][i];
+			if (options->filterListAllMeasSelected[DGNSSstruct][GNSS][PRN][i]!=MEASSELECTED) continue;
+
+			//If PREFIT, POSTFIT, EPOCHSAT or SBASDFMCCORR is enabled, save the measurement in text format for printing
+			if (options->printPrefit==1 || options->printPostfit==1 || options->printSatellites==1 || options->printSBASDFMCCORR==1) {
+				switch(options->filterMeasTypeList[DGNSSstruct][GNSS][PRN][i]) {
+					case SinglePseudorange: case SinglePseudorangeSmoothed:
+					case SingleCarrierPhase: case SingleDoppler:
+						strcpy(options->filterMeasText[DGNSSstruct][GNSS][PRN][i],meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+						break;
+					case IonoFreeCombCode: case DivergenceFreeCode:
+					case IonoFreeCombCodeSmoothed: case DivergenceFreeCodeSmoothed: 
+					case GraphicComb: case IonoFreeCombPhase:  case DivergenceFreePhase:
+					case IonoFreeCombDoppler: case DivergenceFreeDoppler:
+						if (options->printV5format) {
+							strcpy(options->filterMeasText[DGNSSstruct][GNSS][PRN][i],meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+							options->filterMeasText[DGNSSstruct][GNSS][PRN][i][2]='\0';
+						} else {
+							strcpy(meas1str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+							strcpy(meas2str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]));
+							sprintf(options->filterMeasText[DGNSSstruct][GNSS][PRN][i],"%s-%s-%s",meas1str,meas2str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]));
+						}
+						break;
+					case SecondIonoFreeCode: case SecondIonoFreeCodeSmoothed:
+					case SecondIonoFreePhase: case SecondIonoFreeDoppler:
+						if (options->printV5format) {
+							strcpy(options->filterMeasText[DGNSSstruct][GNSS][PRN][i],meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+							options->filterMeasText[DGNSSstruct][GNSS][PRN][i][3]='\0';
+						} else {
+							strcpy(meas1str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+							strcpy(meas2str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]));
+							strcpy(meas3str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]));
+							strcpy(meas4str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][3]));
+							sprintf(options->filterMeasText[DGNSSstruct][GNSS][PRN][i],"%s-%s-%s-%s-%s",meas1str,meas2str,meas3str,meas4str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][4]));
+						}
+						break;
+					default:
+						return;
+						break;
+				}
+
+				if (options->printV5format==0) {
+					if (options->filterMeasSmoothed[DGNSSstruct][GNSS][PRN][i]==1) {
+						#if defined RANGECASEENABLED
+						switch (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][0]) {
+							case NA ... S9N:
+						#else
+						if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][0]<ENDMEAS) {
+						#endif
+								strcpy(options->filterSmoothMeasText[DGNSSstruct][GNSS][PRN][i],meastype2measstr(options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+						#if defined RANGECASEENABLED
+								break;
+							case ENDMEAS ... DF09:
+						#else
+						} else if (options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][0]<IGF1012) {
+						#endif
+								strcpy(meas1str,meastype2measstr(options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+								strcpy(meas2str,meastype2measstr(options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][1]));
+								sprintf(options->filterSmoothMeasText[DGNSSstruct][GNSS][PRN][i],"%s-%s-%s",meas1str,meas2str,meastype2measstr(options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][2]));
+						#if defined RANGECASEENABLED
+								break;
+							default:
+						#else
+						} else {
+						#endif
+								strcpy(meas1str,meastype2measstr(options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+								strcpy(meas2str,meastype2measstr(options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][1]));
+								strcpy(meas3str,meastype2measstr(options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][2]));
+								strcpy(meas4str,meastype2measstr(options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][3]));
+								sprintf(options->filterSmoothMeasText[DGNSSstruct][GNSS][PRN][i],"%s-%s-%s-%s-%s",meas1str,meas2str,meas3str,meas4str,meastype2measstr(options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][4]));
+						#if defined RANGECASEENABLED
+								break;
+						}
+						#else
+						}
+						#endif
+					} else {
+						strcpy(options->filterSmoothMeasText[DGNSSstruct][GNSS][PRN][i],"-");
+					}
+				}
+			}
+
+			//Save the position of C1C measurement (smoothed or not)
+			if (options->filterMeasList[DGNSSstruct][GNSS][PRN][i][0]==C1C) {
+				options->C1CfilterMeasPos[DGNSSstruct][GNSS][PRN]=i;
+			}
+
+			//Count the total number of measurements selected (if none selected, then the satellite is discarded)
+			options->numfilterMeasSelected[DGNSSstruct][GNSS][PRN]++;
+
+			//Count the number of carrier phase measurements used in each satellite (each carrier phase will have a different ambiguity in the filter)
+			if (options->filterMeasKind[DGNSSstruct][GNSS][PRN][i]==CarrierPhase) {
+				options->numfilterCarrierPhaseMeas[DGNSSstruct][GNSS][PRN]++;
+			}
+
+			for(j=0;j<numIter;j++) {
+				if (j>=options->numCombfilterMeas[DGNSSstruct][GNSS][PRN][i]) {
+					//Smoothing measurement
+					meas2=options->filterSmoothMeasList[DGNSSstruct][GNSS][PRN][i][j-options->numCombfilterMeas[DGNSSstruct][GNSS][PRN][i]+1];
+					freq=options->filterSmoothMeasfreq[DGNSSstruct][GNSS][PRN][i][j-options->numCombfilterMeas[DGNSSstruct][GNSS][PRN][i]];
+				} else {
+					meas2=options->filterMeasList[DGNSSstruct][GNSS][PRN][i][j+1];
+					if (whatIs(meas2)!=CarrierPhase) continue;
+					freq=options->filterMeasfreq[DGNSSstruct][GNSS][PRN][i][j];
+				}
+				//Check single frequency cycle-slip detector
+				if (options->csSF==1 && options->autoFillcsSF==1) {
+					for(k=0;k<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+						if (meas2==options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][1]) {
+							//Measurement found in CS SF list
+							break;
+						}
+					}
+					if (k==options->numcsSFMeasList[DGNSSstruct][GNSS][PRN]) {
+						//Measurement not found in the CS SF list. Add it
+						//Look first for the code measurement
+						if (epoch->measOrder[GNSS].meas2Ind[meas2-1]!=-1) {
+							meas=meas2-1;
+						} else {
+							measType=Pseudorange;
+							for(l=0;l<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];l++) {
+								measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][l]];
+								if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+									meas=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][l];
+									break;
+								}
+							}
+						}
+						options->csSFMeasList[DGNSSstruct][GNSS][PRN][options->numcsSFMeasList[DGNSSstruct][GNSS][PRN]][0]=meas;
+						options->csSFMeasList[DGNSSstruct][GNSS][PRN][options->numcsSFMeasList[DGNSSstruct][GNSS][PRN]][1]=meas2;
+						options->csSFMeasFreq[DGNSSstruct][GNSS][PRN][options->numcsSFMeasList[DGNSSstruct][GNSS][PRN]][0]=freq;
+						options->csSFMeasFreq[DGNSSstruct][GNSS][PRN][options->numcsSFMeasList[DGNSSstruct][GNSS][PRN]][1]=freq;
+						options->csSFWithMeas[DGNSSstruct][GNSS][PRN][options->numcsSFMeasList[DGNSSstruct][GNSS][PRN]]=0;
+						options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][options->numcsSFMeasList[DGNSSstruct][GNSS][PRN]]=1;
+						options->csSFfreqAutoChecked[DGNSSstruct][GNSS][PRN][freq][ADDEDFREQ]=1;
+						options->numcsSFMeasList[DGNSSstruct][GNSS][PRN]++;
+
+						//Add measurement to DatapGap, LLI, and SNR lists
+						for(l=0;l<NUMMEASCSSF;l++) {
+							//Add measurements to Data Gap list
+							for(m=0;m<epoch->measOrder[GNSS].numMeasListDataGap[PRN];m++) {
+								if (options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l]==epoch->measOrder[GNSS].measListDataGap[PRN][m]) {
+									//Measurement already in the list
+									break;
+								}
+							}
+							if (m==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+								//Meas not found in list
+								epoch->measOrder[GNSS].measListDataGap[PRN][m]=options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l];
+								epoch->measOrder[GNSS].measIndListDataGap[PRN][m]=epoch->measOrder[GNSS].meas2Ind[options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l]];
+								epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+							}
+							//Add measurement to SNR list
+							if (options->SNRfilter == 1) {
+								for(m=0;m<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];m++) {
+									if (options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][m] ||
+										epoch->measOrder[GNSS].meas2SNRInd[options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][m]]) {
+										//Measurement already in the list or another one in the list points to the same SNR measurement
+										//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+										break;
+									}
+								}
+								if (m==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+									//Meas not found in list. Add it
+									epoch->measOrder[GNSS].measListToCheckSNR[PRN][m]=options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l];
+									epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+								}
+							}
+							//Add phase measurements to LLI list
+							if (options->csLLI==1) {
+								if (whatIs(options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l])==CarrierPhase) {
+									for(m=0;m<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];m++) {
+										if (options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+										//Meas not found in list. Add it
+										epoch->measOrder[GNSS].measListToCheckLLI[PRN][m]=options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l];
+										epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][m]=epoch->measOrder[GNSS].meas2Ind[options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][l]];
+										epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+									}
+								}
+							}
+						}
+
+					}
+				}
+				//Check MW cycle-slip detector
+				if (options->csMW ==1 && options->autoFillcsMW==1) {
+					auxstr[0]='M';
+					auxstr[1]='W';
+					auxstr[4]='\0';
+					auxstr2[0]='P';
+					auxstr2[1]='N';
+					auxstr2[4]='\0';
+					auxstr3[0]='L';
+					auxstr3[1]='W';
+					auxstr3[4]='\0';
+					for(k=0;k<options->numcsMWMeasList[DGNSSstruct][GNSS][PRN];k++) {
+						if (meas2==options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][5] ||
+							meas2==options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][6]) {
+							//Measurement found in CS MW list
+							break;
+						}
+					}
+					if (k==options->numcsMWMeasList[DGNSSstruct][GNSS][PRN]) {
+						//Measurement not found in the CS MW list. Add it
+						//Look first for the code measurement for the phase measurement
+						if (epoch->measOrder[GNSS].meas2Ind[meas2-1]!=-1) {
+							meas=meas2-1;
+						} else {
+							measType=Pseudorange;
+							for(l=0;l<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType];l++) {
+								measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][l]];
+								if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+									meas=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq][measType][l];
+									break;
+								}
+							}
+						}
+
+						//Fill second frequency necessary for MW detector
+						for(l=0;l<MAX_FREQUENCIES_PER_GNSS;l++) {
+							freq2=options->defaultFreq[GNSS][PRN][l];
+							if (freq2==-1) break;
+							if (options->usableFreq[GNSS][PRN][freq2]==1 && availGNSSFreq[GNSS][freq2]==1 && epoch->measOrder[GNSS].availFreq[freq2]
+								 && options->availFreq[GNSS][PRN][freq2]==1 && freq2!=freq) {
+								break;
+							}
+						}
+						if (freq2==-1||l==MAX_FREQUENCIES_PER_GNSS) {
+							//Could not add an additional frequency.
+						} else {
+							numMeasSel=0;
+							measType=CarrierPhase;
+							for(l=1;l>=0;l--) { //Select a code and a phase measurement
+								//Selection is done in reverse order, so first carrier phase is selected
+								switch (options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType]) {
+									case 0:	
+										//No measurements available
+										break;
+									case 1:
+										//Only one measurement for this frequency. 
+										//Select it regardless there is data available or not
+										measlist[l]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType][0];
+										numMeasSel++;
+										//Remove from PhaseMeas list if measurement was there
+										if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq2]>0 && l>0) {
+											for(m=0;m<epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq2];m++) {
+												if (measlist[l]==epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq2][m]) {
+													for(n=m;n<(epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq2]-1);n++) {
+														epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq2][n]=epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq2][n+1];
+													}
+													epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq2]--;
+													break;
+												}
+											}
+										}
+										break;
+									default:
+										//Loop through all available measurements. 
+										//First measurement selected will be from the CheckPhase list (these are the measurements selected by
+										//the user that must be checked. When this list is empty, the first measurement with data from the
+										//the priority list will be selected
+										if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq2]>0 && l>0) {
+											//Select the last element in the list, so there is no need to move the following elements when one is selected
+											epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq2]--;
+											measlist[l]=epoch->measOrder[GNSS].PhaseMeasFilterToCSMW[PRN][freq2][epoch->measOrder[GNSS].numPhaseMeasFilterToCSMW[PRN][freq2]];
+											numMeasSel++;
+											l--;
+											//Try to select the paired code for the selected phase measurement. Otherwise use the priority list
+											if (epoch->measOrder[GNSS].meas2Ind[measlist[l+1]-1]!=-1) {
+												measlist[l]=measlist[l+1]-1;
+												numMeasSel++;
+											} else {
+												measType=Pseudorange;
+												for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType];m++) {
+													measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType][m]];
+													if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+														measlist[l]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType][m];
+														numMeasSel++;
+														break;
+													}
+												}
+											}
+										} else {
+											for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType];m++) {
+												measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType][m]];
+												if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+													measlist[l]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType][m];
+													numMeasSel++;
+													break;
+												}
+											}
+										}
+										break;
+								}
+								measType=Pseudorange; //Second measurement is a pseudorange
+							}
+							if (numMeasSel==2) {
+								if (freq==0 || freq>freq2) {
+									auxstr[2]='0'+freq2;
+									auxstr[3]='0'+freq;
+									meas3=measstr2meastype(auxstr);
+									auxstr2[2]='0'+freq2;
+									auxstr2[3]='0'+freq;
+									meas4=measstr2meastype(auxstr2);
+									auxstr3[2]='0'+freq2;
+									auxstr3[3]='0'+freq;
+									meas5=measstr2meastype(auxstr3);
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][0]=meas3;
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][1]=meas4;
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][2]=measlist[0];
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][3]=meas;
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][4]=meas5;
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][5]=measlist[1];
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][6]=meas2;
+									options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k][0]=freq2;
+									options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k][1]=freq;
+									options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k][2]=freq2;
+									options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k][3]=freq;
+								} else {
+									auxstr[2]='0'+freq;
+									auxstr[3]='0'+freq2;
+									meas3=measstr2meastype(auxstr);
+									auxstr2[2]='0'+freq;
+									auxstr2[3]='0'+freq2;
+									meas4=measstr2meastype(auxstr2);
+									auxstr3[2]='0'+freq;
+									auxstr3[3]='0'+freq2;
+									meas5=measstr2meastype(auxstr3);
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][0]=meas3;
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][1]=meas4;
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][2]=meas;
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][3]=measlist[0];
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][4]=meas5;
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][5]=meas2;
+									options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][6]=measlist[1];
+									options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k][0]=freq;
+									options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k][1]=freq2;
+									options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k][2]=freq;
+									options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k][3]=freq2;
+								}
+								options->csMWfreqAutoChecked[DGNSSstruct][GNSS][PRN][freq][ADDEDFREQ]=1;
+								options->csMWfreqAutoChecked[DGNSSstruct][GNSS][PRN][freq2][ADDEDFREQ]=1;
+								options->csMWWithMeas[DGNSSstruct][GNSS][PRN][k]=0;
+								options->csMWMeasSelected[DGNSSstruct][GNSS][PRN][k]=1;
+								options->numcsMWMeasList[DGNSSstruct][GNSS][PRN]++;
+
+								//Add measurement to DatapGap, LLI, and SNR lists
+								for(l=2;l<=NUMMEASCSMW+2;l++) {
+									if (l==4) continue;
+									//Add measurements to Data Gap list
+									for(m=0;m<epoch->measOrder[GNSS].numMeasListDataGap[PRN];m++) {
+										if (options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l]==epoch->measOrder[GNSS].measListDataGap[PRN][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+										//Meas not found in list
+										epoch->measOrder[GNSS].measListDataGap[PRN][m]=options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l];
+										epoch->measOrder[GNSS].measIndListDataGap[PRN][m]=epoch->measOrder[GNSS].meas2Ind[options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l]];
+										epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+									}
+									//Add measurement to SNR list
+									if (options->SNRfilter == 1) {
+										for(m=0;m<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];m++) {
+											if (options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][m] ||
+												epoch->measOrder[GNSS].meas2SNRInd[options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][m]]) {
+												//Measurement already in the list or another one in the list points to the same SNR measurement
+												//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+												break;
+											}
+										}
+										if (m==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[GNSS].measListToCheckSNR[PRN][m]=options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l];
+											epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+										}
+									}
+									//Add phase measurements to LLI list
+									if (options->csLLI==1) {
+										if (whatIs(options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l])==CarrierPhase) {
+											for(m=0;m<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];m++) {
+												if (options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][m]) {
+													//Measurement already in the list
+													break;
+												}
+											}
+											if (m==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+												//Meas not found in list. Add it
+												epoch->measOrder[GNSS].measListToCheckLLI[PRN][m]=options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l];
+												epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][m]=epoch->measOrder[GNSS].meas2Ind[options->csMWMeasList[DGNSSstruct][GNSS][PRN][k][l]];
+												epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+											}
+										}
+									}
+								}
+
+							}
+						}
+					}
+				}
+				//Check LI cycle-slip detector
+				if (options->csLI ==1 && options->autoFillcsLI==1) {
+					auxstr[0]='L';
+					auxstr[1]='I';
+					auxstr[4]='\0';
+					for(k=0;k<options->numcsLIMeasList[DGNSSstruct][GNSS][PRN];k++) {
+						if (meas2==options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][1] ||
+							meas2==options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][2]) {
+							//Measurement found in CS LI list
+							break;
+						}
+					}
+					if (k==options->numcsLIMeasList[DGNSSstruct][GNSS][PRN]) {
+						//Fill second frequency necessary for LI detector
+						for(l=0;l<MAX_FREQUENCIES_PER_GNSS;l++) {
+							freq2=options->defaultFreq[GNSS][PRN][l];
+							if (freq2==-1) break;
+							if (options->usableFreq[GNSS][PRN][freq2]==1 && availGNSSFreq[GNSS][freq2]==1 && epoch->measOrder[GNSS].availFreq[freq2]
+								&& options->availFreq[GNSS][PRN][freq2]==1 && freq2!=freq) {
+								break;
+							}
+						}
+						if (freq2==-1||l==MAX_FREQUENCIES_PER_GNSS) {
+							//Could not add an additional frequency.
+						} else {
+							numMeasSel=0;
+							measType=CarrierPhase;
+							//Select a carrier phase for the second frequency
+							switch (options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType]) {
+								case 0:	
+									//No measurements available
+									break;
+								case 1:
+									//Only one measurement for this frequency. 
+									//Select it regardless there is data available or not
+									measlist[0]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType][0];
+									numMeasSel++;
+									//Remove from PhaseMeas list if measurement was there
+									if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq2]>0) {
+										for(m=0;m<epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq2];m++) {
+											if (measlist[0]==epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq2][m]) {
+												for(n=m;n<(epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq2]-1);n++) {
+													epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq2][n]=epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq2][n+1];
+												}
+												epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq2]--;
+												break;
+											}
+										}
+									}
+									break;
+								default:
+									//Loop through all available measurements. 
+									//First measurement selected will be from the CheckPhase list (these are the measurements selected by
+									//the user that must be checked. When this list is empty, the first measurement with data from the
+									//the priority list will be selected
+									if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq2]>0) {
+										//Select the last element in the list, so there is no need to move the following elements when one is selected
+										epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq2]--;
+										measlist[0]=epoch->measOrder[GNSS].PhaseMeasFilterToCSLI[PRN][freq2][epoch->measOrder[GNSS].numPhaseMeasFilterToCSLI[PRN][freq2]];
+										numMeasSel++;
+									} else {
+										for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType];m++) {
+											measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType][m]];
+											if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+												measlist[0]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freq2][measType][m];
+												numMeasSel++;
+												break;
+											}
+										}
+									}
+									break;
+							}
+							if (numMeasSel==1) {
+								if (freq==0 || freq>freq2) {
+									auxstr[2]='0'+freq2;
+									auxstr[3]='0'+freq;
+									meas3=measstr2meastype(auxstr);
+									options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][0]=meas3;
+									options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][1]=measlist[0];
+									options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][2]=meas2;
+									options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k][0]=freq2;
+									options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k][1]=freq;
+								} else {
+									auxstr[2]='0'+freq;
+									auxstr[3]='0'+freq2;
+									meas3=measstr2meastype(auxstr);
+									options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][0]=meas3;
+									options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][1]=meas2;
+									options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][2]=measlist[0];
+									options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k][0]=freq;
+									options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k][1]=freq2;
+								}
+								options->csLIfreqAutoChecked[DGNSSstruct][GNSS][PRN][freq][ADDEDFREQ]=1;
+								options->csLIfreqAutoChecked[DGNSSstruct][GNSS][PRN][freq2][ADDEDFREQ]=1;
+								options->csLIWithMeas[DGNSSstruct][GNSS][PRN][k]=0;
+								options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][k]=1;
+								options->numcsLIMeasList[DGNSSstruct][GNSS][PRN]++;
+
+								//Add measurement to DatapGap, LLI, and SNR lists
+								for(l=0;l<NUMMEASCSLI;l++) {
+									//Add measurements to Data Gap list
+									for(m=0;m<epoch->measOrder[GNSS].numMeasListDataGap[PRN];m++) {
+										if (options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][l+1]==epoch->measOrder[GNSS].measListDataGap[PRN][m]) {
+											//Measurement already in the list
+											break;
+										}
+									}
+									if (m==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+										//Meas not found in list
+										epoch->measOrder[GNSS].measListDataGap[PRN][m]=options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][l+1];
+										epoch->measOrder[GNSS].measIndListDataGap[PRN][m]=epoch->measOrder[GNSS].meas2Ind[options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][l+1]];
+										epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+									}
+									//Add measurement to SNR list
+									if (options->SNRfilter == 1) {
+										for(m=0;m<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];m++) {
+											if (options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][l+1]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][m] ||
+												epoch->measOrder[GNSS].meas2SNRInd[options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][l+1]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][m]]) {
+												//Measurement already in the list or another one in the list points to the same SNR measurement
+												//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+												break;
+											}
+										}
+										if (m==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[GNSS].measListToCheckSNR[PRN][m]=options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][l+1];
+											epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+										}
+									}
+									//Add phase measurements to LLI list
+									if (options->csLLI==1) {
+										for(m=0;m<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];m++) {
+											if (options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][l+1]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][m]) {
+												//Measurement already in the list
+												break;
+											}
+										}
+										if (m==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+											//Meas not found in list. Add it
+											epoch->measOrder[GNSS].measListToCheckLLI[PRN][m]=options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][l+1];
+											epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][m]=epoch->measOrder[GNSS].meas2Ind[options->csLIMeasList[DGNSSstruct][GNSS][PRN][k][l+1]];
+											epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+										}
+									}
+								}
+
+							}
+						}
+					}
+				}
+				//Check IGF cycle-slip detector
+				if (options->csIGF ==1 && options->autoFillcsIGF==1 && GNSS3Freq[GNSS]==1) {
+					for(k=0;k<options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+						if (meas2==options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][2] ||
+							meas2==options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][3] ||
+							meas2==options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][5] ||
+							meas2==options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][6]) {
+							//Measurement found in CS IGF list
+							break;
+						}
+					}
+					if (k==options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN]) {
+						//Fill two other frequencies necessary for IGF detector
+						freqIGF[0]=freq;
+						m=1;
+						for(l=0;l<MAX_FREQUENCIES_PER_GNSS;l++) {
+							freqIGF[m]=options->defaultFreq[GNSS][PRN][l];
+							if (freqIGF[m]==-1) break;
+							if (options->usableFreq[GNSS][PRN][freqIGF[m]]==1 && availGNSSFreq[GNSS][freqIGF[m]]==1 &&
+									epoch->measOrder[GNSS].availFreq[freqIGF[m]] && options->availFreq[GNSS][PRN][freqIGF[m]]==1 && freqIGF[m]!=freq){
+								m++;
+								if(m==4) break;
+								else {
+									//Repeat the frequency needed to check in the list
+									freqIGF[m]=freq;
+									m++;
+								}
+							}
+						}
+						if (m!=4||l==MAX_FREQUENCIES_PER_GNSS) {
+							//Could not add two additional frequencies
+						} else {
+							numMeasSel=0;
+							measType=CarrierPhase;
+							//Select a carrier phase for the two additional frequencies
+							for(l=0;l<4;l++) {
+								if (l==0 || (l==2 && epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]==0)) {
+									//Measurement for the frequency to check is known
+									measlistIGF[l]=meas2;
+									numMeasSel++;
+									//Remove from PhaseMeas list if measurement was there
+									if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]>0) {
+										for(m=0;m<epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]];m++) {
+											if (measlistIGF[l]==epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freqIGF[l]][m]) {
+												for(n=m;n<(epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]-1);n++) {
+													epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freqIGF[l]][n]=epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freqIGF[l]][n+1];
+												}
+												epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]--;
+												break;
+											}
+										}
+									}
+									continue;
+								}
+								switch (options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freqIGF[l]][measType]) {
+									case 0:	
+										//No measurements available
+										break;
+									case 1:
+										//Only one measurement for this frequency. 
+										//Select it regardless there is data available or not
+										measlistIGF[l]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freqIGF[l]][measType][0];
+										numMeasSel++;
+										//Remove from PhaseMeas list if measurement was there
+										if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]>0) {
+											for(m=0;m<epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]];m++) {
+												if (measlistIGF[l]==epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freqIGF[l]][m]) {
+													for(n=m;n<(epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]-1);n++) {
+														epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freqIGF[l]][n]=epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freqIGF[l]][n+1];
+													}
+													epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]--;
+													break;
+												}
+											}
+										}
+										break;
+									default:
+										//Loop through all available measurements. 
+										//First measurement selected will be from the CheckPhase list (these are the measurements selected by
+										//the user that must be checked. When this list is empty, the first measurement with data from the
+										//the priority list will be selected
+										if (epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]>0) {
+											//Select the last element in the list, so there is no need to move the following elements when one is selected
+											epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]--;
+											measlistIGF[l]=epoch->measOrder[GNSS].PhaseMeasFilterToCSIGF[PRN][freqIGF[l]][epoch->measOrder[GNSS].numPhaseMeasFilterToCSIGF[PRN][freqIGF[l]]];
+											numMeasSel++;
+										} else {
+											for(m=0;m<options->numMeasAvailOrder[DGNSSstruct][GNSS][PRN][freqIGF[l]][measType];m++) {
+												measPos=epoch->measOrder[GNSS].meas2Ind[options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freqIGF[l]][measType][m]];
+												if (epoch->sat[satIndex].meas[measPos].value!=-1.) {
+													measlistIGF[l]=options->MeasAvailOrder[DGNSSstruct][GNSS][PRN][freqIGF[l]][measType][m];
+													numMeasSel++;
+													break;
+												}
+											}
+										}
+										break;
+								}
+							}
+							if (numMeasSel==4) {
+								//Measurements selected. Sort frequencies
+								auxstr[0]='I';
+								auxstr[1]='G';
+								auxstr[2]='F';
+								auxstr[7]='\0';
+								auxstr2[0]='L';
+								auxstr2[1]='C';
+								auxstr2[4]='\0';
+								auxstr3[0]='L';
+								auxstr3[1]='C';
+								auxstr3[4]='\0';
+								//Save frequencies in a measurement string for ordering
+								for(l=0;l<4;l++) {
+									auxstr[l+3]='0' + (unsigned int)freqIGF[l];
+								}
+								quadmeas=0;
+								meas = measstr2meastype(auxstr);
+								if(meas==NA) {
+									for(l=0;l<2;l++) {
+										if(l==1 && quadmeas==1) break;
+										for(m=0;m<2;m++) {
+											if(m==1) {
+												//In second loop, swap order of the combinations
+												aux1=freqIGF[0];
+												freqIGF[0]=freqIGF[2];
+												freqIGF[2]=aux1;
+												aux1=freqIGF[1];
+												freqIGF[1]=freqIGF[3];
+												freqIGF[3]=aux1;
+												aux1=(int)auxstr[3];
+												auxstr[3]=auxstr[5];
+												auxstr[5]=(char)aux1;
+												aux1=(int)auxstr[4];
+												auxstr[4]=auxstr[6];
+												auxstr[6]=(char)aux1;
+												aux1=(int)measlistIGF[0];
+												measlistIGF[0]=measlistIGF[2];
+												measlistIGF[2]=(enum MeasurementType)aux1;
+												aux1=(int)measlistIGF[1];
+												measlistIGF[1]=measlistIGF[3];
+												measlistIGF[3]=(enum MeasurementType)aux1;
+												meas = measstr2meastype(auxstr);
+												if (meas!=NA) break;
+											}
+											for(n=0;n<3;n++) {
+												if(n==0) {
+													//Swap first 2 frequency numbers
+													aux1=freqIGF[1];
+													freqIGF[1]=freqIGF[0];
+													freqIGF[0]=aux1;
+													aux1=(int)auxstr[4];
+													auxstr[4]=auxstr[3];
+													auxstr[3]=(char)aux1;
+													aux1=(int)measlistIGF[1];
+													measlistIGF[1]=measlistIGF[0];
+													measlistIGF[0]=(enum MeasurementType)aux1;
+												} else if (n==1) {
+													//Swap last 2 frequency numbers (leaving the first 2 numbers swapped)
+													aux1=freqIGF[3];
+													freqIGF[3]=freqIGF[2];
+													freqIGF[2]=aux1;
+													aux1=(int)auxstr[6];
+													auxstr[6]=auxstr[5];
+													auxstr[5]=(char)aux1;
+													aux1=(int)measlistIGF[3];
+													measlistIGF[3]=measlistIGF[2];
+													measlistIGF[2]=(enum MeasurementType)aux1;
+												} else {
+													//Swap first 2 frequency numbers (so they are as in original position) and leave last 2 numbers swapped
+													aux1=freqIGF[1];
+													freqIGF[1]=freqIGF[0];
+													freqIGF[0]=aux1;
+													aux1=(int)auxstr[4];
+													auxstr[4]=auxstr[3];
+													auxstr[3]=(char)aux1;
+													aux1=(int)measlistIGF[1];
+													measlistIGF[1]=measlistIGF[0];
+													measlistIGF[0]=(enum MeasurementType)aux1;
+												}
+												meas = measstr2meastype(auxstr);
+												if (meas!=NA) break;
+											}
+											if (meas!=NA) break;
+										}
+										if (meas!=NA) break;
+										else if (quadmeas==0) {
+											//In the case of three frequencies, the repeated frequency may be set
+											//toguether at the beginning or at the end (example 1123 or 2311)
+											//Swap second and third frequency number so there are two pairo od
+											//frequencies with the different frequencies
+											aux1=freqIGF[1];
+											freqIGF[1]=freqIGF[2];
+											freqIGF[2]=aux1;
+											aux1=(int)auxstr[4];
+											auxstr[4]=auxstr[5];
+											auxstr[5]=(char)aux1;
+											aux1=(int)measlistIGF[1];
+											measlistIGF[1]=measlistIGF[2];
+											measlistIGF[2]=(enum MeasurementType)aux1;
+										}
+									}
+								}
+								if (meas!=NA) {
+									auxstr2[2]='0'+freqIGF[0];
+									auxstr2[3]='0'+freqIGF[1];
+									meas2=measstr2meastype(auxstr2);
+									auxstr3[2]='0'+freqIGF[2];
+									auxstr3[3]='0'+freqIGF[3];
+									meas3=measstr2meastype(auxstr3);
+									options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][0]=meas;
+									options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][1]=meas2;
+									options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][2]=measlistIGF[0];
+									options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][3]=measlistIGF[1];
+									options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][4]=meas3;
+									options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][5]=measlistIGF[2];
+									options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][6]=measlistIGF[3];
+									options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k][0]=freqIGF[0];
+									options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k][1]=freqIGF[1];
+									options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k][2]=freqIGF[2];
+									options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k][3]=freqIGF[3];
+									options->csIGFfreqAutoChecked[DGNSSstruct][GNSS][PRN][freqIGF[0]][ADDEDFREQ]=1;
+									options->csIGFfreqAutoChecked[DGNSSstruct][GNSS][PRN][freqIGF[1]][ADDEDFREQ]=1;
+									options->csIGFfreqAutoChecked[DGNSSstruct][GNSS][PRN][freqIGF[2]][ADDEDFREQ]=1;
+									options->csIGFfreqAutoChecked[DGNSSstruct][GNSS][PRN][freqIGF[3]][ADDEDFREQ]=1;
+									options->csIGFWithMeas[DGNSSstruct][GNSS][PRN][k]=0;
+									options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][k]=1;
+									options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN]++;
+
+									//Add measurement to DatapGap, LLI, and SNR lists
+									for(l=2;l<=NUMMEASCSIGF+2;l++) {
+										if(l==4) continue;
+										//Add measurements to Data Gap list
+										for(m=0;m<epoch->measOrder[GNSS].numMeasListDataGap[PRN];m++) {
+											if (options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][l]==epoch->measOrder[GNSS].measListDataGap[PRN][m]) {
+												//Measurement already in the list
+												break;
+											}
+										}
+										if (m==epoch->measOrder[GNSS].numMeasListDataGap[PRN]) {
+											//Meas not found in list
+											epoch->measOrder[GNSS].measListDataGap[PRN][m]=options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][l];
+											epoch->measOrder[GNSS].measIndListDataGap[PRN][m]=epoch->measOrder[GNSS].meas2Ind[options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][l]];
+											epoch->measOrder[GNSS].numMeasListDataGap[PRN]++;
+										}
+										//Add measurement to SNR list
+										if (options->SNRfilter == 1) {
+											for(m=0;m<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];m++) {
+												if (options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][l]==epoch->measOrder[GNSS].measListToCheckSNR[PRN][m] ||
+													epoch->measOrder[GNSS].meas2SNRInd[options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][l]]==epoch->measOrder[GNSS].meas2SNRInd[epoch->measOrder[GNSS].measListToCheckSNR[PRN][m]]) {
+													//Measurement already in the list or another one in the list points to the same SNR measurement
+													//This avoids checking the same SNR more than once (smaller list is less computation time checking SNR)
+													break;
+												}
+											}
+											if (m==epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]) {
+												//Meas not found in list. Add it
+												epoch->measOrder[GNSS].measListToCheckSNR[PRN][m]=options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][l];
+												epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN]++;
+											}
+										}
+										//Add phase measurements to LLI list
+										if (options->csLLI==1) {
+											for(m=0;m<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];m++) {
+												if (options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][l]==epoch->measOrder[GNSS].measListToCheckLLI[PRN][m]) {
+													//Measurement already in the list
+													break;
+												}
+											}
+											if (m==epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]) {
+												//Meas not found in list. Add it
+												epoch->measOrder[GNSS].measListToCheckLLI[PRN][m]=options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][l];
+												epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][m]=epoch->measOrder[GNSS].meas2Ind[options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k][l]];
+												epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN]++;
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			//If measurements is smoothed and all its measurements are selected (checked before), add it to the list of measurements to smooth
+			if (options->filterMeasSmoothed[DGNSSstruct][GNSS][PRN][i]==1) {
+				options->filterIndListWithSmoothing[DGNSSstruct][GNSS][PRN][options->numfilterMeasWithSmoothing[DGNSSstruct][GNSS][PRN]]=i;
+				options->numfilterMeasWithSmoothing[DGNSSstruct][GNSS][PRN]++;
+			}
+		}
+
+		//Fill the index for the printing order of PREFIT and POSTFIT (order by measurement type)
+		//The loop will be done four times. so pseudoranges are index first, then smoothed pseudoranges, then carrier phases and Doppler at the end
+		//This index is only built for the rover, as PREFIT or POSTFIT are only with the rover
+		//This index will also be used for the prefit outlier detector, as it needs to run separately for each constellation and measurement
+		if (DGNSSstruct==ROVERPOS) {
+			for(k=0;k<MAX_MEASKIND_PRINT_MEASUREMENTS;k++) {
+				switch(k) {
+					case PRINT_ORDER_CODE: //k=0
+						measType=Pseudorange;
+						smooth=NONSMOOTHED;
+						break;
+					case PRINT_ORDER_CODE_SMOOTHED: //k=1
+						measType=Pseudorange;
+						smooth=SMOOTHED;
+						break;
+					default: //case PRINT_ORDER_PHASE or k=2
+						measType=CarrierPhase;
+						smooth=NONSMOOTHED;
+						break;
+				}
+				for(l=0;l<options->numfilterMeasList[ROVERPOS][GNSS][PRN];l++) {
+
+					if (options->filterListAllMeasSelected[ROVERPOS][GNSS][PRN][l]!=MEASSELECTED) continue;
+
+					if (options->filterMeasKind[ROVERPOS][GNSS][PRN][l]==measType && options->filterMeasSmoothed[ROVERPOS][GNSS][PRN][l]==smooth) {
+						//To uniquely distinguish each measurement, a unique number is computed (kind of a "hash"). It is computed by adding factors
+						//of 1000 to each measurement
+						switch(options->filterMeasTypeList[ROVERPOS][GNSS][PRN][l]) {
+							case SinglePseudorange: case SingleCarrierPhase: case SingleDoppler: case SinglePseudorangeSmoothed:
+								MeasCode=(long long int)(options->filterMeasList[ROVERPOS][GNSS][PRN][l][0]*1E12);
+								break;
+							case IonoFreeCombCode: case DivergenceFreeCode: case GraphicComb: case IonoFreeCombPhase:
+							case DivergenceFreePhase: case IonoFreeCombCodeSmoothed: case DivergenceFreeCodeSmoothed:
+								MeasCode=(long long int)(options->filterMeasList[ROVERPOS][GNSS][PRN][l][0]*1E12+
+										options->filterMeasList[ROVERPOS][GNSS][PRN][l][1]*1E9+
+										options->filterMeasList[ROVERPOS][GNSS][PRN][l][2]*1E6);
+								break;
+							case SecondIonoFreeCode: case SecondIonoFreePhase:
+							case SecondIonoFreeCodeSmoothed:	
+								MeasCode=(long long int)(options->filterMeasList[ROVERPOS][GNSS][PRN][l][0]*1E12+
+										options->filterMeasList[ROVERPOS][GNSS][PRN][l][1]*1E9+
+										options->filterMeasList[ROVERPOS][GNSS][PRN][l][2]*1E6+
+										options->filterMeasList[ROVERPOS][GNSS][PRN][l][3]*1E3+
+										options->filterMeasList[ROVERPOS][GNSS][PRN][l][4]);
+								strcpy(meas1str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+								strcpy(meas2str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][1]));
+								strcpy(meas3str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][2]));
+								strcpy(meas4str,meastype2measstr(options->filterMeasList[DGNSSstruct][GNSS][PRN][i][3]));
+								sprintf(options->filterMeasText[ROVERPOS][GNSS][PRN][i],"%s-%s-%s-%s-%s",meas1str,meas2str,meas3str,meas4str,meastype2measstr(options->filterMeasList[ROVERPOS][GNSS][PRN][i][4]));
+								break;
+							default:
+								continue;
+								break;
+						}
+						if (smooth==SMOOTHED) {
+							#if defined RANGECASEENABLED
+							switch (options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][0]) {
+								case NA ... S9N:
+							#else
+							if (options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][0]<ENDMEAS) {
+							#endif
+								 MeasCodeSmooth=(long long int)(options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][0]*1E12);
+							#if defined RANGECASEENABLED
+									break;
+								case ENDMEAS ... DF09:
+							#else
+							} else if (options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][0]<IGF1012) {
+							#endif
+								 MeasCodeSmooth=(long long int)(options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][0]*1E12+
+										options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][1]*1E9+
+										options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][2]*1E6);
+							#if defined RANGECASEENABLED
+									break;
+								default:
+							#else
+							} else {
+							#endif
+								 MeasCodeSmooth=(long long int)(options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][0]*1E12+
+										options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][1]*1E9+
+										options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][2]*1E6+
+										options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][3]*1E3+
+										options->filterSmoothMeasList[ROVERPOS][GNSS][PRN][l][4]);
+							#if defined RANGECASEENABLED
+									break;
+							}
+							#else
+							}
+							#endif
+							for(m=0;m<epoch->measOrder[GNSS].numMeasIndexed[k];m++) {
+								if (epoch->measOrder[GNSS].MeasCodeIndexed[k][m]==MeasCode) break;
+							}
+							if (m==epoch->measOrder[GNSS].numMeasIndexed[k]) {
+								//Code smoothed measurement not indexed
+								epoch->measOrder[GNSS].MeasCodeIndexed[k][m]=MeasCode;
+								epoch->measOrder[GNSS].SmoothMeasCodeIndexed[m][epoch->measOrder[GNSS].numMeasSmoothIndexed[m]]=MeasCodeSmooth;
+								epoch->measOrder[GNSS].PosSmoothCode2Index[m][epoch->measOrder[GNSS].numMeasSmoothIndexed[m]]=epoch->measOrder[GNSS].numMeasIndexed[k];
+								epoch->measOrder[GNSS].MeasPos2PrintPos[PRN][l]=epoch->measOrder[GNSS].numMeasIndexed[k];
+								epoch->measOrder[GNSS].numMeasSmoothIndexed[m]++;
+								epoch->measOrder[GNSS].numMeasIndexed[k]++;
+							} else {
+								//Code smoothed measurement indexed. Search for the phase measurement used for smoothing
+								for(n=0;n<epoch->measOrder[GNSS].numMeasSmoothIndexed[m];n++) {
+									if (epoch->measOrder[GNSS].SmoothMeasCodeIndexed[m][n]==MeasCodeSmooth) break;
+								}
+								if (n==epoch->measOrder[GNSS].numMeasSmoothIndexed[m]) {
+									//Smoothed measurement not found
+									epoch->measOrder[GNSS].SmoothMeasCodeIndexed[m][epoch->measOrder[GNSS].numMeasSmoothIndexed[m]]=MeasCodeSmooth;
+									epoch->measOrder[GNSS].PosSmoothCode2Index[m][n]=epoch->measOrder[GNSS].numMeasIndexed[k];
+									epoch->measOrder[GNSS].MeasPos2PrintPos[PRN][l]=epoch->measOrder[GNSS].numMeasIndexed[k];
+									epoch->measOrder[GNSS].numMeasSmoothIndexed[m]++;
+									epoch->measOrder[GNSS].numMeasIndexed[k]++;
+								} else {
+									epoch->measOrder[GNSS].MeasPos2PrintPos[PRN][l]=epoch->measOrder[GNSS].PosSmoothCode2Index[m][n];
+								}
+							}
+							//Repeat the process but for the list of measurements of all constellation (for EPOCHSAT print)
+							if (options->printSatellites==1) {
+								for(m=0;m<epoch->numMeasAllGNSSIndexed;m++) {
+									if (epoch->MeasCodeAllGNSSIndexed[m]==MeasCode) break;
+								}
+								if (m==epoch->numMeasAllGNSSIndexed) {
+									//Code smoothed measurement not indexed
+									epoch->printTypeAllGNSSAllIndexed=realloc(epoch->printTypeAllGNSSAllIndexed,sizeof(int)*(m+1));
+									epoch->numMeasSmoothAllGNSSIndexed=realloc(epoch->numMeasSmoothAllGNSSIndexed,sizeof(int)*(m+1));
+									epoch->MeasCodeAllGNSSIndexed=realloc(epoch->MeasCodeAllGNSSIndexed,sizeof(long long int)*(m+1));
+									epoch->SmoothMeasCodeAllGNSSIndexed=realloc(epoch->SmoothMeasCodeAllGNSSIndexed,sizeof(long long int*)*(m+1));
+									epoch->PosSmoothCodeAllGNSS2Index=realloc(epoch->PosSmoothCodeAllGNSS2Index,sizeof(int*)*(m+1));
+									epoch->MeasStrAllGNSSIndexed=realloc(epoch->MeasStrAllGNSSIndexed,sizeof(char*)*(m+1));
+									epoch->MeasStrSmoothAllGNSSIndexed=realloc(epoch->MeasStrSmoothAllGNSSIndexed,sizeof(char*)*(m+1));
+
+									epoch->SmoothMeasCodeAllGNSSIndexed[m]=NULL;
+									epoch->SmoothMeasCodeAllGNSSIndexed[m]=malloc(sizeof(long long int));
+									epoch->PosSmoothCodeAllGNSS2Index[m]=NULL;
+									epoch->PosSmoothCodeAllGNSS2Index[m]=malloc(sizeof(int));
+
+
+									epoch->numMeasSmoothAllGNSSIndexed[m]=0;
+									epoch->MeasCodeAllGNSSIndexed[m]=MeasCode;
+									epoch->SmoothMeasCodeAllGNSSIndexed[m][epoch->numMeasSmoothAllGNSSIndexed[m]]=MeasCodeSmooth;
+									epoch->PosSmoothCodeAllGNSS2Index[m][epoch->numMeasSmoothAllGNSSIndexed[m]]=epoch->numMeasAllGNSSIndexed;
+									epoch->MeasPosAllGNSS2PrintPos[GNSS][PRN][l]=epoch->numMeasAllGNSSIndexed;
+									epoch->MeasStrAllGNSSIndexed[m]=options->filterMeasText[ROVERPOS][GNSS][PRN][l];
+									epoch->MeasStrSmoothAllGNSSIndexed[m]=options->filterSmoothMeasText[ROVERPOS][GNSS][PRN][l];
+									epoch->printTypeAllGNSSAllIndexed[m]=FilterMeasType2PrintType[options->filterMeasTypeList[ROVERPOS][GNSS][PRN][l]];
+									epoch->numMeasSmoothAllGNSSIndexed[m]++;
+									epoch->numMeasAllGNSSIndexed++;
+								} else {
+									//Code smoothed measurement indexed. Search for the phase measurement used for smoothing
+									for(n=0;n<epoch->numMeasSmoothAllGNSSIndexed[m];n++) {
+										if (epoch->SmoothMeasCodeAllGNSSIndexed[m][n]==MeasCodeSmooth) break;
+									}
+									if (n==epoch->numMeasSmoothAllGNSSIndexed[m]) {
+										//Smoothed measurement not found
+										//Even though there is no new code (for pseudorange), we add a new slot so it is the same size as epoch->numMeasAllGNSSIndexed
+										epoch->printTypeAllGNSSAllIndexed=realloc(epoch->printTypeAllGNSSAllIndexed,sizeof(int)*(epoch->numMeasAllGNSSIndexed+1));
+										epoch->numMeasSmoothAllGNSSIndexed=realloc(epoch->numMeasSmoothAllGNSSIndexed,sizeof(int)*(epoch->numMeasAllGNSSIndexed+1));
+										epoch->MeasCodeAllGNSSIndexed=realloc(epoch->MeasCodeAllGNSSIndexed,sizeof(long long int)*(epoch->numMeasAllGNSSIndexed+1));
+										epoch->SmoothMeasCodeAllGNSSIndexed=realloc(epoch->SmoothMeasCodeAllGNSSIndexed,sizeof(long long int*)*(epoch->numMeasAllGNSSIndexed+1));
+										epoch->PosSmoothCodeAllGNSS2Index=realloc(epoch->PosSmoothCodeAllGNSS2Index,sizeof(int*)*(epoch->numMeasAllGNSSIndexed+1));
+										epoch->MeasStrAllGNSSIndexed=realloc(epoch->MeasStrAllGNSSIndexed,sizeof(char*)*(epoch->numMeasAllGNSSIndexed+1));
+										epoch->MeasStrSmoothAllGNSSIndexed=realloc(epoch->MeasStrSmoothAllGNSSIndexed,sizeof(char*)*(epoch->numMeasAllGNSSIndexed+1));
+
+										epoch->SmoothMeasCodeAllGNSSIndexed[epoch->numMeasAllGNSSIndexed]=NULL;
+										epoch->SmoothMeasCodeAllGNSSIndexed[epoch->numMeasAllGNSSIndexed]=malloc(sizeof(long long int));
+										epoch->PosSmoothCodeAllGNSS2Index[epoch->numMeasAllGNSSIndexed]=NULL;
+										epoch->PosSmoothCodeAllGNSS2Index[epoch->numMeasAllGNSSIndexed]=malloc(sizeof(int));
+
+										epoch->printTypeAllGNSSAllIndexed=realloc(epoch->printTypeAllGNSSAllIndexed,sizeof(int)*(epoch->numMeasAllGNSSIndexed+1));
+										epoch->SmoothMeasCodeAllGNSSIndexed[m]=realloc(epoch->SmoothMeasCodeAllGNSSIndexed[m],sizeof(long long int)*(n+1));
+										epoch->PosSmoothCodeAllGNSS2Index[m]=realloc(epoch->PosSmoothCodeAllGNSS2Index[m],sizeof(int)*(n+1));
+										epoch->MeasStrAllGNSSIndexed=realloc(epoch->MeasStrAllGNSSIndexed,sizeof(char*)*(epoch->numMeasAllGNSSIndexed+1));
+										epoch->MeasStrSmoothAllGNSSIndexed=realloc(epoch->MeasStrSmoothAllGNSSIndexed,sizeof(char*)*(epoch->numMeasAllGNSSIndexed+1));
+
+										//For the added position to mathch epoch->numMeasAllGNSSIndexed size, copy also measurement code
+										epoch->MeasCodeAllGNSSIndexed[epoch->numMeasAllGNSSIndexed]=MeasCode;
+										epoch->SmoothMeasCodeAllGNSSIndexed[epoch->numMeasAllGNSSIndexed][0]=MeasCodeSmooth;
+										epoch->numMeasSmoothAllGNSSIndexed[epoch->numMeasAllGNSSIndexed]=1;
+
+										epoch->SmoothMeasCodeAllGNSSIndexed[m][n]=MeasCodeSmooth;
+										epoch->PosSmoothCodeAllGNSS2Index[m][n]=epoch->numMeasAllGNSSIndexed;
+										epoch->MeasPosAllGNSS2PrintPos[GNSS][PRN][l]=epoch->numMeasAllGNSSIndexed;
+										epoch->MeasStrAllGNSSIndexed[epoch->numMeasAllGNSSIndexed]=options->filterMeasText[ROVERPOS][GNSS][PRN][l];
+										epoch->MeasStrSmoothAllGNSSIndexed[epoch->numMeasAllGNSSIndexed]=options->filterSmoothMeasText[ROVERPOS][GNSS][PRN][l];
+										epoch->printTypeAllGNSSAllIndexed[epoch->numMeasAllGNSSIndexed]=FilterMeasType2PrintType[options->filterMeasTypeList[ROVERPOS][GNSS][PRN][l]];
+										epoch->numMeasSmoothAllGNSSIndexed[m]++;
+										epoch->numMeasAllGNSSIndexed++;
+									} else {
+										epoch->MeasPosAllGNSS2PrintPos[GNSS][PRN][l]=epoch->PosSmoothCodeAllGNSS2Index[m][n];
+									}
+								}
+							}
+						} else {
+							for(m=0;m<epoch->measOrder[GNSS].numMeasIndexed[k];m++) {
+								if (epoch->measOrder[GNSS].MeasCodeIndexed[k][m]==MeasCode) break;
+							}
+							if (m==epoch->measOrder[GNSS].numMeasIndexed[k]) {
+								//Meas not found
+								epoch->measOrder[GNSS].MeasCodeIndexed[k][m]=MeasCode;
+								epoch->measOrder[GNSS].MeasPos2PrintPos[PRN][l]=epoch->measOrder[GNSS].numMeasIndexed[k];
+								epoch->measOrder[GNSS].numMeasIndexed[k]++;
+							} else {
+								epoch->measOrder[GNSS].MeasPos2PrintPos[PRN][l]=m;
+							}
+							//Repeat the process but for the list of measurements of all constellation (for EPOCHSAT print)
+							if (options->printSatellites==1) {
+								for(m=0;m<epoch->numMeasAllGNSSIndexed;m++) {
+									if (epoch->MeasCodeAllGNSSIndexed[m]==MeasCode) break;
+								}
+								if (m==epoch->numMeasAllGNSSIndexed) {
+									//Meas not found
+									epoch->printTypeAllGNSSAllIndexed=realloc(epoch->printTypeAllGNSSAllIndexed,sizeof(int)*(m+1));
+									epoch->numMeasSmoothAllGNSSIndexed=realloc(epoch->numMeasSmoothAllGNSSIndexed,sizeof(int)*(m+1));
+									epoch->MeasCodeAllGNSSIndexed=realloc(epoch->MeasCodeAllGNSSIndexed,sizeof(long long int)*(m+1));
+									epoch->SmoothMeasCodeAllGNSSIndexed=realloc(epoch->SmoothMeasCodeAllGNSSIndexed,sizeof(long long int*)*(m+1));
+									epoch->PosSmoothCodeAllGNSS2Index=realloc(epoch->PosSmoothCodeAllGNSS2Index,sizeof(int*)*(m+1));
+									epoch->MeasStrAllGNSSIndexed=realloc(epoch->MeasStrAllGNSSIndexed,sizeof(char*)*(m+1));
+									epoch->MeasStrSmoothAllGNSSIndexed=realloc(epoch->MeasStrSmoothAllGNSSIndexed,sizeof(char*)*(m+1));
+
+									epoch->SmoothMeasCodeAllGNSSIndexed[m]=NULL;
+									epoch->SmoothMeasCodeAllGNSSIndexed[m]=malloc(sizeof(long long int));
+									epoch->PosSmoothCodeAllGNSS2Index[m]=NULL;
+									epoch->PosSmoothCodeAllGNSS2Index[m]=malloc(sizeof(int));
+									epoch->numMeasSmoothAllGNSSIndexed[m]=0;
+								
+									epoch->MeasCodeAllGNSSIndexed[m]=MeasCode;
+									epoch->MeasPosAllGNSS2PrintPos[GNSS][PRN][l]=epoch->numMeasAllGNSSIndexed;
+									epoch->MeasStrAllGNSSIndexed[m]=options->filterMeasText[ROVERPOS][GNSS][PRN][l];
+									epoch->MeasStrSmoothAllGNSSIndexed[m]=options->filterSmoothMeasText[ROVERPOS][GNSS][PRN][l];
+									epoch->printTypeAllGNSSAllIndexed[m]=FilterMeasType2PrintType[options->filterMeasTypeList[ROVERPOS][GNSS][PRN][l]];
+									epoch->numMeasAllGNSSIndexed++;
+								} else {
+									epoch->MeasPosAllGNSS2PrintPos[GNSS][PRN][l]=m;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		//If CSSFDATA is enabled, save the measurement in text format for printing
+		if (options->printSFdata==1||options->printCycleslips==1) {
+			for(i=0;i<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];i++) {
+				if (options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][i]!=MEASSELECTED) continue;
+
+				strcpy(meas1str,meastype2measstr(options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][0]));
+				strcpy(meas2str,meastype2measstr(options->csSFMeasList[DGNSSstruct][GNSS][PRN][i][1]));
+				sprintf(options->csSFMeasText[DGNSSstruct][GNSS][PRN][i],"%3s-%3s",meas1str,meas2str);
+			}
+		}
+
+		//If CSMWDATA is enabled, save the measurement in text format for printing
+		if (options->printMWdata==1||options->printCycleslips==1) {
+			for(i=0;i<options->numcsMWMeasList[DGNSSstruct][GNSS][PRN];i++) {
+				if (options->csMWMeasSelected[DGNSSstruct][GNSS][PRN][i]!=MEASSELECTED) continue;
+
+				strcpy(meas1str,meastype2measstr(options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][2]));
+				strcpy(meas2str,meastype2measstr(options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][3]));
+				strcpy(meas3str,meastype2measstr(options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][5]));
+				strcpy(meas4str,meastype2measstr(options->csMWMeasList[DGNSSstruct][GNSS][PRN][i][6]));
+				sprintf(options->csMWMeasText[DGNSSstruct][GNSS][PRN][i],"%3s-%3s-%3s-%3s",meas1str,meas2str,meas3str,meas4str);
+			}
+		}
+
+		//If CSLIDATA is enabled, save the measurement in text format for printing
+		if (options->printLIdata==1||options->printCycleslips==1) {
+			for(i=0;i<options->numcsLIMeasList[DGNSSstruct][GNSS][PRN];i++) {
+				if (options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][i]!=MEASSELECTED) continue;
+
+				strcpy(meas1str,meastype2measstr(options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][1]));
+				strcpy(meas2str,meastype2measstr(options->csLIMeasList[DGNSSstruct][GNSS][PRN][i][2]));
+				sprintf(options->csLIMeasText[DGNSSstruct][GNSS][PRN][i],"%3s-%3s",meas1str,meas2str);
+			}
+		}
+
+		//If CSIGFDATA is enabled, save the measurement in text format for printing
+		if (options->printIGFdata==1||options->printCycleslips==1) {
+			for(i=0;i<options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN];i++) {
+				if (options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][i]!=MEASSELECTED) continue;
+
+				
+				if (options->csIGFminNoise==1) {
+					strcpy(meas1str,meastype2measstr(options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][2]));
+					strcpy(meas2str,meastype2measstr(options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][3]));
+
+					if (options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][5]!=options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][2] &&
+							options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][5]!=options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][3]) {
+						strcpy(meas3str,meastype2measstr(options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][5]));
+					} else {
+						strcpy(meas3str,meastype2measstr(options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][6]));
+					}
+					sprintf(options->csIGFMeasText[DGNSSstruct][GNSS][PRN][i],"%3s-%3s-%3s",meas1str,meas2str,meas3str);
+				} else {
+					strcpy(meas1str,meastype2measstr(options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][2]));
+					strcpy(meas2str,meastype2measstr(options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][3]));
+					strcpy(meas3str,meastype2measstr(options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][5]));
+					strcpy(meas4str,meastype2measstr(options->csIGFMeasList[DGNSSstruct][GNSS][PRN][i][6]));
+					sprintf(options->csIGFMeasText[DGNSSstruct][GNSS][PRN][i],"%3s-%3s-%3s-%3s",meas1str,meas2str,meas3str,meas4str);
+				}				
+			}
+		}
+	}
+}
+
+/*****************************************************************************
+ * Name        : computeIGFfactors
+ * Description : Compute the three factors for creating a three frequency
+ *                 iono-geometry free combination
+ *                 The formula are obtained from the following paper:
+ *
+ *                 The System: Three’s the Challenge
+ *                 By Oliver Montenbruck, André Hauschild (DLR/German Space Operations Center), 
+ *                 Peter Steigenberger (Technische Universität München) 
+ *                 and Richard B. Langley (University of New Brunswick)
+ *                 GPS World, August 1, 2010
+ *                 https://www.gpsworld.com/threes-challenge/
+ *
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TEpoch  *epoch                  IO N/A  Structure to save the data
+ * enum GNSSystem  GNSS            I  N/A  GNSS system of the satellite
+ * int  PRN                        I  N/A  PRN identifier of the satellite
+ * enum MeasurementType IGFcomb    I  N/A  IGF combination - IGF1012
+ *                                          The substraction of IGF1012 is to make the
+ *                                          combination values to be between 0 
+ *                                          and MAX_TRIPLE_FREQUENCIES_COMBINATIONS 
+ * cont int  *freqList             I  N/A  List of frequencies to combine
+ *****************************************************************************/
+void computeIGFfactors (TEpoch *epoch, enum GNSSystem GNSS, int PRN, enum MeasurementType IGFcomb, const int *freqList) {
+
+	int 	freq1,freq2,freq3;
+	double 	lambda1,lambda2,lambda3;
+	double	N;
+
+
+	//Get the three frequencies. The list has four frequencies, so one of them will be repeated
+	freq1=freqList[0];
+	freq2=freqList[1];
+
+	if (freqList[2]!=freq1 && freqList[2]!=freq2) {
+		freq3=freqList[2];
+	} else {
+		freq3=freqList[3];
+	}
+
+	lambda1=epoch->measOrder[GNSS].lambdaMeas[freq1][PRN];
+	lambda2=epoch->measOrder[GNSS].lambdaMeas[freq2][PRN];
+	lambda3=epoch->measOrder[GNSS].lambdaMeas[freq3][PRN];
+
+	if (lambda1==1. || lambda2==1. || lambda3==1. ) {
+		//Missing lambda (unexistent frequency or unknown GLONASS k factor)
+		epoch->measOrder[GNSS].IGFcombFactors[PRN][IGFcomb][0]=0.;
+		epoch->measOrder[GNSS].IGFcombFactors[PRN][IGFcomb][1]=0.;
+		epoch->measOrder[GNSS].IGFcombFactors[PRN][IGFcomb][2]=0.;
+	} else {
+
+		N=sqrt( pow(lambda3*lambda3-lambda2*lambda2,2) + pow(lambda1*lambda1-lambda3*lambda3,2) + pow(lambda2*lambda2-lambda1*lambda1,2)  );
+
+		epoch->measOrder[GNSS].IGFcombFactors[PRN][IGFcomb][0]=(lambda3*lambda3-lambda2*lambda2)/N;
+		epoch->measOrder[GNSS].IGFcombFactors[PRN][IGFcomb][1]=(lambda1*lambda1-lambda3*lambda3)/N;
+		epoch->measOrder[GNSS].IGFcombFactors[PRN][IGFcomb][2]=(lambda2*lambda2-lambda1*lambda1)/N;
+	}
+}
+
+
+/*****************************************************************************
  * Name        : SaveDataforGEOselection
  * Description : In SBAS mode, when option to select GEO with smallest
  *                 protection level is enabled, with every iteration that allows
  *                 to compute a solution, the data will be buffered so the
  *                 next iteration can be computed without losing the
  *                 values for current iteration
- *                 NOTE: The only value missing to be saved is the windup correction.
- *                 As this value is not computed in SBAS mode, it is not necessary.
  * Parameters  :
  * Name                           |Da|Unit|Description
  * TEpoch  *epoch                  IO N/A  TEpoch structure
@@ -4563,154 +14196,378 @@ double getMeasurementValue (TEpoch *epoch, enum GNSSystem system, int PRN, enum 
  *****************************************************************************/
 void SaveDataforGEOselection (TEpoch *epoch, TFilterSolution *solution, int OverAlarmLimits, TOptions *options) {
 
-	int 	i,j,k;
+	int 	i,j,k,l;
 	int		pos,numsat;
+	int		reAllocBuffers=0;
+	int		prevAllocNumSatellites,prevAllocNumSatellitesGNSS;
+	int		prevAllocNumPrintGNSS,prevAllocLinesstoredMODEL,prevAllocLinesstoredSATSEL;
+	int		endReallocPos;
+	
 
 	pos=epoch->Buffer_NumDataStored;
 	numsat=epoch->numSatellites;
 
-	for(k=0;k<epoch->Buffer_NumDataStored;k++) {
+	prevAllocNumSatellites=epoch->Buffer_numSatellitesAlloc;;
+	prevAllocNumSatellitesGNSS=epoch->Buffer_numSatellitesGNSSAlloc;
+	prevAllocNumPrintGNSS=epoch->Buffer_numPrintGNSSAlloc;
+	prevAllocLinesstoredMODEL=epoch->Buffer_linesstoredMODELAlloc;
+	prevAllocLinesstoredSATSEL=epoch->Buffer_linesstoredSATSELAlloc;
+ 
+	for(l=0;l<epoch->Buffer_NumDataStored;l++) {
 		//Check if current GEO is already stored. This can occur if current GEO had solution
 		//and it could not change to any other GEO
-		if (epoch->Buffer_GEOPRN[k]==epoch->currentGEOPRN) {
+		if (epoch->BufferBestGEO[l].Buffer_GEOPRN==epoch->currentGEOPRN) {
+			//Empty print buffers
 			for(i=0;i<numsat;i++) {
-				printbufferMODEL[i][0]='\0';
 				printbufferSBASIONO[i][0]='\0';
 				printbufferSBASCORR[i][0]='\0';
 				printbufferSBASVAR[i][0]='\0';
 				printbufferSBASUNSEL[i][0]='\0';
-				for(j=0;j<linesstoredSATSEL[i];j++) {
-					printbufferSATSEL[i][j][0]='\0';
-				}
-				linesstoredSATSEL[i]=0;
 			}
+			for(i=0;i<epoch->numPrintGNSS;i++) {
+				for(j=0;j<epoch->numSatellitesGNSS[i];j++) {
+					for(k=0;k<linesstoredMODEL[i][j];k++) {
+						printbufferMODEL[i][j][k][0]='\0';
+					}
+					linesstoredMODEL[i][j]=0;
+				}
+			}				
+			for(k=0;k<linesstoredSATSEL[i][j];k++) {
+				printbufferSATSEL[i][j][k][0]='\0';
+			}
+			linesstoredSATSEL[i][j]=0;
+			printbufferSBASDFMCCORR[i][j][0]='\0';
+			printbufferSBASDFMCVAR[i][j][0]='\0';
+			printbufferSBASDFMCUNSEL[i][j][0]='\0';
 			return;
+		}
+	}
+
+	//Check if any of the required memory positions are larger than current allocated ones
+	//If any is larger, perform a realloc for all items (if any other items are smaller or equal
+	//they will be reallocated to the same size
+	if (epoch->numSatellites>epoch->Buffer_numSatellitesAlloc) {
+		epoch->Buffer_numSatellitesAlloc=epoch->numSatellites;
+		reAllocBuffers=1;
+		endReallocPos=epoch->Buffer_NumDataStoredAlloc;
+	}
+	if (epoch->numPrintGNSS>epoch->Buffer_numPrintGNSSAlloc) {
+		epoch->Buffer_numPrintGNSSAlloc=epoch->numPrintGNSS;
+		reAllocBuffers=1;
+		endReallocPos=epoch->Buffer_NumDataStoredAlloc;
+	}
+	for(i=0;i<epoch->numPrintGNSS;i++) {
+		if (epoch->numSatellitesGNSS[i]>epoch->Buffer_numSatellitesGNSSAlloc) {
+			epoch->Buffer_numSatellitesGNSSAlloc=epoch->numSatellitesGNSS[i];
+			reAllocBuffers=1;
+			endReallocPos=epoch->Buffer_NumDataStoredAlloc;
+		}
+	}
+	for(i=0;i<epoch->numPrintGNSS;i++) {
+		for(j=0;j<epoch->numSatellitesGNSS[i];j++) {
+			if (linesstoredMODEL[i][j]>epoch->Buffer_linesstoredMODELAlloc) {
+				epoch->Buffer_linesstoredMODELAlloc=linesstoredMODEL[i][j];
+				reAllocBuffers=1;
+				endReallocPos=epoch->Buffer_NumDataStoredAlloc;
+			}
+			if (linesstoredSATSEL[i][j]>epoch->Buffer_linesstoredSATSELAlloc) {
+				epoch->Buffer_linesstoredSATSELAlloc=linesstoredSATSEL[i][j];
+				reAllocBuffers=1;
+				endReallocPos=epoch->Buffer_NumDataStoredAlloc;
+			}
 		}
 	}
 
 	epoch->Buffer_NumDataStored++; //Add 1 to the number of iterations stored
 
-	//Allocate data for new iteration
-	epoch->Buffer_numsatdiscardedSBAS=realloc(epoch->Buffer_numsatdiscardedSBAS,sizeof(int)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_usableSatellites=realloc(epoch->Buffer_usableSatellites,sizeof(int)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_HPL=realloc(epoch->Buffer_HPL,sizeof(double)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_VPL=realloc(epoch->Buffer_VPL,sizeof(double)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_HDOP=realloc(epoch->Buffer_HDOP,sizeof(double)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_VDOP=realloc(epoch->Buffer_VDOP,sizeof(double)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_PDOP=realloc(epoch->Buffer_PDOP,sizeof(double)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_GDOP=realloc(epoch->Buffer_GDOP,sizeof(double)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_TDOP=realloc(epoch->Buffer_TDOP,sizeof(double)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_SBASMode=realloc(epoch->Buffer_SBASMode,sizeof(int)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_GEOindex=realloc(epoch->Buffer_GEOindex,sizeof(int)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_GEOPRN=realloc(epoch->Buffer_GEOPRN,sizeof(int)*(epoch->Buffer_NumDataStored));
 
-	epoch->Buffer_sat=realloc(epoch->Buffer_sat,sizeof(TSatellite*)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_sat[pos]=NULL;
-	epoch->Buffer_sat[pos]=malloc(sizeof(TSatellite)*numsat);
+	if (epoch->Buffer_NumDataStored>epoch->Buffer_NumDataStoredAlloc) {
 
-	epoch->Buffer_NumSatSel=realloc(epoch->Buffer_NumSatSel,sizeof(int *)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_NumSatSel[pos]=NULL;
-	epoch->Buffer_NumSatSel[pos]=malloc(sizeof(int)*numsat);
+		epoch->Buffer_NumDataStoredAlloc=epoch->Buffer_NumDataStored;
 
-	epoch->Buffer_printMODEL=realloc(epoch->Buffer_printMODEL,sizeof(char *)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_printSBASIONO=realloc(epoch->Buffer_printSBASIONO,sizeof(char *)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_printSBASCORR=realloc(epoch->Buffer_printSBASCORR,sizeof(char *)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_printSBASVAR=realloc(epoch->Buffer_printSBASVAR,sizeof(char *)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_printSBASUNSEL=realloc(epoch->Buffer_printSBASUNSEL,sizeof(char *)*(epoch->Buffer_NumDataStored));
-	epoch->Buffer_printSATSEL=realloc(epoch->Buffer_printSATSEL,sizeof(char *)*(epoch->Buffer_NumDataStored));
+		epoch->Buffer_PosDataStoredUnderAlarmLimitsPA=realloc(epoch->Buffer_PosDataStoredUnderAlarmLimitsPA,sizeof(int)*epoch->Buffer_NumDataStoredAlloc);
+		epoch->Buffer_PosDataStoredPA=realloc(epoch->Buffer_PosDataStoredPA,sizeof(int)*epoch->Buffer_NumDataStoredAlloc);
+		epoch->Buffer_PosDataStoredNPA=realloc(epoch->Buffer_PosDataStoredNPA,sizeof(int)*epoch->Buffer_NumDataStoredAlloc);
 
-	epoch->Buffer_printMODEL[pos]=NULL;
-	epoch->Buffer_printSBASIONO[pos]=NULL;
-	epoch->Buffer_printSBASCORR[pos]=NULL;
-	epoch->Buffer_printSBASVAR[pos]=NULL;
-	epoch->Buffer_printSBASUNSEL[pos]=NULL;
-	epoch->Buffer_printSATSEL[pos]=NULL;
+		//Allocate data for new iteration
+		epoch->BufferBestGEO=realloc(epoch->BufferBestGEO,sizeof(TBufferBestGEO)*epoch->Buffer_NumDataStoredAlloc);	
 
-	epoch->Buffer_printMODEL[pos]=malloc(sizeof(char *)*numsat);
-	epoch->Buffer_printSBASIONO[pos]=malloc(sizeof(char *)*numsat);
-	epoch->Buffer_printSBASCORR[pos]=malloc(sizeof(char *)*numsat);
-	epoch->Buffer_printSBASVAR[pos]=malloc(sizeof(char *)*numsat);
-	epoch->Buffer_printSBASUNSEL[pos]=malloc(sizeof(char *)*numsat);
-	epoch->Buffer_printSATSEL[pos]=malloc(sizeof(char *)*numsat);
+		epoch->BufferBestGEO[pos].Buffer_sat=NULL;
+		epoch->BufferBestGEO[pos].Buffer_sat=malloc(sizeof(TSatellite)*epoch->Buffer_numSatellitesAlloc);
 
-	for(i=0;i<numsat;i++) {
-		epoch->Buffer_printMODEL[pos][i]=NULL;
-		epoch->Buffer_printSBASIONO[pos][i]=NULL;
-		epoch->Buffer_printSBASCORR[pos][i]=NULL;
-		epoch->Buffer_printSBASVAR[pos][i]=NULL;
-		epoch->Buffer_printSBASUNSEL[pos][i]=NULL;
-		epoch->Buffer_printSATSEL[pos][i]=NULL;
+		epoch->BufferBestGEO[pos].Buffer_NumMODEL=NULL;
+		epoch->BufferBestGEO[pos].Buffer_NumMODEL=malloc(sizeof(int*)*epoch->Buffer_numPrintGNSSAlloc);
 
-		epoch->Buffer_printMODEL[pos][i]=malloc(sizeof(char)*MAX_INPUT_LINE);
-		epoch->Buffer_printSBASIONO[pos][i]=malloc(sizeof(char)*MAX_INPUT_LINE);
-		epoch->Buffer_printSBASCORR[pos][i]=malloc(sizeof(char)*MAX_INPUT_LINE);
-		epoch->Buffer_printSBASVAR[pos][i]=malloc(sizeof(char)*MAX_INPUT_LINE);
-		epoch->Buffer_printSBASUNSEL[pos][i]=malloc(sizeof(char)*MAX_INPUT_LINE);
-		epoch->Buffer_printSATSEL[pos][i]=malloc(sizeof(char *)*linesstoredSATSEL[i]);
+		epoch->BufferBestGEO[pos].Buffer_NumSatSel=NULL;
+		epoch->BufferBestGEO[pos].Buffer_NumSatSel=malloc(sizeof(int*)*epoch->Buffer_numPrintGNSSAlloc);
 
-		for(j=0;j<linesstoredSATSEL[i];j++) {
-			epoch->Buffer_printSATSEL[pos][i][j]=NULL;
-			epoch->Buffer_printSATSEL[pos][i][j]=malloc(sizeof(char)*MAX_INPUT_LINE);
+		for(i=0;i<epoch->Buffer_numPrintGNSSAlloc;i++) {
+			epoch->BufferBestGEO[pos].Buffer_NumMODEL[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_NumMODEL[i]=malloc(sizeof(int)*epoch->Buffer_numSatellitesGNSSAlloc);
+			epoch->BufferBestGEO[pos].Buffer_NumSatSel[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_NumSatSel[i]=malloc(sizeof(int)*epoch->Buffer_numSatellitesGNSSAlloc);
+		}
+
+		epoch->BufferBestGEO[pos].Buffer_printMODEL=NULL;
+		epoch->BufferBestGEO[pos].Buffer_printSBASIONO=NULL;
+		epoch->BufferBestGEO[pos].Buffer_printSBASCORR=NULL;
+		epoch->BufferBestGEO[pos].Buffer_printSBASVAR=NULL;
+		epoch->BufferBestGEO[pos].Buffer_printSBASUNSEL=NULL;
+		epoch->BufferBestGEO[pos].Buffer_printSBASDFMCCORR=NULL;
+		epoch->BufferBestGEO[pos].Buffer_printSBASDFMCVAR=NULL;
+		epoch->BufferBestGEO[pos].Buffer_printSBASDFMCUNSEL=NULL;
+		epoch->BufferBestGEO[pos].Buffer_printSATSEL=NULL;
+
+		epoch->BufferBestGEO[pos].Buffer_printSBASIONO=malloc(sizeof(char *)*epoch->Buffer_numSatellitesAlloc);
+		epoch->BufferBestGEO[pos].Buffer_printSBASCORR=malloc(sizeof(char *)*epoch->Buffer_numSatellitesAlloc);
+		epoch->BufferBestGEO[pos].Buffer_printSBASVAR=malloc(sizeof(char *)*epoch->Buffer_numSatellitesAlloc);
+		epoch->BufferBestGEO[pos].Buffer_printSBASUNSEL=malloc(sizeof(char *)*epoch->Buffer_numSatellitesAlloc);
+
+		//MODEL, SATSEL, SBASDFMCCORR, SBASDFMCVAR and SBASDFMCUNSEL has different dimensions to allow constellation message ordering
+		epoch->BufferBestGEO[pos].Buffer_printSATSEL=malloc(sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+		epoch->BufferBestGEO[pos].Buffer_printMODEL=malloc(sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+		epoch->BufferBestGEO[pos].Buffer_printSBASDFMCCORR=malloc(sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+		epoch->BufferBestGEO[pos].Buffer_printSBASDFMCVAR=malloc(sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+		epoch->BufferBestGEO[pos].Buffer_printSBASDFMCUNSEL=malloc(sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+
+		for(i=0;i<epoch->Buffer_numSatellitesAlloc;i++) {
+			epoch->BufferBestGEO[pos].Buffer_printSBASIONO[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_printSBASCORR[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_printSBASVAR[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_printSBASUNSEL[i]=NULL;
+
+			epoch->BufferBestGEO[pos].Buffer_printSBASIONO[i]=malloc(sizeof(char)*MAX_PRINT_LINE);
+			epoch->BufferBestGEO[pos].Buffer_printSBASCORR[i]=malloc(sizeof(char)*MAX_PRINT_LINE);
+			epoch->BufferBestGEO[pos].Buffer_printSBASVAR[i]=malloc(sizeof(char)*MAX_PRINT_LINE);
+			epoch->BufferBestGEO[pos].Buffer_printSBASUNSEL[i]=malloc(sizeof(char)*MAX_PRINT_LINE);
+		}
+
+		for(i=0;i<epoch->Buffer_numPrintGNSSAlloc;i++) {
+			epoch->BufferBestGEO[pos].Buffer_printMODEL[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_printMODEL[i]=malloc(sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+			epoch->BufferBestGEO[pos].Buffer_printSATSEL[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_printSATSEL[i]=malloc(sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+
+			epoch->BufferBestGEO[pos].Buffer_printSBASDFMCCORR[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_printSBASDFMCCORR[i]=malloc(sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+			epoch->BufferBestGEO[pos].Buffer_printSBASDFMCVAR[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_printSBASDFMCVAR[i]=malloc(sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+			epoch->BufferBestGEO[pos].Buffer_printSBASDFMCUNSEL[i]=NULL;
+			epoch->BufferBestGEO[pos].Buffer_printSBASDFMCUNSEL[i]=malloc(sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+			for(j=0;j<epoch->Buffer_numSatellitesGNSSAlloc;j++) {
+				epoch->BufferBestGEO[pos].Buffer_printMODEL[i][j]=NULL;
+				epoch->BufferBestGEO[pos].Buffer_printMODEL[i][j]=malloc(sizeof(char *)*epoch->Buffer_linesstoredMODELAlloc);
+
+				epoch->BufferBestGEO[pos].Buffer_printSATSEL[i][j]=NULL;
+				epoch->BufferBestGEO[pos].Buffer_printSATSEL[i][j]=malloc(sizeof(char *)*epoch->Buffer_linesstoredSATSELAlloc);
+
+				epoch->BufferBestGEO[pos].Buffer_printSBASDFMCCORR[i][j]=NULL;
+				epoch->BufferBestGEO[pos].Buffer_printSBASDFMCCORR[i][j]=malloc(sizeof(char)*MAX_PRINT_LINE);
+
+				epoch->BufferBestGEO[pos].Buffer_printSBASDFMCVAR[i][j]=NULL;
+				epoch->BufferBestGEO[pos].Buffer_printSBASDFMCVAR[i][j]=malloc(sizeof(char)*MAX_PRINT_LINE);
+
+				epoch->BufferBestGEO[pos].Buffer_printSBASDFMCUNSEL[i][j]=NULL;
+				epoch->BufferBestGEO[pos].Buffer_printSBASDFMCUNSEL[i][j]=malloc(sizeof(char)*MAX_PRINT_LINE);
+
+				for(k=0;k<epoch->Buffer_linesstoredMODELAlloc;k++) {
+					epoch->BufferBestGEO[pos].Buffer_printMODEL[i][j][k]=NULL;
+					epoch->BufferBestGEO[pos].Buffer_printMODEL[i][j][k]=malloc(sizeof(char)*MAX_PRINT_LINE_MODEL);
+				}
+				for(k=0;k<epoch->Buffer_linesstoredSATSELAlloc;k++) {
+					epoch->BufferBestGEO[pos].Buffer_printSATSEL[i][j][k]=NULL;
+					epoch->BufferBestGEO[pos].Buffer_printSATSEL[i][j][k]=malloc(sizeof(char)*MAX_PRINT_LINE);
+				}
+			}
+		}
+	}
+
+	if (reAllocBuffers==1) {
+		for(l=0;l<endReallocPos;l++) {
+			//Resize buffers, as some of them need greater sizes
+			//Allocate data for new iteration
+			epoch->BufferBestGEO[l].Buffer_sat=realloc(epoch->BufferBestGEO[l].Buffer_sat,sizeof(TSatellite)*epoch->Buffer_numSatellitesAlloc);
+
+			epoch->BufferBestGEO[l].Buffer_NumMODEL=realloc(epoch->BufferBestGEO[l].Buffer_NumMODEL,sizeof(int*)*epoch->Buffer_numPrintGNSSAlloc);
+
+			epoch->BufferBestGEO[l].Buffer_NumSatSel=realloc(epoch->BufferBestGEO[l].Buffer_NumSatSel,sizeof(int*)*epoch->Buffer_numPrintGNSSAlloc);
+
+			for(i=0;i<epoch->Buffer_numPrintGNSSAlloc;i++) {
+				if (i>=prevAllocNumSatellitesGNSS) {
+					epoch->BufferBestGEO[l].Buffer_NumMODEL[i]=NULL;
+					epoch->BufferBestGEO[l].Buffer_NumSatSel[i]=NULL;
+				}
+				epoch->BufferBestGEO[l].Buffer_NumMODEL[i]=realloc(epoch->BufferBestGEO[l].Buffer_NumMODEL[i],sizeof(int)*epoch->Buffer_numSatellitesGNSSAlloc);
+				epoch->BufferBestGEO[l].Buffer_NumSatSel[i]=realloc(epoch->BufferBestGEO[l].Buffer_NumSatSel[i],sizeof(int)*epoch->Buffer_numSatellitesGNSSAlloc);
+			}
+
+			epoch->BufferBestGEO[l].Buffer_printSBASIONO=realloc(epoch->BufferBestGEO[l].Buffer_printSBASIONO,sizeof(char *)*epoch->Buffer_numSatellitesAlloc);
+			epoch->BufferBestGEO[l].Buffer_printSBASCORR=realloc(epoch->BufferBestGEO[l].Buffer_printSBASCORR,sizeof(char *)*epoch->Buffer_numSatellitesAlloc);
+			epoch->BufferBestGEO[l].Buffer_printSBASVAR=realloc(epoch->BufferBestGEO[l].Buffer_printSBASVAR,sizeof(char *)*epoch->Buffer_numSatellitesAlloc);
+			epoch->BufferBestGEO[l].Buffer_printSBASUNSEL=realloc(epoch->BufferBestGEO[l].Buffer_printSBASUNSEL,sizeof(char *)*epoch->Buffer_numSatellitesAlloc);
+
+			//MODEL, SATSEL, SBASDFMCCORR, SBASDFMCVAR and SBASDFMCUNSEL has different dimensions to allow constellation message ordering
+			epoch->BufferBestGEO[l].Buffer_printSATSEL=realloc(epoch->BufferBestGEO[l].Buffer_printSATSEL,sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+			epoch->BufferBestGEO[l].Buffer_printMODEL=realloc(epoch->BufferBestGEO[l].Buffer_printMODEL,sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+			epoch->BufferBestGEO[l].Buffer_printSBASDFMCCORR=realloc(epoch->BufferBestGEO[l].Buffer_printSBASDFMCCORR,sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+			epoch->BufferBestGEO[l].Buffer_printSBASDFMCVAR=realloc(epoch->BufferBestGEO[l].Buffer_printSBASDFMCVAR,sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+			epoch->BufferBestGEO[l].Buffer_printSBASDFMCUNSEL=realloc(epoch->BufferBestGEO[l].Buffer_printSBASDFMCUNSEL,sizeof(char *)*epoch->Buffer_numPrintGNSSAlloc);
+
+			for(i=0;i<epoch->Buffer_numSatellitesAlloc;i++) {
+				if (i>=prevAllocNumSatellites) {
+					epoch->BufferBestGEO[l].Buffer_printSBASIONO[i]=NULL;
+					epoch->BufferBestGEO[l].Buffer_printSBASCORR[i]=NULL;
+					epoch->BufferBestGEO[l].Buffer_printSBASVAR[i]=NULL;
+					epoch->BufferBestGEO[l].Buffer_printSBASUNSEL[i]=NULL;
+				} 
+				epoch->BufferBestGEO[l].Buffer_printSBASIONO[i]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASIONO[i],sizeof(char)*MAX_PRINT_LINE);
+				epoch->BufferBestGEO[l].Buffer_printSBASCORR[i]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASCORR[i],sizeof(char)*MAX_PRINT_LINE);
+				epoch->BufferBestGEO[l].Buffer_printSBASVAR[i]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASVAR[i],sizeof(char)*MAX_PRINT_LINE);
+				epoch->BufferBestGEO[l].Buffer_printSBASUNSEL[i]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASUNSEL[i],sizeof(char)*MAX_PRINT_LINE);
+			}
+
+			for(i=0;i<epoch->Buffer_numPrintGNSSAlloc;i++) {
+				if (i>=prevAllocNumPrintGNSS) {
+					epoch->BufferBestGEO[l].Buffer_printMODEL[i]=NULL;
+					epoch->BufferBestGEO[l].Buffer_printSATSEL[i]=NULL;
+					epoch->BufferBestGEO[l].Buffer_printSBASDFMCCORR[i]=NULL;
+					epoch->BufferBestGEO[l].Buffer_printSBASDFMCVAR[i]=NULL;
+					epoch->BufferBestGEO[l].Buffer_printSBASDFMCUNSEL[i]=NULL;
+				}
+				epoch->BufferBestGEO[l].Buffer_printMODEL[i]=realloc(epoch->BufferBestGEO[l].Buffer_printMODEL[i],sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+				epoch->BufferBestGEO[l].Buffer_printSATSEL[i]=realloc(epoch->BufferBestGEO[l].Buffer_printSATSEL[i],sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+
+				epoch->BufferBestGEO[l].Buffer_printSBASDFMCCORR[i]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASDFMCCORR[i],sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+				epoch->BufferBestGEO[l].Buffer_printSBASDFMCVAR[i]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASDFMCVAR[i],sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+				epoch->BufferBestGEO[l].Buffer_printSBASDFMCUNSEL[i]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASDFMCUNSEL[i],sizeof(char *)*epoch->Buffer_numSatellitesGNSSAlloc);
+
+				for(j=0;j<epoch->Buffer_numSatellitesGNSSAlloc;j++) {
+					if (i>=prevAllocNumPrintGNSS || (i<prevAllocNumPrintGNSS && j>=prevAllocNumSatellitesGNSS) ) {
+						epoch->BufferBestGEO[l].Buffer_printMODEL[i][j]=NULL;
+						epoch->BufferBestGEO[l].Buffer_printSATSEL[i][j]=NULL;
+						epoch->BufferBestGEO[l].Buffer_printSBASDFMCCORR[i][j]=NULL;
+						epoch->BufferBestGEO[l].Buffer_printSBASDFMCVAR[i][j]=NULL;
+						epoch->BufferBestGEO[l].Buffer_printSBASDFMCUNSEL[i][j]=NULL;
+
+					}
+					epoch->BufferBestGEO[l].Buffer_printMODEL[i][j]=realloc(epoch->BufferBestGEO[l].Buffer_printMODEL[i][j],sizeof(char *)*epoch->Buffer_linesstoredMODELAlloc);
+
+					epoch->BufferBestGEO[l].Buffer_printSATSEL[i][j]=realloc(epoch->BufferBestGEO[l].Buffer_printSATSEL[i][j],sizeof(char *)*epoch->Buffer_linesstoredSATSELAlloc);
+
+					epoch->BufferBestGEO[l].Buffer_printSBASDFMCCORR[i][j]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASDFMCCORR[i][j],sizeof(char)*MAX_PRINT_LINE);
+
+					epoch->BufferBestGEO[l].Buffer_printSBASDFMCVAR[i][j]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASDFMCVAR[i][j],sizeof(char)*MAX_PRINT_LINE);
+
+					epoch->BufferBestGEO[l].Buffer_printSBASDFMCUNSEL[i][j]=realloc(epoch->BufferBestGEO[l].Buffer_printSBASDFMCUNSEL[i][j],sizeof(char)*MAX_PRINT_LINE);
+
+					for(k=0;k<epoch->Buffer_linesstoredMODELAlloc;k++) {
+						if (i>=prevAllocNumPrintGNSS || (i<prevAllocNumPrintGNSS && j>=prevAllocNumSatellitesGNSS) 
+								|| (i<prevAllocNumPrintGNSS && j<prevAllocNumSatellitesGNSS && k>=prevAllocLinesstoredMODEL) ) {
+							epoch->BufferBestGEO[l].Buffer_printMODEL[i][j][k]=NULL;
+						}
+						epoch->BufferBestGEO[l].Buffer_printMODEL[i][j][k]=realloc(epoch->BufferBestGEO[l].Buffer_printMODEL[i][j][k],sizeof(char)*MAX_PRINT_LINE_MODEL);
+					}
+					for(k=0;k<epoch->Buffer_linesstoredSATSELAlloc;k++) {
+						if (i>=prevAllocNumPrintGNSS || (i<prevAllocNumPrintGNSS && j>=prevAllocNumSatellitesGNSS) 
+								|| (i<prevAllocNumPrintGNSS && j<prevAllocNumSatellitesGNSS && k>=prevAllocLinesstoredSATSEL) ) {
+							epoch->BufferBestGEO[l].Buffer_printSATSEL[i][j][k]=NULL;
+						}
+						epoch->BufferBestGEO[l].Buffer_printSATSEL[i][j][k]=realloc(epoch->BufferBestGEO[l].Buffer_printSATSEL[i][j][k],sizeof(char)*MAX_PRINT_LINE);
+					}
+				}
+			}
 		}
 	}
 
 	//Save data
-	epoch->Buffer_numsatdiscardedSBAS[pos]=epoch->numsatdiscardedSBAS;
-	epoch->Buffer_usableSatellites[pos]=epoch->usableSatellites;
-	epoch->Buffer_HPL[pos]=solution->HPL;
-	epoch->Buffer_VPL[pos]=solution->VPL;
-	epoch->Buffer_HDOP[pos]=solution->HDOP;
-	epoch->Buffer_VDOP[pos]=solution->VDOP;
-	epoch->Buffer_PDOP[pos]=solution->PDOP;
-	epoch->Buffer_GDOP[pos]=solution->GDOP;
-	epoch->Buffer_TDOP[pos]=solution->TDOP;
-	epoch->Buffer_SBASMode[pos]=options->precisionapproach;
-	epoch->Buffer_GEOindex[pos]=options->GEOindex;
-	epoch->Buffer_GEOPRN[pos]=epoch->currentGEOPRN;
+	epoch->BufferBestGEO[pos].Buffer_numsatdiscardedSBAS=epoch->numsatdiscardedSBAS;
+	epoch->BufferBestGEO[pos].Buffer_usableSatellites=epoch->usableSatellites;
+	memcpy(epoch->BufferBestGEO[pos].Buffer_usableSatellitesGNSS,epoch->usableSatellitesGNSS,sizeof(int)*MAX_GNSS);
+	epoch->BufferBestGEO[pos].Buffer_discardedSatellites=epoch->discardedSatellites;
+	memcpy(epoch->BufferBestGEO[pos].Buffer_discardedSatellitesGNSS,epoch->discardedSatellitesGNSS,sizeof(int)*MAX_GNSS);
+	epoch->BufferBestGEO[pos].Buffer_numConstellationsUsed=epoch->numConstellationsUsed;
+	epoch->BufferBestGEO[pos].Buffer_numConstellationsNotUsed=epoch->numConstellationsNotUsed;
+	memcpy(epoch->BufferBestGEO[pos].Buffer_constellationUsed,epoch->constellationUsed,sizeof(int)*MAX_GNSS);
+	memcpy(epoch->BufferBestGEO[pos].Buffer_constellationNotUsed,epoch->constellationNotUsed,sizeof(int)*MAX_GNSS);
+	epoch->BufferBestGEO[pos].Buffer_totalNumAmbiguitiesEpoch=epoch->totalNumAmbiguitiesEpoch;
+	epoch->BufferBestGEO[pos].Buffer_numInterSystemClocksFilter=epoch->numInterSystemClocksFilter;
+	epoch->BufferBestGEO[pos].Buffer_ReferenceGNSSClock=epoch->ReferenceGNSSClock;
+	memcpy(epoch->BufferBestGEO[pos].Buffer_InterSystemClocksUnk2GNSS,epoch->InterSystemClocksUnk2GNSS,sizeof(enum GNSSystem)*(MAX_GNSS+FIRST_POS_IS_CLK));
+	memcpy(epoch->BufferBestGEO[pos].Buffer_constellationUsedList,epoch->constellationUsedList,sizeof(enum GNSSystem)*MAX_GNSS);
+	memcpy(epoch->BufferBestGEO[pos].Buffer_constellationNotUsedList,epoch->constellationNotUsedList,sizeof(enum GNSSystem)*MAX_GNSS);
+	memcpy(epoch->BufferBestGEO[pos].Buffer_InterSystemClocksPosDOP,epoch->InterSystemClocksPosDOP,sizeof(int)*(MAX_GNSS+FIRST_POS_IS_CLK));
+	memcpy(epoch->BufferBestGEO[pos].Buffer_InterSystemClocksUnk,epoch->InterSystemClocksUnk,sizeof(int)*MAX_GNSS);
+	memcpy(epoch->BufferBestGEO[pos].Buffer_hasInterSystemClocksUnk,epoch->hasInterSystemClocksUnk,sizeof(int)*MAX_GNSS);
+	memcpy(epoch->BufferBestGEO[pos].Buffer_usedSat2DataPos,epoch->usedSat2DataPos,sizeof(int)*MAX_SATELLITES_VIEWED);
 
+	
+	epoch->BufferBestGEO[pos].Buffer_HPL=solution->HPL;
+	epoch->BufferBestGEO[pos].Buffer_VPL=solution->VPL;
+	epoch->BufferBestGEO[pos].Buffer_HDOP=solution->HDOP;
+	epoch->BufferBestGEO[pos].Buffer_VDOP=solution->VDOP;
+	epoch->BufferBestGEO[pos].Buffer_PDOP=solution->PDOP;
+	epoch->BufferBestGEO[pos].Buffer_GDOP=solution->GDOP;
+	epoch->BufferBestGEO[pos].Buffer_TDOP=solution->TDOP;
+	epoch->BufferBestGEO[pos].Buffer_SBASMode=options->precisionapproach;
+	epoch->BufferBestGEO[pos].Buffer_GEOindex=options->GEOindex;
+	epoch->BufferBestGEO[pos].Buffer_GEOPRN=epoch->currentGEOPRN;
+	
 
 	for(i=0;i<numsat;i++) {
 
-		epoch->Buffer_NumSatSel[pos][i]=linesstoredSATSEL[i];
+		memcpy(&epoch->BufferBestGEO[pos].Buffer_sat[i],&epoch->sat[i],sizeof(TSatellite));
 
-		memcpy(&epoch->Buffer_sat[pos][i],&epoch->sat[i],sizeof(TSatellite));
-
-		strcpy(epoch->Buffer_printMODEL[pos][i],printbufferMODEL[i]);
-		strcpy(epoch->Buffer_printSBASIONO[pos][i],printbufferSBASIONO[i]);
-		strcpy(epoch->Buffer_printSBASCORR[pos][i],printbufferSBASCORR[i]);
-		strcpy(epoch->Buffer_printSBASVAR[pos][i],printbufferSBASVAR[i]);
-		strcpy(epoch->Buffer_printSBASUNSEL[pos][i],printbufferSBASUNSEL[i]);
+		strcpy(epoch->BufferBestGEO[pos].Buffer_printSBASIONO[i],printbufferSBASIONO[i]);
+		strcpy(epoch->BufferBestGEO[pos].Buffer_printSBASCORR[i],printbufferSBASCORR[i]);
+		strcpy(epoch->BufferBestGEO[pos].Buffer_printSBASVAR[i],printbufferSBASVAR[i]);
+		strcpy(epoch->BufferBestGEO[pos].Buffer_printSBASUNSEL[i],printbufferSBASUNSEL[i]);
 
 		//Empty printbuffers
-		printbufferMODEL[i][0]='\0';
 		printbufferSBASIONO[i][0]='\0';
 		printbufferSBASCORR[i][0]='\0';
 		printbufferSBASVAR[i][0]='\0';
 		printbufferSBASUNSEL[i][0]='\0';
+	}
+	for(i=0;i<epoch->numPrintGNSS;i++) {
+		for(j=0;j<epoch->numSatellitesGNSS[i];j++) {
 
-		for(j=0;j<linesstoredSATSEL[i];j++) {
-			strcpy(epoch->Buffer_printSATSEL[pos][i][j],printbufferSATSEL[i][j]);
-			//Empty printbufferSATSEL
-			printbufferSATSEL[i][j][0]='\0';
+			epoch->BufferBestGEO[pos].Buffer_NumMODEL[i][j]=linesstoredMODEL[i][j];
+			epoch->BufferBestGEO[pos].Buffer_NumSatSel[i][j]=linesstoredSATSEL[i][j];
+			for(k=0;k<linesstoredMODEL[i][j];k++) {
+				strcpy(epoch->BufferBestGEO[pos].Buffer_printMODEL[i][j][k],printbufferMODEL[i][j][k]);
+				//Empty printbufferMODEL
+				printbufferMODEL[i][j][k][0]='\0';
+			}
+			linesstoredMODEL[i][j]=0;
+
+			for(k=0;k<linesstoredSATSEL[i][j];k++) {
+				strcpy(epoch->BufferBestGEO[pos].Buffer_printSATSEL[i][j][k],printbufferSATSEL[i][j][k]);
+				//Empty printbufferSATSEL
+				printbufferSATSEL[i][j][k][0]='\0';
+			}
+			linesstoredSATSEL[i][j]=0;
+
+			strcpy(epoch->BufferBestGEO[pos].Buffer_printSBASDFMCCORR[i][j],printbufferSBASDFMCCORR[i][j]);
+			strcpy(epoch->BufferBestGEO[pos].Buffer_printSBASDFMCVAR[i][j],printbufferSBASDFMCVAR[i][j]);
+			strcpy(epoch->BufferBestGEO[pos].Buffer_printSBASDFMCUNSEL[i][j],printbufferSBASDFMCUNSEL[i][j]);
+			printbufferSBASDFMCCORR[i][j][0]='\0';
+			printbufferSBASDFMCVAR[i][j][0]='\0';
+			printbufferSBASDFMCUNSEL[i][j][0]='\0';
 		}
-		linesstoredSATSEL[i]=0;
 	}
 
 	//Save indexes if values are below the alarm limits and are in PA mode
 	if (OverAlarmLimits==1 && options->precisionapproach==PAMODE) {
-		epoch->Buffer_PosDataStoredUnderAlarmLimitsPA=realloc(epoch->Buffer_PosDataStoredUnderAlarmLimitsPA,sizeof(int)*(epoch->Buffer_NumDataStoredUnderAlarmLimitsPA+1));
 		epoch->Buffer_PosDataStoredUnderAlarmLimitsPA[epoch->Buffer_NumDataStoredUnderAlarmLimitsPA]=pos;
 		epoch->Buffer_NumDataStoredUnderAlarmLimitsPA++;
 	}
 
 	if (options->precisionapproach==PAMODE) {
 		//Save indexes if solution is in PAMODE
-		epoch->Buffer_PosDataStoredPA=realloc(epoch->Buffer_PosDataStoredPA,sizeof(int)*(epoch->Buffer_NumDataStoredPA+1));
 		epoch->Buffer_PosDataStoredPA[epoch->Buffer_NumDataStoredPA]=pos;
 		epoch->Buffer_NumDataStoredPA++;	
 	} else {
 		//Save indexes if solution is in NPAMODE
-		epoch->Buffer_PosDataStoredNPA=realloc(epoch->Buffer_PosDataStoredNPA,sizeof(int)*(epoch->Buffer_NumDataStoredNPA+1));
 		epoch->Buffer_PosDataStoredNPA[epoch->Buffer_NumDataStoredNPA]=pos;
 		epoch->Buffer_NumDataStoredNPA++;	
 	}
@@ -4742,7 +14599,7 @@ void SaveDataforGEOselection (TEpoch *epoch, TFilterSolution *solution, int Over
  *****************************************************************************/
 void SelectBestGEO (TEpoch *epoch, TFilterSolution *solution, TOptions *options) {
 
-	int 	i,j,k;
+	int 	i,j;
 	int		smallestSumPos;
 	int		numsat;
 	int		prevGEOPRN;
@@ -4756,7 +14613,7 @@ void SelectBestGEO (TEpoch *epoch, TFilterSolution *solution, TOptions *options)
 	if (epoch->Buffer_NumDataStoredUnderAlarmLimitsPA>0) {
 		for(i=0;i<epoch->Buffer_NumDataStoredUnderAlarmLimitsPA;i++) {
 			j=epoch->Buffer_PosDataStoredUnderAlarmLimitsPA[i];
-			sumPL=epoch->Buffer_HPL[j]+epoch->Buffer_VPL[j];
+			sumPL=epoch->BufferBestGEO[j].Buffer_HPL+epoch->BufferBestGEO[j].Buffer_VPL;
 			if(sumPL<smallestSumPL) {
 				smallestSumPL=sumPL;
 				smallestSumPos=j;
@@ -4766,7 +14623,7 @@ void SelectBestGEO (TEpoch *epoch, TFilterSolution *solution, TOptions *options)
 		//No iteration with protection levels under alarm limits and in PA mode
 		for(i=0;i<epoch->Buffer_NumDataStoredPA;i++) {
 			j=epoch->Buffer_PosDataStoredPA[i];
-			sumPL=epoch->Buffer_HPL[j]+epoch->Buffer_VPL[j];
+			sumPL=epoch->BufferBestGEO[j].Buffer_HPL+epoch->BufferBestGEO[j].Buffer_VPL;
 			if(sumPL<smallestSumPL) {
 				smallestSumPL=sumPL;
 				smallestSumPos=j;
@@ -4776,7 +14633,7 @@ void SelectBestGEO (TEpoch *epoch, TFilterSolution *solution, TOptions *options)
 		//No iteration in PA mode
 		for(i=0;i<epoch->Buffer_NumDataStoredNPA;i++) {
 			j=epoch->Buffer_PosDataStoredNPA[i];
-			sumPL=epoch->Buffer_HPL[j]+epoch->Buffer_VPL[j];
+			sumPL=epoch->BufferBestGEO[j].Buffer_HPL+epoch->BufferBestGEO[j].Buffer_VPL;
 			if(sumPL<smallestSumPL) {
 				smallestSumPL=sumPL;
 				smallestSumPos=j;
@@ -4785,97 +14642,122 @@ void SelectBestGEO (TEpoch *epoch, TFilterSolution *solution, TOptions *options)
 	}
 
 	//Iteration selected. Recover data
-	epoch->numsatdiscardedSBAS=epoch->Buffer_numsatdiscardedSBAS[smallestSumPos];
-	epoch->usableSatellites=epoch->Buffer_usableSatellites[smallestSumPos];
-	solution->HPL=epoch->Buffer_HPL[smallestSumPos];
-	solution->VPL=epoch->Buffer_VPL[smallestSumPos];
-	solution->HDOP=epoch->Buffer_HDOP[smallestSumPos];
-	solution->VDOP=epoch->Buffer_VDOP[smallestSumPos];
-	solution->PDOP=epoch->Buffer_PDOP[smallestSumPos];
-	solution->GDOP=epoch->Buffer_GDOP[smallestSumPos];
-	solution->TDOP=epoch->Buffer_TDOP[smallestSumPos];
-	options->precisionapproach=epoch->Buffer_SBASMode[smallestSumPos];
-	options->GEOindex=epoch->Buffer_GEOindex[smallestSumPos];
-	epoch->currentGEOPRN=epoch->Buffer_GEOPRN[smallestSumPos];
+	epoch->numsatdiscardedSBAS=epoch->BufferBestGEO[smallestSumPos].Buffer_numsatdiscardedSBAS;
+	epoch->usableSatellites=epoch->BufferBestGEO[smallestSumPos].Buffer_usableSatellites;
+	memcpy(epoch->usableSatellitesGNSS,epoch->BufferBestGEO[smallestSumPos].Buffer_usableSatellitesGNSS,sizeof(int)*MAX_GNSS);
+	epoch->discardedSatellites=epoch->BufferBestGEO[smallestSumPos].Buffer_discardedSatellites;
+	memcpy(epoch->discardedSatellitesGNSS,epoch->BufferBestGEO[smallestSumPos].Buffer_discardedSatellitesGNSS,sizeof(int)*MAX_GNSS);
+	epoch->numConstellationsUsed=epoch->BufferBestGEO[smallestSumPos].Buffer_numConstellationsUsed;
+	epoch->numConstellationsNotUsed=epoch->BufferBestGEO[smallestSumPos].Buffer_numConstellationsNotUsed;
+	memcpy(epoch->constellationUsed,epoch->BufferBestGEO[smallestSumPos].Buffer_constellationUsed,sizeof(int)*MAX_GNSS);
+	memcpy(epoch->constellationNotUsed,epoch->BufferBestGEO[smallestSumPos].Buffer_constellationNotUsed,sizeof(int)*MAX_GNSS);
+	epoch->totalNumAmbiguitiesEpoch=epoch->BufferBestGEO[smallestSumPos].Buffer_totalNumAmbiguitiesEpoch;
+	epoch->numInterSystemClocksFilter=epoch->BufferBestGEO[smallestSumPos].Buffer_numInterSystemClocksFilter;
+	epoch->ReferenceGNSSClock=epoch->BufferBestGEO[smallestSumPos].Buffer_ReferenceGNSSClock;
+	memcpy(epoch->InterSystemClocksUnk2GNSS,epoch->BufferBestGEO[smallestSumPos].Buffer_InterSystemClocksUnk2GNSS,sizeof(enum GNSSystem)*(MAX_GNSS+FIRST_POS_IS_CLK));
+	memcpy(epoch->constellationUsedList,epoch->BufferBestGEO[smallestSumPos].Buffer_constellationUsedList,sizeof(enum GNSSystem)*MAX_GNSS);
+	memcpy(epoch->constellationNotUsedList,epoch->BufferBestGEO[smallestSumPos].Buffer_constellationNotUsedList,sizeof(enum GNSSystem)*MAX_GNSS);
+	memcpy(epoch->InterSystemClocksPosDOP,epoch->BufferBestGEO[smallestSumPos].Buffer_InterSystemClocksPosDOP,sizeof(int)*(MAX_GNSS+FIRST_POS_IS_CLK));
+	memcpy(epoch->hasInterSystemClocksUnk,epoch->BufferBestGEO[smallestSumPos].Buffer_hasInterSystemClocksUnk,sizeof(int)*MAX_GNSS);
+	memcpy(epoch->usedSat2DataPos,epoch->BufferBestGEO[smallestSumPos].Buffer_usedSat2DataPos,sizeof(int)*MAX_SATELLITES_VIEWED);
+
+
+	solution->HPL=epoch->BufferBestGEO[smallestSumPos].Buffer_HPL;
+	solution->VPL=epoch->BufferBestGEO[smallestSumPos].Buffer_VPL;
+	solution->HDOP=epoch->BufferBestGEO[smallestSumPos].Buffer_HDOP;
+	solution->VDOP=epoch->BufferBestGEO[smallestSumPos].Buffer_VDOP;
+	solution->PDOP=epoch->BufferBestGEO[smallestSumPos].Buffer_PDOP;
+	solution->GDOP=epoch->BufferBestGEO[smallestSumPos].Buffer_GDOP;
+	solution->TDOP=epoch->BufferBestGEO[smallestSumPos].Buffer_TDOP;
+	options->precisionapproach=epoch->BufferBestGEO[smallestSumPos].Buffer_SBASMode;
+	options->GEOindex=epoch->BufferBestGEO[smallestSumPos].Buffer_GEOindex;
+	epoch->currentGEOPRN=epoch->BufferBestGEO[smallestSumPos].Buffer_GEOPRN;
 
 	for(i=0;i<numsat;i++) {
-		memcpy(&epoch->sat[i],&epoch->Buffer_sat[smallestSumPos][i],sizeof(TSatellite));
+		memcpy(&epoch->sat[i],&epoch->BufferBestGEO[smallestSumPos].Buffer_sat[i],sizeof(TSatellite));
 	}
 
 	//Print buffered messages. The selected iteration should be the last one.
 	//The other iterations will be printed with an '*' if option SBASUNUSED is enabled
 	printBuffersBestGEO(epoch,smallestSumPos,prevGEOPRN,options);
 
-	
-	//Free memory
-	for(i=0;i<epoch->Buffer_NumDataStored;i++) {
-		for(j=0;j<epoch->numSatellites;j++) {
-			for(k=0;k<epoch->Buffer_NumSatSel[i][j];k++) {
-				free(epoch->Buffer_printSATSEL[i][j][k]);
-			}
-			free(epoch->Buffer_printMODEL[i][j]);
-			free(epoch->Buffer_printSBASIONO[i][j]);
-			free(epoch->Buffer_printSBASCORR[i][j]);
-			free(epoch->Buffer_printSBASVAR[i][j]);
-			free(epoch->Buffer_printSBASUNSEL[i][j]);
-			free(epoch->Buffer_printSATSEL[i][j]);
-		}
-		free(epoch->Buffer_sat[i]);
-		free(epoch->Buffer_NumSatSel[i]);
-		free(epoch->Buffer_printMODEL[i]);
-		free(epoch->Buffer_printSBASIONO[i]);
-		free(epoch->Buffer_printSBASCORR[i]);
-		free(epoch->Buffer_printSBASVAR[i]);
-		free(epoch->Buffer_printSBASUNSEL[i]);
-		free(epoch->Buffer_printSATSEL[i]);
-	}
-
-	free(epoch->Buffer_numsatdiscardedSBAS);
-	free(epoch->Buffer_usableSatellites);
-	free(epoch->Buffer_HPL);
-	free(epoch->Buffer_VPL);
-	free(epoch->Buffer_HDOP);
-	free(epoch->Buffer_VDOP);
-	free(epoch->Buffer_PDOP);
-	free(epoch->Buffer_GDOP);
-	free(epoch->Buffer_TDOP);
-	free(epoch->Buffer_SBASMode);
-	free(epoch->Buffer_GEOindex);
-	free(epoch->Buffer_GEOPRN);
-	free(epoch->Buffer_sat);
-	free(epoch->Buffer_NumSatSel);
-	free(epoch->Buffer_printMODEL);
-	free(epoch->Buffer_printSBASIONO);
-	free(epoch->Buffer_printSBASCORR);
-	free(epoch->Buffer_printSBASVAR);
-	free(epoch->Buffer_printSBASUNSEL);
-	free(epoch->Buffer_printSATSEL);
-	//Set all pointers to NULL
-	epoch->Buffer_numsatdiscardedSBAS=NULL;
-	epoch->Buffer_usableSatellites=NULL;
-	epoch->Buffer_HPL=NULL;
-	epoch->Buffer_VPL=NULL;
-	epoch->Buffer_HDOP=NULL;
-	epoch->Buffer_VDOP=NULL;
-	epoch->Buffer_PDOP=NULL;
-	epoch->Buffer_GDOP=NULL;
-	epoch->Buffer_TDOP=NULL;
-	epoch->Buffer_SBASMode=NULL;
-	epoch->Buffer_GEOindex=NULL;
-	epoch->Buffer_GEOPRN=NULL;
-	epoch->Buffer_sat=NULL;
-	epoch->Buffer_NumSatSel=NULL;
-	epoch->Buffer_printMODEL=NULL;
-	epoch->Buffer_printSBASIONO=NULL;
-	epoch->Buffer_printSBASCORR=NULL;
-	epoch->Buffer_printSBASVAR=NULL;
-	epoch->Buffer_printSBASUNSEL=NULL;
-	epoch->Buffer_printSATSEL=NULL;
 	//Set counters to 0
 	epoch->Buffer_NumDataStored=0;
 	epoch->Buffer_NumDataStoredUnderAlarmLimitsPA=0;
 	epoch->Buffer_NumDataStoredPA=0;
 	epoch->Buffer_NumDataStoredNPA=0;
+	
+}
+
+/*****************************************************************************
+ * Name        : freeDataforGEOselection
+ * Description : Free memory used for GEO data selection
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TEpoch  *epoch                  IO N/A  TEpoch structure
+ *****************************************************************************/
+void freeDataforGEOselection (TEpoch *epoch) {
+
+	int i,j,k,l;
+
+	if (epoch->BufferBestGEO==NULL) return;
+
+	for(i=0;i<epoch->Buffer_NumDataStoredAlloc;i++) {
+		for(j=0;j<epoch->Buffer_numSatellitesAlloc;j++) {
+			free(epoch->BufferBestGEO[i].Buffer_printSBASIONO[j]);
+			free(epoch->BufferBestGEO[i].Buffer_printSBASCORR[j]);
+			free(epoch->BufferBestGEO[i].Buffer_printSBASVAR[j]);
+			free(epoch->BufferBestGEO[i].Buffer_printSBASUNSEL[j]);
+		}
+
+		for(j=0;j<epoch->Buffer_numPrintGNSSAlloc;j++) {
+			for(k=0;k<epoch->Buffer_numSatellitesGNSSAlloc;k++) {
+				for(l=0;l<epoch->Buffer_linesstoredMODELAlloc;l++) {
+					free(epoch->BufferBestGEO[i].Buffer_printMODEL[j][k][l]);
+				}
+				for(l=0;l<epoch->Buffer_linesstoredSATSELAlloc;l++) {
+					free(epoch->BufferBestGEO[i].Buffer_printSATSEL[j][k][l]);
+				}
+				free(epoch->BufferBestGEO[i].Buffer_printMODEL[j][k]);
+				free(epoch->BufferBestGEO[i].Buffer_printSATSEL[j][k]);
+				free(epoch->BufferBestGEO[i].Buffer_printSBASDFMCCORR[j][k]);
+				free(epoch->BufferBestGEO[i].Buffer_printSBASDFMCVAR[j][k]);
+				free(epoch->BufferBestGEO[i].Buffer_printSBASDFMCUNSEL[j][k]);
+			}
+			free(epoch->BufferBestGEO[i].Buffer_printMODEL[j]);
+			free(epoch->BufferBestGEO[i].Buffer_printSATSEL[j]);
+			free(epoch->BufferBestGEO[i].Buffer_NumSatSel[j]);
+			free(epoch->BufferBestGEO[i].Buffer_NumMODEL[j]);
+			free(epoch->BufferBestGEO[i].Buffer_printSBASDFMCCORR[j]);
+			free(epoch->BufferBestGEO[i].Buffer_printSBASDFMCVAR[j]);
+			free(epoch->BufferBestGEO[i].Buffer_printSBASDFMCUNSEL[j]);
+		}
+
+		free(epoch->BufferBestGEO[i].Buffer_sat);
+		free(epoch->BufferBestGEO[i].Buffer_NumMODEL);
+		free(epoch->BufferBestGEO[i].Buffer_NumSatSel);
+		free(epoch->BufferBestGEO[i].Buffer_printMODEL);
+		free(epoch->BufferBestGEO[i].Buffer_printSBASIONO);
+		free(epoch->BufferBestGEO[i].Buffer_printSBASCORR);
+		free(epoch->BufferBestGEO[i].Buffer_printSBASVAR);
+		free(epoch->BufferBestGEO[i].Buffer_printSBASUNSEL);
+		free(epoch->BufferBestGEO[i].Buffer_printSBASDFMCCORR);
+		free(epoch->BufferBestGEO[i].Buffer_printSBASDFMCVAR);
+		free(epoch->BufferBestGEO[i].Buffer_printSBASDFMCUNSEL);
+		free(epoch->BufferBestGEO[i].Buffer_printSATSEL);
+	}
+
+	free(epoch->BufferBestGEO);
+
+	free(epoch->Buffer_PosDataStoredUnderAlarmLimitsPA);
+	free(epoch->Buffer_PosDataStoredPA);
+	free(epoch->Buffer_PosDataStoredNPA);
+	//Set all pointers to NULL
+	epoch->Buffer_PosDataStoredUnderAlarmLimitsPA=NULL;
+	epoch->Buffer_PosDataStoredPA=NULL;
+	epoch->Buffer_PosDataStoredNPA=NULL;
+	epoch->BufferBestGEO=NULL;
+	
 }
 
 /*****************************************************************************
@@ -4887,22 +14769,25 @@ void SelectBestGEO (TEpoch *epoch, TFilterSolution *solution, TOptions *options)
  * Returned value (TTime)          O  N/A  Time of first observation in file
  *****************************************************************************/
 TTime getProductsFirstEpochBRDC (TGNSSproducts *products){
-	TTime	t;
-	int		i;
-	
-	t.MJDN = 0;
+	TTime	t,*tprev;
+	int		i,j;
+
+	t.MJDN = 999999999;
 	t.SoD = 0.;
+	tprev=&t;
 	
 	if (products->type!=BRDC) return t;
 	
-	// Initialise with the first transmission time of first satellite
-	memcpy(&t,&products->BRDC->block[0][0].TtransTime,sizeof(TTime));
 	// Get lower transmission time
 	for (i=0;i<products->BRDC->numsats;i++) {
-		if (tdiff(&products->BRDC->block[i][0].TtransTime,&t)<0) {
-			memcpy(&t,&products->BRDC->block[i][0].TtransTime,sizeof(TTime));
+		for(j=0;j<MAX_BRDC_TYPES;j++) {
+			if (products->BRDC->numblocks[i][j]==0) continue; 
+			if (tdiff(&products->BRDC->block[i][j][0].TtransTime,tprev)<0) {
+				tprev=&products->BRDC->block[i][j][0].TtransTime;
+			}
 		}
 	}
+	memcpy(&t,tprev,sizeof(TTime));
 	return t;
 }
 
@@ -4917,10 +14802,11 @@ TTime getProductsFirstEpochBRDC (TGNSSproducts *products){
 TTime getProductsFirstEpochSP3 (TGNSSproducts *products) {
 	TTime	t;
 	
-	t.MJDN = 0;
-	t.SoD = 0;
-	
-	if (products->type!=SP3) return t;
+	if (products->type!=SP3) {
+		t.MJDN = 0;
+		t.SoD = 0;
+		return t;
+	}
 	
 	return products->SP3->orbits.startTime; // Header start time
 }
@@ -4934,10 +14820,21 @@ TTime getProductsFirstEpochSP3 (TGNSSproducts *products) {
  * Returned value (TTime)          O  N/A  Time of first observation in file
  *****************************************************************************/
 TTime getProductsFirstEpoch (TGNSSproducts *products) {
-	if ( products->type == SP3 ) {
-		return getProductsFirstEpochSP3(products);
-	} else { // (products->type == BRDC)
-		return getProductsFirstEpochBRDC(products);
+
+	TTime	t;
+
+	switch (products->type) {
+		case SP3:
+			return getProductsFirstEpochSP3(products);
+			break;
+		case BRDC:
+			return getProductsFirstEpochBRDC(products);
+			break;
+		default:
+			t.MJDN = 0;
+			t.SoD = 0;
+			return t;
+			break;
 	}
 }
 
@@ -4950,24 +14847,26 @@ TTime getProductsFirstEpoch (TGNSSproducts *products) {
  * Returned value (TTime)          O  N/A  Time of last observation in file
  *****************************************************************************/
 TTime getProductsLastEpochBRDC (TGNSSproducts *products) {
-	TTime	t;
-	int		i;
+	TTime	t,*tprev;
+	int		i,j;
 	
 	t.MJDN = 0;
 	t.SoD = 0;
+	tprev=&t;
 	
 	if (products->type!=BRDC) return t;
 	
-	// Initialise with the last toe time of first satellite
-	memcpy(&t,&products->BRDC->block[0][products->BRDC->numblocks[0]-1].Ttoe,sizeof(TTime));
-	// Get lower transmission time
+	// Get latest toe
 	for (i=0;i<products->BRDC->numsats;i++) {
-		if (tdiff(&products->BRDC->block[i][products->BRDC->numblocks[i]-1].Ttoe,&t)>0) {
-			memcpy(&t,&products->BRDC->block[i][products->BRDC->numblocks[i]-1].Ttoe,sizeof(TTime));
+		for(j=0;j<MAX_BRDC_TYPES;j++) {
+			if (products->BRDC->numblocks[i][j]==0) continue; 
+			if (tdiff(&products->BRDC->block[i][j][products->BRDC->numblocks[i][j]-1].Ttoe,tprev)>0) {
+				tprev=&products->BRDC->block[i][j][products->BRDC->numblocks[i][j]-1].Ttoe;
+			}
 		}
 	}
 	// Broadcast can be valid for longer periods (up to 2 hours later from Toe)
-	t = tdadd(&t,7200);
+	t = tdadd(tprev,7200);
 	return t;
 }
 
@@ -4982,10 +14881,11 @@ TTime getProductsLastEpochBRDC (TGNSSproducts *products) {
 TTime getProductsLastEpochSP3 (TGNSSproducts *products) {
 	TTime	t;
 	
-	t.MJDN = 0;
-	t.SoD = 0;
-	
-	if (products->type!=SP3) return t;
+	if (products->type!=SP3) {
+		t.MJDN = 0;
+		t.SoD = 0;
+		return t;
+	}
 
 	//return products->SP3->orbits.block[0][products->SP3->orbits.numRecords - 1].t;
 	return products->SP3->orbits.endTime;
@@ -5000,144 +14900,837 @@ TTime getProductsLastEpochSP3 (TGNSSproducts *products) {
  * Returned value (TTime)          O  N/A  Time of last observation in file
  *****************************************************************************/
 TTime getProductsLastEpoch (TGNSSproducts *products) {
-	if ( products->type == SP3 ) {
-		return getProductsLastEpochSP3(products);
-	} else { // (products->type == BRDC)
-		return getProductsLastEpochBRDC(products);
+
+	TTime	t;
+	
+	switch (products->type) {
+		case SP3:
+			return getProductsLastEpochSP3(products);
+			break;
+		case BRDC:
+			return getProductsLastEpochBRDC(products);
+			break;
+		default:
+			t.MJDN = 0;
+			t.SoD = 0;
+			return t;
+			break;
 	}
+}
+
+/*****************************************************************************
+ * Name        : fillBroadcastHealth
+ * Description : Fill health flags in broadcast block (including per frequency
+                   health flags)
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TBRDCblock *block               IO N/A  TBRDCblock struct
+ *****************************************************************************/
+void fillBroadcastHealth (TBRDCblock *block) {
+
+	int i;
+
+	for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+		block->FreqHealth[i]=BRDCHealthy;
+	}
+
+	switch(block->GNSS) {
+		case GPS:
+			switch(block->BRDCtype) {
+				case GPSLNAV:
+					//MSB is for global health. The 5 LSB indicate what is unhealthy
+					switch(block->SVhealth & 0x1F) { 
+						case 0:
+							block->GlobalHealth=BRDCHealthy;
+							break;
+						case 1: case 2: case 3:
+							//All signals dead or weak or with no modulation
+							block->GlobalHealth=BRDCUnhealthy;
+							for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+								block->FreqHealth[i]=BRDCUnhealthy;
+							}
+							break;
+						case 4: case 5:  case 6: case 10: case 11: case 12: case 22: case 23: case 24:
+							//L1 or L1P or L1C signals dead or weak or no modulation
+							block->GlobalHealth=BRDCUnhealthy;
+							block->FreqHealth[1]=BRDCUnhealthy;
+							break;
+						case 7: case 8: case 9: case 13: case 14: case 15: case 25: case 26: case 27:
+							//L2 or L2P or L2C signals dead or weak or no modulation
+							block->GlobalHealth=BRDCUnhealthy;
+							block->FreqHealth[2]=BRDCUnhealthy;
+							break;
+						case 16: case 17: case 18: case 19: case 20: case 21:
+							//L1/L2 or L1P/L2P or L1C/L2C signals dead or weak or no modulation
+							block->GlobalHealth=BRDCUnhealthy;
+							block->FreqHealth[1]=BRDCUnhealthy;
+							block->FreqHealth[2]=BRDCUnhealthy;
+							break;
+						default:
+							//All other cases
+							block->GlobalHealth=BRDCUnhealthy;
+							for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+								block->FreqHealth[i]=BRDCUnhealthy;
+							}
+							break;
+					}
+					break;
+				case GPSCNAV: case GPSCNAV2:
+					switch(block->SVhealth) {
+						case 0:
+							block->GlobalHealth=BRDCHealthy;
+							break;
+						default:
+							block->GlobalHealth=BRDCUnhealthy;
+							if ( (block->SVhealth&0x01)==1) block->FreqHealth[1]=BRDCUnhealthy;
+							if ( (block->SVhealth&0x02)==2) block->FreqHealth[2]=BRDCUnhealthy;
+							if ( (block->SVhealth&0x04)==4) block->FreqHealth[5]=BRDCUnhealthy;
+							break;
+					}
+					break;
+				default: 
+					//Unknown navigation message type
+					block->GlobalHealth=BRDCUnhealthy;
+					for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+						block->FreqHealth[i]=BRDCUnhealthy;
+					}
+					break;
+			}
+			break;
+		case Galileo:
+			switch(block->BRDCtype) {
+				case GalINAVE1: case GalINAVE1E5b:
+					//INAV E1-B and INAV E1-B+E5b-I
+					//Data for E1B
+					if((block->SVhealth&0x00000006)==2 || (block->SVhealth&0x00000006)==6) {
+						//Unhealthy
+						block->GlobalHealth=BRDCUnhealthy;
+						block->FreqHealth[1]=BRDCUnhealthy;
+					} else if ((block->SVhealth&0x00000006)==4 || ((block->SVhealth&0x00000006)==0 && ((block->SVhealth&0x00000001)==1 || block->SISASignal==-1) )) { 
+						//Marginal
+						block->GlobalHealth=BRDCMarginal;
+						block->FreqHealth[1]=BRDCMarginal;
+					} else {
+						//Healthy
+						block->GlobalHealth=BRDCHealthy;
+					}
+					if (block->BRDCtype==GalINAVE1) break;
+					/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
+				case GalINAVE5b:
+					//INAV E5b-I
+					//Data for E5b
+					if((block->SVhealth&0x00000180)==128 || (block->SVhealth&0x00000180)==384) {
+						//Unhealthy
+						block->GlobalHealth=BRDCUnhealthy;
+						block->FreqHealth[7]=BRDCUnhealthy; //E7 is E5b
+						block->FreqHealth[8]=BRDCUnhealthy; //E8 is E5a+E5b
+					} else if ((block->SVhealth&0x000000180)==256 || ((block->SVhealth&0x00000180)==0 && ((block->SVhealth&0x00000040)==64 || block->SISASignal==-1) )) { 
+						//Marginal
+						block->GlobalHealth=BRDCMarginal;
+						block->FreqHealth[7]=BRDCMarginal; //E7 is E5b
+						block->FreqHealth[8]=BRDCMarginal; //E8 is E5a+E5b
+					} else {
+						//Healthy
+						block->GlobalHealth=BRDCHealthy;
+					}
+					break;
+				case GalFNAV:
+					//FNAV E5a-I
+					//Data for E5a
+					if((block->SVhealth&0x00000030)==16 || (block->SVhealth&0x00000030)==48) {
+						//Unhealthy
+						block->GlobalHealth=BRDCUnhealthy;
+						block->FreqHealth[5]=BRDCUnhealthy;
+						block->FreqHealth[8]=BRDCUnhealthy; //E8 is E5a+E5b
+					} else if ((block->SVhealth&0x00000030)==32 || ((block->SVhealth&0x00000030)==0 && ((block->SVhealth&0x00000008)==8 || block->SISASignal==-1) )) { 
+						//Marginal
+						block->GlobalHealth=BRDCMarginal;
+						block->FreqHealth[5]=BRDCMarginal;
+						block->FreqHealth[8]=BRDCMarginal; //E8 is E5a+E5b
+					} else {
+						//Healthy
+						block->GlobalHealth=BRDCHealthy;
+					}
+					break;
+				default:
+					//Unknown navigation message type (CNAV/GNAV)
+					block->GlobalHealth=BRDCUnhealthy;
+					for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+						block->FreqHealth[i]=BRDCUnhealthy;
+					}
+					break;
+			}
+			break;
+
+		case GLONASS:
+			//Only one navigation message type
+			switch(block->SVhealth) {
+				case 0:
+					block->GlobalHealth=BRDCHealthy;
+					break;
+				default:
+					block->GlobalHealth=BRDCUnhealthy;
+					for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+						block->FreqHealth[i]=BRDCUnhealthy;
+					}
+					break;
+			}
+			break;
+
+		case GEO:
+			//Only one navigation message type
+			switch(block->SVhealth) {
+				case 0:
+					block->GlobalHealth=BRDCHealthy;
+					break;
+				default:
+					block->GlobalHealth=BRDCUnhealthy;
+					for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+						block->FreqHealth[i]=BRDCUnhealthy;
+					}
+					break;
+			}
+			break;
+		case BDS:
+			switch(block->BRDCtype) {
+				case BDSD1: case BDSD2:
+					//Both D1 and D2 have the same health information
+					switch(block->SVhealth) {
+						case 0:
+							block->GlobalHealth=BRDCHealthy;
+							break;
+						case 1:
+							//Not in the ICD. Set all unhealthy
+							block->GlobalHealth=BRDCUnhealthy;
+							for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+								block->FreqHealth[i]=BRDCUnhealthy;
+							}
+							break;
+						default:
+							block->GlobalHealth=BRDCUnhealthy;
+							if ( (block->SVhealth&0x40)==64) block->FreqHealth[2]=BRDCUnhealthy;
+							if ( (block->SVhealth&0x20)==32) block->FreqHealth[7]=BRDCUnhealthy;
+							break;
+					}
+					break;
+				default:
+					//Unknown navigation message type or CNAV not defined in RINEX
+					block->GlobalHealth=BRDCUnhealthy;
+					for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+						block->FreqHealth[i]=BRDCUnhealthy;
+					}
+					break;
+			}
+			break;
+
+		case QZSS:
+			switch(block->BRDCtype) {
+				case QZSLNAV:
+					//MSB is for global L1C/A health. The 5 LSB indicate what is unhealthy per frequency
+					switch(block->SVhealth & 0x1F) {
+						case 0:
+							block->GlobalHealth=BRDCHealthy;
+							break;
+						case 1:
+							//Not in the ICD. Set all unhealthy
+							block->GlobalHealth=BRDCUnhealthy;
+							for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+								block->FreqHealth[i]=BRDCUnhealthy;
+							}
+							break;
+						default:
+							block->GlobalHealth=BRDCUnhealthy;
+							if ( (block->SVhealth&0x12)>0)  block->FreqHealth[1]=BRDCUnhealthy;
+							if ( (block->SVhealth&0x08)==8) block->FreqHealth[2]=BRDCUnhealthy;
+							if ( (block->SVhealth&0x04)==4) block->FreqHealth[5]=BRDCUnhealthy;
+							break;
+					}
+					break;
+				case QZSCNAV:
+					switch(block->SVhealth) {
+						case 0:
+							block->GlobalHealth=BRDCHealthy;
+							break;
+						default:
+							block->GlobalHealth=BRDCUnhealthy;
+							if ( (block->SVhealth&0x01)==1) block->FreqHealth[1]=BRDCUnhealthy;
+							if ( (block->SVhealth&0x02)==2) block->FreqHealth[2]=BRDCUnhealthy;
+							if ( (block->SVhealth&0x04)==4) block->FreqHealth[5]=BRDCUnhealthy;
+							break;
+					}
+					break;
+				case QZSCNAV2:
+					//CNAV2 only has L1C health flag
+					switch(block->SVhealth) {
+						case 0:
+							block->GlobalHealth=BRDCHealthy;
+							break;
+						default:
+							block->GlobalHealth=BRDCUnhealthy;
+							block->FreqHealth[1]=BRDCUnhealthy;
+							break;
+					}
+					break;
+				default: //Unknown navigation message type
+					//Unknown navigation message type
+					block->GlobalHealth=BRDCUnhealthy;
+					for(i=0;i<MAX_FREQUENCIES_PER_GNSS;i++) {
+						block->FreqHealth[i]=BRDCUnhealthy;
+					}
+					break;
+			}
+			break;
+
+		case IRNSS:
+			//Only one navigation message type
+			switch(block->SVhealth) {
+				case 0:
+					block->GlobalHealth=BRDCHealthy;
+					break;
+				default:
+					//Unknown navigation message type
+					block->GlobalHealth=BRDCUnhealthy;
+					if ( (block->SVhealth&0x01)==1) block->FreqHealth[9]=BRDCUnhealthy;
+					if ( (block->SVhealth&0x02)==2) block->FreqHealth[5]=BRDCUnhealthy;
+					break;
+			}
+			break;
+
+		default:
+			//Unknown constellation
+			block->GlobalHealth=block->SVhealth;
+			break;
+	}
+
 }
 
 /*****************************************************************************
  * Name        : selectBRDCBlock
  * Description : Select the BRDC block with the following conditions
  *                  - Transmission time equal or lower than reference time
- *                  - Closest toe to reference time
- *                  - If SBAS IOD is not -1, select the block with that IODE
+ *                  - Closest transmission time to current epoch
+ *                  - If IOD is not -1, select the block with that IODE
  * Parameters  :
  * Name                           |Da|Unit|Description
  * TBRDCproducts  *products        I  N/A  TBRDCproducts structure used as base to return PVT
  * TTime  *t                       I  N/A  Reference time used
  * GNSSystem  GNSS                 I  N/A  GNSS system of the satellite
- * int  PRN                        I  N/A  PRN identifier of the satellite
+ * int PRN                         I  N/A  PRN identifier of the satellite
+ * int IOD                         IO N/A  IOD number of the navigation message. 
+ * int BRDCtype                    IO N/A  Navigation message type. 
  * TOptions  *options              I  N/A  TOptions structure
- * int SBASIOD                     I  N/A  SBAS IOD for long term corrections                                       
  * Returned value (TBRDCblock*)    O  N/A  Pointer to the corresponding block
  *****************************************************************************/
-TBRDCblock *selectBRDCblock (TBRDCproducts *products, TTime *t, enum GNSSystem GNSS, int PRN, int SBASIOD, TOptions *options) {
-	int			ind,indPast;
-	int			i,j;
-	int			limit;
-	int			check;		
-	int			selected = -1,timeSelected;
-	double		diff;
-	double		diffTransmitted;
-	double		diffToe;
-	double		diffToemax; 
-	double		diffLastTransmitted = 9e9;
-	TTime       tGLO;
-	TBRDCblock	*block;
-
+TBRDCblock *selectBRDCblock (TBRDCproducts *products, TTime *t, enum GNSSystem GNSS, int PRN, int IOD, int BRDCtype, TOptions *options) {
+	int				ind,indPast;
+	int				i,j,k;
+	int				limit;
+	int				check;		
+	int				selected[MAX_HEALTH_TYPES]={-1,-1,-1};
+	int				typeSelected[MAX_HEALTH_TYPES]={-1,-1,-1};
+	int				FoundBlock;
+	int				CurrBrdcType;
+	int				startDay=0,EndDay=1;
+	enum BRDCHealth	HealthTypeUsed=BRDCHealthy; //Initialize to BRDCHealthy for the case no valid message is found
+	enum BRDCHealth	LastTransmittedHealth=BRDCHealthy; //Initialize to BRDCHealthy for the case no valid message is found
+	double			diffTransmitted;
+	double			diffToe;
+	double			diffToemax; 
+	double			diffLastTransmitted[MAX_HEALTH_TYPES] = {9e9,9e9,9e9};
+	double			diffToc, diffLastToc = 9e9;
+	TBRDCblock		*block,*blockSelected[MAX_HEALTH_TYPES],*tmpSelected=NULL;
+	TBRDCblock		**numBlockPointer;
 
 	ind = products->index[GNSS][PRN];
 	indPast = products->indexPast[GNSS][PRN];
 
-	if (ind==-1 && indPast==-1) return NULL;
+	if (indPast==-1) {
+		if (ind==-1) return NULL;
+		startDay=1;
+		EndDay=1;
+	} else if (ind==-1) {
+		if (indPast==-1) return NULL;
+		startDay=0;
+		EndDay=0;
+	}
 
-	for(j=0;j<2;j++) {
-		if (indPast==-1 && j==0) continue;
-		if (ind==-1 && j==1) continue;
-		if(j==0) limit=products->numblocksPast[indPast];
-		else limit=products->numblocks[ind];
-
-		for (i=0;i<limit;i++) {
-			check=0;
-			if(j==0)  block = &products->blockPast[indPast][i];
-			else block = &products->block[ind][i];
-			
-			if (SBASIOD!=-1 && block->IODE!=SBASIOD) {continue;}
-			diffTransmitted = tdiff(t,&block->TtransTime);
-			if(GNSS==GLONASS) {
-				tGLO.MJDN=block->Ttoe.MJDN;
-				tGLO.SoD=block->Ttoe.SoD;
-				//Transform from UTC to GPS time
-				tGLO.SoD-=products->AT_LS;
-				if(tGLO.SoD<0) {
-					tGLO.SoD+=86400.;
-					tGLO.MJDN--;
-				}
-				diffToe = tdiff(t,&tGLO);
-				//Tranmission time of message of GLONASS broadcast block is directly saved in GPS time
-			} else {
-				diffToe = tdiff(t,&block->Ttoe);
-			}
-			diffToemax = 0.5 * 3600 * block->fitInterval; // Update diffToemax
-
-			if (options->brdcBlockTransTime==0) {
-				//Do not check that transmission time of message is equal or before current time
-				if (fabs(diffTransmitted)<fabs(diffLastTransmitted) && diffToe<=diffToemax && diffToe>=-diffToemax) {
-					check=1;
-				}
-			} else {
-				//Check that transmission time of message is equal or before current time
-				if (diffTransmitted>=0 && diffTransmitted<diffLastTransmitted && diffToe<=diffToemax && diffToe>=-diffToemax) {
-					check=1;
-				}
-			}
-			if (check) {
-	//			if (block->SVhealth==0 || options->satelliteHealth==0) {
-	//				diffLastTransmitted = diffTransmitted;
-	//				selected = i;
-	//			}
-
-				// Update following ESA/EPO suggestion: 
-				if (options->satelliteHealth==0) {
-					diffLastTransmitted = diffTransmitted;
-					selected = i;
-					timeSelected=j;
+	for(k=0;k<options->BRDCAvailSelOrder[products->NavDataPosition][GNSS][options->BrdcTypeSel[GNSS]][MAX_BRDC_TYPES];k++) {
+		selected[BRDCHealthy]=selected[BRDCMarginal]=selected[BRDCUnhealthy]=-1;
+		CurrBrdcType=options->BRDCAvailSelOrder[products->NavDataPosition][GNSS][options->BrdcTypeSel[GNSS]][k];
+		for(j=startDay;j<=EndDay;j++) {
+			if(j==0) {
+				if (IOD==-1) {
+					limit=products->numblocksPast[indPast][CurrBrdcType];
+					numBlockPointer=products->blockPastPointer[indPast][CurrBrdcType];
 				} else {
-					// Last Transmitted Healthy Ephemerides
-					if (GNSS==Galileo && block->SVhealth==0 && block->SISASignal!=-1) { 
-						diffLastTransmitted = diffTransmitted;
-						selected = i;
-						timeSelected=j;
-					} else if (GNSS!=Galileo && block->SVhealth==0) {
-						diffLastTransmitted = diffTransmitted;
-						selected = i;
-						timeSelected=j;
-					} else {// Last transmitted unhealthy block 
-						diffLastTransmitted = diffTransmitted;
-						selected = -1;
+					limit=products->numblocksPastIOD[indPast][CurrBrdcType][IOD];
+					numBlockPointer=products->blockPastIOD[indPast][CurrBrdcType][IOD];
+				}
+			} else {
+				if (IOD==-1) {
+					limit=products->numblocks[ind][CurrBrdcType];
+					numBlockPointer=products->blockPointer[ind][CurrBrdcType];
+				} else {
+					limit=products->numblocksIOD[ind][CurrBrdcType][IOD];
+					numBlockPointer=products->blockIOD[ind][CurrBrdcType][IOD];
+				}
+			}
+
+			for (i=0;i<limit;i++) {
+				check=0;
+				block = numBlockPointer[i];
+
+				
+				diffTransmitted = tdiff(t,&block->TtransTime);
+				diffToe = tdiff(t,&block->Ttoe);
+				diffToemax = 0.5 * 3600. * block->fitInterval; // Update diffToemax
+
+
+				if (options->brdcBlockTransTime==0) {
+					//Do not check that transmission time of message is equal or before current time
+					if (fabs(diffTransmitted)<fabs(diffLastTransmitted[LastTransmittedHealth]) && diffToe<=diffToemax && diffToe>=-diffToemax) {
+						check=1;
+					}
+				} else {
+					//Check that transmission time of message is equal or before current time
+					if (diffTransmitted>=0 && diffTransmitted<diffLastTransmitted[LastTransmittedHealth] && diffToe<=diffToemax && diffToe>=-diffToemax) {
+						check=1;
 					}
 				}
+				if (check) {
+					diffToc=fabs(tdiff(t,&block->Ttoc));
+					LastTransmittedHealth=block->GlobalHealth;
+					diffLastTransmitted[block->GlobalHealth] = diffTransmitted;
+					selected[block->GlobalHealth] = i;
+					typeSelected[block->GlobalHealth]=block->BRDCtype;
+					blockSelected[block->GlobalHealth]=block;
+				}
+			}
+		} 
+
+		FoundBlock=selected[LastTransmittedHealth];
+		HealthTypeUsed=LastTransmittedHealth;
+
+		//Check if block from preferred type has been selected
+		//If the preferred type is not selected, FoundBlock=-1, which will make to keep searching
+		switch(GNSS) {
+			case GPS:
+				switch (BRDCtype) {
+					case GPSLNAV:
+						if (typeSelected[HealthTypeUsed]!=GPSLNAV) FoundBlock = -1;
+						break;
+					case GPSCNAV: 
+						if (typeSelected[HealthTypeUsed]!=GPSCNAV) FoundBlock = -1;
+						break;
+					case GPSCNAV2: 
+						if (typeSelected[HealthTypeUsed]!=GPSCNAV2) FoundBlock = -1;
+						break;
+					case GPSCNAVANY:
+						if (typeSelected[HealthTypeUsed]!=GPSCNAV && typeSelected[HealthTypeUsed]!=GPSCNAV2) FoundBlock = -1;
+						break;
+					case GPSANY:
+						break;
+					default:
+						FoundBlock=-1;
+						break;
+				}
+				break;
+			case Galileo:
+				switch (BRDCtype) {
+					case GalFNAV:
+						if (typeSelected[HealthTypeUsed]!=GalFNAV) FoundBlock = -1;
+						break;
+					case GalINAVE1:
+						if (typeSelected[HealthTypeUsed]!=GalINAVE1) FoundBlock = -1;
+						break;
+					case GalINAVE5b:
+						if (typeSelected[HealthTypeUsed]!=GalINAVE5b) FoundBlock = -1;
+						break;
+					case GalINAVE1E5b:
+						if (typeSelected[HealthTypeUsed]!=GalINAVE1E5b) FoundBlock = -1;
+						break;
+					case GalCNAV:
+						if (typeSelected[HealthTypeUsed]!=GalCNAV) FoundBlock = -1;
+						break;
+					case GalGNAV:
+						if (typeSelected[HealthTypeUsed]!=GalGNAV) FoundBlock = -1;
+						break;
+					case GalINAVANY:
+						if (typeSelected[HealthTypeUsed]<GalINAVE1 || typeSelected[HealthTypeUsed]>GalINAVE1E5b) FoundBlock = -1;
+						break;
+					case GalANY:
+						break;
+					default:
+						FoundBlock=-1;
+						break;
+				}
+				break;
+			case BDS:
+				switch (BRDCtype) {
+					case BDSD1:
+						if (typeSelected[HealthTypeUsed]!=BDSD1) FoundBlock = -1;
+						break;
+					case BDSD2:
+						if (typeSelected[HealthTypeUsed]!=BDSD2) FoundBlock = -1;
+						break;
+					case BDSCNAV1:
+						if (typeSelected[HealthTypeUsed]!=BDSCNAV1) FoundBlock = -1;
+						break;
+					case BDSCNAV2:
+						if (typeSelected[HealthTypeUsed]!=BDSCNAV2) FoundBlock = -1;
+						break;
+					case BDSDANY:
+						if (typeSelected[HealthTypeUsed]!=BDSD1 && typeSelected[HealthTypeUsed]!=BDSD2) FoundBlock = -1;
+						break;
+					case BDSCNAVANY:
+						if (typeSelected[HealthTypeUsed]!=BDSCNAV1 && typeSelected[HealthTypeUsed]!=BDSCNAV2) FoundBlock = -1;
+						break;
+					case BDSANY:
+						break;
+					default:
+						FoundBlock=-1;
+						break;
+				}
+				break;
+			case QZSS:
+				switch (BRDCtype) {
+					case QZSLNAV:
+						if (typeSelected[HealthTypeUsed]!=QZSLNAV) FoundBlock = -1;
+						break;
+					case QZSCNAV: 
+						if (typeSelected[HealthTypeUsed]!=QZSCNAV) FoundBlock = -1;
+						break;
+					case QZSCNAV2: 
+						if (typeSelected[HealthTypeUsed]!=QZSCNAV2) FoundBlock = -1;
+						break;
+					case QZSCNAVANY:
+						if (typeSelected[HealthTypeUsed]!=QZSCNAV && typeSelected[HealthTypeUsed]!=QZSCNAV2) FoundBlock = -1;
+						break;
+					case QZSANY:
+						break;
+					default:
+						FoundBlock=-1;
+						break;
+				}
+				break;
+			case GLONASS:
+				switch (BRDCtype) {
+					case GLOFDMA:
+						if (typeSelected[HealthTypeUsed]!=GLOFDMA) FoundBlock = -1;
+						break;
+					case GLOCDMA:
+						if (typeSelected[HealthTypeUsed]!=GLOCDMA) FoundBlock = -1;
+						break;
+					case GLOANY:
+						break;
+					default:
+						FoundBlock=-1;
+						break;
+				}
+			case GEO: case IRNSS:
+				//Only one block type supported for GEO and IRNSS
+				break;
+			default:
+				//Unknown constellation
+				FoundBlock=selected[HealthTypeUsed]=-1;
+				break;
+		}
+		if (FoundBlock!=-1) {
+			//If we have a valid block, check if it is below the threshold to consider it fresh enough
+			if (diffToc<options->maxBRDCFreshTimeDiffToc) {
+				//It is fresh enough, select the current message
+
+				break;
+			} else if (diffToc<diffLastToc) {
+				//It is not fresh enough, but is fresher than the last selected
+				tmpSelected=blockSelected[HealthTypeUsed];
+				diffLastToc=diffToc;
+				//No break, so it will continue searching in the next navigation message type
 			}
 		}
+	} //End for(k=0;k<options->BRDCAvailSelOrder[products->NavDataPosition][GNSS][options->BrdcTypeSel[GNSS]][MAX_BRDC_TYPES];k++)
+
+
+	if (selected[HealthTypeUsed]==-1) return tmpSelected;
+
+	return blockSelected[HealthTypeUsed];
+}
+
+/*****************************************************************************
+ * Name        : BRDCType2String
+ * Description : Convert from internal broadcast package type to string
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * GNSSystem  GNSS                 I  N/A  GNSS system of the satellite
+ * int BRDCtype                    IO N/A  Navigation message type. 
+ * Returned value (char *)         O  N/A  Broadcast type in string
+ *****************************************************************************/
+char *BRDCType2String(enum GNSSystem GNSS, int BRDCType) {
+
+	static char str[MAX_GNSS][MAX_BRDC_TYPES][11]= {
+		/*GPS*/	{"LNAV","CNAV",   "CNAV2",  "Unknown",  "Unknown","Unknown"},
+		/*GAL*/ {"FNAV","INAVE1", "INAVE5b","INAVE1E5b","CNAV",   "GNAV"},
+		/*GLO*/ {"FDMA","CDMA",   "Unknown","Unknown",  "Unknown","Unknown"},
+		/*GEO*/	{"CNAV","Unknown","Unknown","Unknown",  "Unknown","Unknown"},
+		/*BDS*/	{"D1",  "D2",     "CNAV1",  "CNAV2",    "Unknown","Unknown"},
+		/*QZS*/	{"LNAV","CNAV",   "CNAV2",  "Unknown",  "Unknown","Unknown"},
+		/*IRN*/	{"CNAV","Unknown","Unknown","Unknown",  "Unknown","Unknown"}};
+
+	return str[GNSS][BRDCType];
+}
+
+
+/*****************************************************************************
+ * Name        : BRDCHealthSel2String
+ * Description : Convert health flag selection criteria to string
+ * Parameters  :
+ * Name                                    |Da|Unit|Description
+ * enum BRDCHealthSelModes satHealthMode    I  N/A  Helth flag selection mode
+ * Returned value (char *)                  O  N/A  Broadcast type in string
+ *****************************************************************************/
+char *BRDCHealthSel2String(enum BRDCHealthSelModes satHealthMode) {
+
+	static char	str[3][40]={"Use only healthy satellites", 
+		"Use healthy and marginal satellites", "Do not check health status"};
+
+	return str[satHealthMode];
+}
+
+/*****************************************************************************
+ * Name        : CheckBRDCHealth
+ * Description : Checks if satellite is usable according to health status
+ *                and options of health usage
+ * Parameters  :
+ * Name                                    |Da|Unit|Description
+ * TBRDCblock *block                        I  N/A  TBRDCblock struct (cannot be NULL!!)
+ * enum BRDCHealthSelModes satHealthMode    I  N/A  Health flag selection mode
+ * char *healthStr                          O  N/A  String where to save health status if not usable
+ * Returned value (int)                     O  N/A  Indicates if satellite can be used
+ *                                                    0 -> Satellite cannot be used
+ *                                                    1 -> Satellite can be used
+ *****************************************************************************/
+int CheckBRDCHealth (TBRDCblock *block, enum BRDCHealthSelModes satHealthMode, char *healthStr) {
+
+	switch(block->GlobalHealth*10+satHealthMode) {
+		case 0: case 1: case 2:
+			//Satellite is healthy (block->GlobalHealth=0), therefore it is always used
+			return 1;
+			break;
+		case 11: case 12:
+			//Satellite is marginal (block->GlobalHealth=1) and satHealthMode is set to use healthy 
+			//and marginal (satHealthMode=1) or any health type (satHealthMode=2)
+			return 1;
+			break;
+		case 22:
+			//Satellite is unhealthy (block->GlobalHealth=2) and satHealthMode is set to use any health type (satHealthMode=2)
+			return 1;
+			break;
+		default: //case 10: case 20: case 21:
+			//All other cases (satellite is marginal or unhealthy and these health modes cannot be used)
+			//Fill the string with the unhealthy string for SATSEL message
+			strcpy(healthStr,BRDCHealth2String(block));
+			return 0;
+			break;
+	}
+	return 0;
+}
+
+
+/*****************************************************************************
+ * Name        : BRDCHealth2String
+ * Description : Convert health flags to string (global and per frequency)
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * GNSSystem  GNSS                 I  N/A  GNSS system of the satellite
+ * TBRDCblock *block               I  N/A  TBRDCblock struct (cannot be NULL!!)
+ * Returned value (char *)         O  N/A  Broadcast type in string
+ *****************************************************************************/
+char *BRDCHealth2String(TBRDCblock *block) {
+
+	//Static variables are shared between threads (as they are saved in the data segment).
+	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
+	//directive to make OpenMP create a local (static) copy for each thread
+	static char 	str[30];
+	#pragma omp threadprivate(str)
+	const  char		HealthChar[MAX_HEALTH_TYPES]={'H','M','U'};
+
+	switch(block->GlobalHealth) {
+		case BRDCHealthy:
+			sprintf(str,"%c-%d",HealthChar[block->GlobalHealth],block->SVhealth); //All signals healthy
+			return str;
+			break;
+		default: //Unhealthy or Marginal
+			switch(block->GNSS) {
+				case GPS:
+					switch(block->BRDCtype) {
+						case GPSLNAV:
+							sprintf(str,"%c-%d (L1-%c L2-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[1]],HealthChar[block->FreqHealth[2]]);
+							break;
+						case GPSCNAV: case GPSCNAV2:
+							sprintf(str,"%c-%d (L1-%c L2-%c L5-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[1]],HealthChar[block->FreqHealth[2]],HealthChar[block->FreqHealth[5]]);
+							break;
+						default:
+							//Unknown health
+							strcpy(str,"NA");
+							break;
+					}
+					return str;
+					break;
+				case Galileo:
+					switch(block->BRDCtype) {
+						case GalINAVE1:
+							sprintf(str,"%c-%d (E1-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[1]]);
+							break;
+						case GalINAVE1E5b:
+							sprintf(str,"%c-%d (E1-%c E5b-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[1]],HealthChar[block->FreqHealth[7]]);
+							break;
+						case GalINAVE5b:
+							sprintf(str,"%c-%d (E5b-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[7]]);
+							break;
+						case GalFNAV:
+							sprintf(str,"%c-%d (E5a-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[5]]);
+							break;
+						default:
+							//Unknown health (GNAV, CNAV)
+							strcpy(str,"NA");
+							break;
+					}
+					return str;
+					break;
+				case GLONASS:
+					switch(block->BRDCtype) {
+						case GLOFDMA:
+							//In GLONASS it is only known if it is globally healthy or unhealthy
+							sprintf(str,"%c-%d",HealthChar[block->GlobalHealth],block->SVhealth);
+							break;
+						default:
+							//Unknown health
+							strcpy(str,"NA");
+							break;
+					}
+					return str;
+					break;
+				case GEO:
+					//In GEO it is only known if it is globally healthy or unhealthy
+					sprintf(str,"%c-%d",HealthChar[block->GlobalHealth],block->SVhealth);
+					return str;
+					break;
+				case BDS:
+					switch(block->BRDCtype) {
+						case BDSD1: case BDSD2:
+							sprintf(str,"%c-%d (B1-%c B2-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[2]],HealthChar[block->FreqHealth[7]]);
+							break;
+						default:
+							//Unknown health (CNAV1, CNAV2)
+							strcpy(str,"NA");
+							break;
+					}
+					return str;
+					break;
+				case QZSS:
+					switch(block->BRDCtype) {
+						case QZSLNAV: case QZSCNAV:
+							sprintf(str,"%c-%d (L1-%c L2-%c L5-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[1]],HealthChar[block->FreqHealth[2]],HealthChar[block->FreqHealth[5]]);
+							break;
+						case QZSCNAV2:
+							sprintf(str,"%c-%d (L1-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[1]]);
+							break;
+					}
+					return str;
+					break;
+				case IRNSS:
+					sprintf(str,"%c-%d (L5-%c S-%c)",HealthChar[block->GlobalHealth],block->SVhealth,HealthChar[block->FreqHealth[5]],HealthChar[block->FreqHealth[9]]);
+					return str;
+					break;
+				default:
+					break;
+			}
 	}
 
-	if (selected==-1) return NULL;
+	strcpy(str,"NA");
+	return str;
+}
 
-	// Check if selected is inside the fit interval
-	if(timeSelected==0) {
-		block = &products->blockPast[indPast][selected];
-	} else {
-		block = &products->block[ind][selected];
-	}
-	if(GNSS==GLONASS) {
-		tGLO.MJDN=block->Ttoe.MJDN;
-		tGLO.SoD=block->Ttoe.SoD;
-		//Transform from UTC to GPS time
-		tGLO.SoD-=products->AT_LS;
-		if(tGLO.SoD<0) {
-			tGLO.SoD+=86400.;
-			tGLO.MJDN--;
+/*****************************************************************************
+ * Name        : freeBRDCproducts
+ * Description : free memory for BRDC products
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * int type                        I  N/A  Free previous day or both days
+ *                                           FREEPREVNAV -> free previous day
+ *                                           FREEALLNAV  -> free all days  
+ * TGNSSproducts *products         I  N/A  TGNSSproducts structure
+ *****************************************************************************/
+void freeBRDCproducts (int type, TGNSSproducts *products) {
+
+	int	i,j,k;
+
+	if (products->BRDC==NULL) return;
+
+	if ( products->BRDC->numblocksPast!=NULL) {
+		//Free memory for previous day
+		for(i=0;i<products->BRDC->numsatsPast;i++) {
+			for(j=0;j<MAX_BRDC_TYPES;j++) {
+				for(k=0;k<MAX_IODE_VALUE;k++) {
+					free(products->BRDC->blockPastIOD[i][j][k]);
+				}
+				free(products->BRDC->blockPastIOD[i][j]);
+				free(products->BRDC->numblocksPastIOD[i][j]);
+				free(products->BRDC->blockPastPointer[i][j]);
+				free(products->BRDC->blockPast[i][j]);
+			}
+			free(products->BRDC->blockPast[i]);
+			free(products->BRDC->blockPastPointer[i]);
+			free(products->BRDC->numblocksPast[i]);
+			free(products->BRDC->blockPastIOD[i]);
+			free(products->BRDC->numblocksPastIOD[i]);
+
 		}
-		diff = tdiff(t,&tGLO);
-		//Tranmission time of message of GLONASS broadcast block is directly saved in GPS time
-	} else {
-		diff = tdiff(t,&block->Ttoe);
+		free(products->BRDC->numblocksPast);
+		free(products->BRDC->blockPast);
+		free(products->BRDC->blockPastPointer);
+		free(products->BRDC->numblocksPastIOD);
+		free(products->BRDC->blockPastIOD);
+		products->BRDC->numsatsPast=0;
+		products->BRDC->numblocksPast=NULL;
+		products->BRDC->blockPast=NULL;
+		products->BRDC->blockPastPointer=NULL;
+		products->BRDC->numblocksPastIOD=NULL;
+		products->BRDC->blockPastIOD=NULL;
 	}
-	diffToemax = 0.5*3600*block->fitInterval; // Update diffToemax
-	if (diff<=diffToemax && diff>=-diffToemax) return block;
-	else return NULL;
+	
+	if ( products->BRDC->numblocks!=NULL && type==FREEALLNAV) {
+		//Free memory for previous day
+		for(i=0;i<products->BRDC->numsats;i++) {
+			for(j=0;j<MAX_BRDC_TYPES;j++) {
+				for(k=0;k<MAX_IODE_VALUE;k++) {
+					free(products->BRDC->blockIOD[i][j][k]);
+				}
+				
+				free(products->BRDC->blockIOD[i][j]);
+				free(products->BRDC->numblocksIOD[i][j]);
+				free(products->BRDC->blockPointer[i][j]);
+				free(products->BRDC->block[i][j]);
+			}
+			free(products->BRDC->block[i]);
+			free(products->BRDC->blockPointer[i]);
+			free(products->BRDC->numblocks[i]);
+			free(products->BRDC->blockIOD[i]);
+			free(products->BRDC->numblocksIOD[i]);
+
+		}
+		free(products->BRDC->numblocks);
+		free(products->BRDC->block);
+		free(products->BRDC->blockPointer);
+		free(products->BRDC->numblocksIOD);
+		free(products->BRDC->blockIOD);
+		products->BRDC->numsats=0;
+		products->BRDC->numblocks=NULL;
+		products->BRDC->block=NULL;
+		products->BRDC->blockPointer=NULL;
+		products->BRDC->numblocksIOD=NULL;
+		products->BRDC->blockIOD=NULL;
+	}
 }
 
 /*****************************************************************************
@@ -5168,12 +15761,11 @@ int MJDN (struct tm *tm) {
  * Parameters  :
  * Name                           |Da|Unit|Description
  * int month                       I  N/A  Month number (1-12)
- * char *monthname                 O  N/A  Name of the month
  *****************************************************************************/
-void MonthName (int month, char *monthname) {
-	const char monthnames[12][10]={"January","February","March","April","May","June","July","August","September","October","November","December"};
+char *MonthName (int month) {
+	static char monthnames[12][10]={"January","February","March","April","May","June","July","August","September","October","November","December"};
 	
-	strcpy(monthname,monthnames[month-1]);
+	return monthnames[month-1];
 }
 
 
@@ -5252,7 +15844,7 @@ void t2tmnolocal (TTime *t, struct tm *tm, double *seconds) {
 void t2doy (TTime *t, int *year, double *doy) {
 	const int 	MJD_1980 = 44239;
 	int     	day;    
-	int     	ref = 1980; 
+	const int   ref = 1980; 
 	int     	day_aux;
 	int     	iy;
 	
@@ -5282,17 +15874,18 @@ void t2doy (TTime *t, int *year, double *doy) {
  * Return value (int)              O  d    Day of Year
  *****************************************************************************/
 int date2doy (int year, int month, int day) {
-	int i, doy;
-	int daysmonth[13] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+	int 	i, doy;
+	int		pos=0;
+	// The following array has the number of days for each month, for a normal year and for a leap year
+	const int daysmonth[2][13]={{0,31,28,31,30,31,30,31,31,30,31,30,31},{0,31,29,31,30,31,30,31,31,30,31,30,31}};
 
 	if ( year < 1000 ) return -1;
 
-	if ( (( year%4 == 0 ) && ( year%100 != 0 )) || year%400 == 0 )
-		daysmonth[2] += 1;
+	if ( (( year%4 == 0 ) && ( year%100 != 0 )) || year%400 == 0 ) pos=1;
 
 	doy = 0;
 	for ( i=0;i<month;i++ )
-		doy += daysmonth[i];
+		doy += daysmonth[pos][i];
 	doy += day;
 
 	return doy;
@@ -5309,23 +15902,24 @@ int date2doy (int year, int month, int day) {
  * int  *day                       O  d    Day of month
  *****************************************************************************/
 void doy2date (int year, int doy, int *month, int *day) {
-	int i = -1;
-	int res;
-	int daysmonth[13] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+	int 	i = -1;
+	int 	res;
+	int		pos=0;
+	// The following array has the number of days for each month, for a normal year and for a leap year
+	const int daysmonth[2][13]={{0,31,28,31,30,31,30,31,31,30,31,30,31},{0,31,29,31,30,31,30,31,31,30,31,30,31}};
 
 	if ( doy > 366 ) return;
 
-	if ( (( year%4 == 0 ) && ( year%100 != 0 )) || year%400 == 0 )
-		daysmonth[2] += 1;
+	if ( (( year%4 == 0 ) && ( year%100 != 0 )) || year%400 == 0 ) pos=1;
 
 	res = doy;
 	while ( res > 0 ) {
 		i += 1;
-		res -= daysmonth[i];
+		res -= daysmonth[pos][i];
 	}
 
 	*month = i;
-	*day = daysmonth[i] + res;
+	*day = daysmonth[pos][i] + res;
 }
 
 /*****************************************************************************
@@ -5388,7 +15982,7 @@ TTime gpsws2ttime (int GPSweek, double SoW) {
  * Name                           |Da|Unit|Description
  * int  year                       I  N/A  Year
  * int  doy                        I  N/A  Day of Year
- * double  sod                     I  s    Seconds of day
+ * int  sod                        I  s    Seconds of day
  * Returned value (double)         O  N/A  MJDN
  ****************************************************************************/
 double yeardoy2MJDN (int year, int doy, int sod) {
@@ -5599,9 +16193,9 @@ TTime tdadd (TTime *a, double b) {
  *****************************************************************************/
 int Gal_loc_month (double doy, int *im, double *id) {
 
-	int i;
-	int dom_positions = 14;
-	double dom[14] = {-14.5,15.5,45.125,74.75,105.25,135.75,166.25,196.75,227.75,258.25,288.75,319.25,349.75,380.75};
+	int 			i;
+	const int 		dom_positions = 14;
+	const double 	dom[14] = {-14.5,15.5,45.125,74.75,105.25,135.75,166.25,196.75,227.75,258.25,288.75,319.25,349.75,380.75};
 	
 	// Initialize to 0. If im[1]==9999 then the value of doy was found in dom vector
 	im[0] = 0;
@@ -5698,22 +16292,25 @@ void XYZ2NEU (double *positionXYZ, double *positionNEU) {
 	double			latitude,latitudePrev;
 	double			xn;
 	double			heightOverElipsoide;
-	// WGS84 parameters (in meters)
+	// WGS84 parameters (in metres)
 
 	longitude = atan2(positionXYZ[1],positionXYZ[0]);
 	p = sqrt(positionXYZ[0]*positionXYZ[0]+positionXYZ[1]*positionXYZ[1]);
 	if (p==0) p=0.00001;
 	latitude = atan((positionXYZ[2]/p)/(1-e2));
 
+
 	latitudePrev = latitude + tol*2; // To overbound the following while
 	while (fabs(latitude-latitudePrev) > tol) {
+		
 		latitudePrev = latitude;
 		xn = a*a/sqrt((a*cos(latitude))*(a*cos(latitude)) + (b*sin(latitude))*(b*sin(latitude)));
 		heightOverElipsoide = p/cos(latitude)-xn;
-		if ((xn+heightOverElipsoide)!=0)
+		if ((xn+heightOverElipsoide)!=0 ) {
 			latitude = atan((positionXYZ[2]/p)/(1-e2*(xn/(xn+heightOverElipsoide))));
-		else
+		} else {
 			latitude = 0;
+		}
 	}
 	
 	positionNEU[0] = latitude;
@@ -5740,13 +16337,66 @@ void NEU2XYZ (double *positionNEU, double *positionXYZ) {
     const double    b = a*(1-f);
     const double    e2 = (a*a-b*b)/(a*a);
     double          N;
-    // WGS84 parameters (in meters)
+    // WGS84 parameters (in metres)
 
 	N=a/sqrt(1-e2*sin(positionNEU[0])*sin(positionNEU[0]));
 
     positionXYZ[0] = (N+positionNEU[2])*cos(positionNEU[0])*cos(positionNEU[1]);
     positionXYZ[1] = (N+positionNEU[2])*cos(positionNEU[0])*sin(positionNEU[1]);
     positionXYZ[2] = ((1-e2)*N+positionNEU[2])*sin(positionNEU[0]);
+}
+
+/*****************************************************************************
+ * Name        : AntiSpoofingOff
+ * Description : Check if GPS AntiSpoofing is Off
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TTime  *t                       I  N/A  Current Epoch
+ * TTime  *EpochsNoAS              I  N/A  Vector with epochs with AS off
+ * Returned value (int)            O  N/A  0 -> AS is on
+ *                                         1 -> AS is off
+ *****************************************************************************/
+int AntiSpoofingOff(TTime *t, TTime **EpochsNoAS) {
+
+	int 	i;
+	double 	tdiff0,tdiff1;
+
+	for(i=0;i<MAX_NO_AS_PERIODS;i++) {
+		tdiff1=tdiff(t,&EpochsNoAS[i][1]);
+		if (tdiff1>0.) continue; //We are ahead of the end time of this interval
+		tdiff0=tdiff(t,&EpochsNoAS[i][0]);
+		if (tdiff0>0.) return 1; //Ww are ahead of the start time of this interval. We are in a AS off period
+	}
+	return 0;
+}
+
+/*****************************************************************************
+ * Name        : getLeapSeconds
+ * Description : Return the number of leap seconds between GPS and UTC time
+ *                 for a given epoch. 
+ *                 WARNING: The number of leap seconds is hardcoded. Whenever
+ *                 a leap seconds is added, this list will have to be manually
+ *                 updated. This function is for the case where the navigation
+ *                 file does not provide the leap seconds.
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TTime  *t                       I  N/A  Current Epoch
+ * TTime  *LeapSecondsTimeList     I  N/A  Vector with epochs where leap seconds were added
+ * int *LeapSecondsNumList         I  N/A  Vector with number of leap seconds (matched with LeapSecondsTimeList)
+ * Returned value (int)            O  s    Number of leap seconds
+ *****************************************************************************/
+int getLeapSeconds (TTime *t, TTime *LeapSecondsTimeList, int *LeapSecondsNumList) {
+
+	int 	i;
+	double 	tdiff1;
+
+	for(i=0;i<MAX_LEAP_SECONDS_SIZE;i++) {
+		tdiff1=tdiff(t,&LeapSecondsTimeList[i]);
+		if (tdiff1<0) return LeapSecondsNumList[i-1]; //Current epoch is before the next leap second added
+	}
+
+	//Current epoch is ahead of all added leap seconds. Returned value is the maximum number of leap seconds added
+	return LeapSecondsNumList[MAX_LEAP_SECONDS_SIZE-1];
 }
 
 /*****************************************************************************
@@ -5761,8 +16411,9 @@ void NEU2XYZ (double *positionNEU, double *positionXYZ) {
  * int hour                        I  N/A  Current hour
  * int minute                      I  N/A  Current minute
  * double seconds                  I  N/A  Current second
+ * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void ConvertCalendarDate(int year, int month, int day, int hour, int minute, double seconds) {
+void ConvertCalendarDate(int year, int month, int day, int hour, int minute, double seconds, TOptions  *options) {
 
 	int 		GPSweek,DoW,DoY;
 	double		SoD,SecondsComp;
@@ -5781,7 +16432,7 @@ void ConvertCalendarDate(int year, int month, int day, int hour, int minute, dou
 	ttime2gpswsnoroll (&t, &GPSweek, &SoW);
 	DoW = (int)(SoW/86400.0);
 
-	printDates(year,month,day,hour,minute,seconds,DoY,SoD,GPSweek,DoW,SoW,t.MJDN);
+	printDates(year,month,day,hour,minute,seconds,DoY,SoD,GPSweek,DoW,SoW,t.MJDN,options);
 
 }
 
@@ -5794,8 +16445,9 @@ void ConvertCalendarDate(int year, int month, int day, int hour, int minute, dou
  * int year                        I  N/A  Current year
  * int doy                         I  N/A  Current day of year
  * double sod                      I  N/A  Current second of day
+ * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void ConvertDoYDate(int year, int doy, double sod) {
+void ConvertDoYDate(int year, int doy, double sod, TOptions  *options) {
 	int 		GPSweek,DoW;
 	double		SecondsComp;
 	double 		SoW;
@@ -5811,7 +16463,7 @@ void ConvertDoYDate(int year, int doy, double sod) {
 	ttime2gpswsnoroll (&t, &GPSweek, &SoW);
 	DoW = (int)(SoW/86400.0);
 
-	printDates(year,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,SecondsComp,doy,sod,GPSweek,DoW,SoW,t.MJDN);
+	printDates(year,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,SecondsComp,doy,sod,GPSweek,DoW,SoW,t.MJDN,options);
 }
 
 /*****************************************************************************
@@ -5822,8 +16474,9 @@ void ConvertDoYDate(int year, int doy, double sod) {
  * Name                           |Da|Unit|Description
  * int GPSWeek                     I  N/A  Current GPS week
  * double SoW                      I  N/A  Current second of week
+ * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void ConvertGPSWeekDate(int GPSWeek, double SoW) {
+void ConvertGPSWeekDate(int GPSWeek, double SoW, TOptions  *options) {
 	int 		DoW;
 	int			year;
 	double		DoY;
@@ -5840,7 +16493,7 @@ void ConvertGPSWeekDate(int GPSWeek, double SoW) {
 	//Get Year/DoY
 	t2doy(&t,&year,&DoY);
 
-	printDates(year,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,SecondsComp,(int)DoY,t.SoD,GPSWeek,DoW,SoW,t.MJDN);
+	printDates(year,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,SecondsComp,(int)DoY,t.SoD,GPSWeek,DoW,SoW,t.MJDN,options);
 
 }
 
@@ -5850,10 +16503,11 @@ void ConvertGPSWeekDate(int GPSWeek, double SoW) {
  *                (date conversion only). Only dates after year 1980 are supported.
  * Parameters  :
  * Name                           |Da|Unit|Description
- * int GPSWeek                     I  N/A  Current MJDN
+ * int MJDNVal                     I  N/A  Current MJDN
  * double SoD                      I  N/A  Current second of day
+ * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void ConvertMJDNDate(int MJDN, double SoD) {
+void ConvertMJDNDate(int MJDNVal, double SoD, TOptions  *options) {
 
 	int 		GPSweek,DoW;
 	int			year;
@@ -5863,7 +16517,7 @@ void ConvertMJDNDate(int MJDN, double SoD) {
 	struct tm	tm;
 
 	//Fill TTime struct
-	t.MJDN=MJDN;
+	t.MJDN=MJDNVal;
 	t.SoD=SoD;
 	//Fill tm struct
 	t2tmnolocal(&t, &tm, &SecondsComp);
@@ -5873,7 +16527,7 @@ void ConvertMJDNDate(int MJDN, double SoD) {
 	ttime2gpswsnoroll (&t, &GPSweek, &SoW);
 	DoW = (int)(SoW/86400.0);
 
-	printDates(year,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,SecondsComp,(int)DoY,t.SoD,GPSweek,DoW,SoW,t.MJDN);
+	printDates(year,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,SecondsComp,(int)DoY,t.SoD,GPSweek,DoW,SoW,t.MJDN,options);
 
 }
 
@@ -5886,8 +16540,9 @@ void ConvertMJDNDate(int MJDN, double SoD) {
  * double X                        I  m    X
  * double Y                        I  m    Y
  * double Z                        I  m    Z
+ * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void ConvertCartesianCoord(double x, double y, double z) {
+void ConvertCartesianCoord(double x, double y, double z, TOptions  *options) {
 
 	double 	positionXYZ[3];
 	double	positionNEU[3];
@@ -5900,7 +16555,7 @@ void ConvertCartesianCoord(double x, double y, double z) {
 	XYZ2NEU(positionXYZ,positionNEU);
 	XYZ2Spherical(positionXYZ,positionSph);
 
-	printCoordinates(positionXYZ,positionNEU,positionSph);
+	printCoordinates(positionXYZ,positionNEU,positionSph,options);
 
 }
 
@@ -5913,8 +16568,9 @@ void ConvertCartesianCoord(double x, double y, double z) {
  * double Longitude                I  º     Longitude [-180..180]
  * double Latitude                 I  º     Latitude [-90..90]
  * double Height                   I  m     Height
+ * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void ConvertGeodeticCoord(double lon, double lat, double height) {
+void ConvertGeodeticCoord(double lon, double lat, double height, TOptions  *options) {
 
     double  positionXYZ[3];
     double  positionNEU[3];
@@ -5927,7 +16583,7 @@ void ConvertGeodeticCoord(double lon, double lat, double height) {
     NEU2XYZ(positionNEU,positionXYZ);
     XYZ2Spherical(positionXYZ,positionSph);
 
-    printCoordinates(positionXYZ,positionNEU,positionSph);
+    printCoordinates(positionXYZ,positionNEU,positionSph,options);
 
 }
 
@@ -5939,8 +16595,9 @@ void ConvertGeodeticCoord(double lon, double lat, double height) {
  * double Longitude                I  º     Longitude [-180..180]
  * double Latitude                 I  º     Latitude [-90..90]
  * double Radius                   I  m     Radius
+ * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void ConvertSphericalCoord(double lon, double lat, double Radius) {
+void ConvertSphericalCoord(double lon, double lat, double Radius, TOptions  *options) {
 
     double  positionXYZ[3];
     double  positionNEU[3];
@@ -5953,8 +16610,28 @@ void ConvertSphericalCoord(double lon, double lat, double Radius) {
 	Spherical2XYZ(positionSph,positionXYZ);
 	XYZ2NEU(positionXYZ,positionNEU);
 
-    printCoordinates(positionXYZ,positionNEU,positionSph);
+    printCoordinates(positionXYZ,positionNEU,positionSph,options);
 
+}
+
+/*****************************************************************************
+ * Name        : mappingFunctionStr2Type
+ * Description : Return the number of increments of da between values a2 and a1
+ * Parameters  :
+ * Name                                        |Da|Unit|Description
+ * char *mappingFunctionStr                     I  N/A  Mapping function string
+ *                                                        from IONEX header
+ * Returned value (enum MappingFunctionTypes)   O  N/A  Mapping function enumerator
+ *****************************************************************************/
+enum MappingFunctionTypes mappingFunctionStr2Type (char *mappingFunctionStr) {
+
+	if (strcmp(mappingFunctionStr,"COSZ")==0 || strcmp(mappingFunctionStr,"NONE")==0) {
+		return 	MappingFunctionCOSZ;
+	} else if (strcmp(mappingFunctionStr,"QFAC")==0) {
+		return 	MappingFunctionQFAC;
+	} else {
+		return MappingFunctionUnknown; 
+	}
 }
 
 /*****************************************************************************
@@ -6104,14 +16781,19 @@ int setIonoValue (TIonoMap *ionoMap, int type, double hgt, double lat, double lo
 	ind = ionoHLLto1D(ionoMap,hgt,lat,lon);
 	if (ind<0) return 0;
 
-	if (type==0) { // TEC
-		ionoMap->TEC[ind] = value;
-	} else if (type==1) { // RMS
-		ionoMap->RMS[ind] = value;
-	} else if (type==2) { // HGT
-				ionoMap->HGT[ind] = value;
-	} else {
-		return 0;
+	switch(type) {
+		case 0: // TEC
+			ionoMap->TEC[ind] = value;
+			break;
+		case 1: // RMS
+			ionoMap->RMS[ind] = value*value; //RMS is saved in TECU^2
+			break;
+		case 2: // HGT
+			ionoMap->HGT[ind] = value;
+			break;
+		default:
+			return 0;
+			break;
 	}
 
 	return 1;
@@ -6138,15 +16820,20 @@ double getIonoValue (TIonoMap *ionoMap, int type, double hgt, double lat, double
 
 	if (ind<0) return 9999;
 
-	if (type==0) { // TEC
-		return ionoMap->TEC[ind];
-	} else if (type==1) { // RMS
-		return ionoMap->RMS[ind];
-	} else if (type==2) { // HGT
-				return ionoMap->HGT[ind];
+	switch(type) {
+		case 0: // TEC
+			return ionoMap->TEC[ind];
+			break;
+		case 1: // RMS
+			return ionoMap->RMS[ind];
+			break;
+		case 2: // HGT
+			return ionoMap->HGT[ind];
+			break;
+		default:
+			return 9999;
+			break;
 	}
-
-	return 9999;
 }
 
 /*****************************************************************************
@@ -6235,12 +16922,16 @@ int setFPPPValue (TFPPPMap *FPPPMap, int type, double hgt, double lat, double lt
 	ind = FPPPHLLto1D(FPPPMap,hgt,lat,lt);
 	if (ind<0) return 0;
 
-	if (type==0) { // TEC
-		FPPPMap->TEC[ind] = value;
-	} else if (type==1) { // SIGMA
-		FPPPMap->SIGMA[ind] = value;
-	} else {
-		return 0;
+	switch(type) {
+		case 0: // TEC
+			FPPPMap->TEC[ind] = value;
+			break;
+		case 1: // SIGMA
+			FPPPMap->SIGMA[ind] = value;
+			break;
+		default:
+			return 0;
+			break;
 	}
 
 	return 1;
@@ -6267,13 +16958,17 @@ double getFPPPValue (TFPPPMap *FPPPMap, int type, double hgt, double lat, double
 
 	if (ind<0) return 9999;
 
-	if (type==0) { // TEC
-		return FPPPMap->TEC[ind];
-	} else if (type==1) { // SIGMA
-		return FPPPMap->SIGMA[ind];
+	switch (type) {
+		case 0: // TEC
+			return FPPPMap->TEC[ind];
+			break;
+		case 1: // SIGMA
+			return FPPPMap->SIGMA[ind];
+			break;
+		default:
+			return 9999;
+			break;
 	}
-
-	return 9999;
 }
 
 /*****************************************************************************
@@ -6298,7 +16993,7 @@ int getFPPPMapTotalSize (TFPPPMap *FPPPMap) {
  * TPiercePoint *PiercePoint         IO N/A  TPiercePoint structure
  * int  satIndex                     I  N/A  Index of the satellite to 
  *                                             obtain the correction
- * double earthRadius                I  Km   Earth radius (in Kilometers)
+ * double earthRadius                I  m    Earth radius
  * double altitude                   I  Km   IonoMap altitude (in Kilometers)
  * int mode                          I  N/A  0 => Use spherical coordinates for reference station (IONEX, FPPP)
  *                                           1 => Use geodetic coordinates for reference station (SBAS)
@@ -6313,10 +17008,10 @@ void getIonoPiercePoint (TEpoch *epoch, TPiercePoint *PiercePoint, int satIndex,
 	double raylambda;
 	double xymodule;
 
-	//For the calculations in the Pierce Point and in the rest of ionexModel and FPPPmodel, a geocentric elevation is used. That differs from gLAB's elevation, which is geodetic elevation
+	//For the calculations in the Pierce Point and in the rest of ionexModel and FPPPmodel, a geocentric elevation is used.
+	//That differs from gLAB's elevation, which is geodetic elevation
 
-	earthRadius*= 1000; //Convert to meters 
-	altitude*= 1000;    //Convert to meters
+	altitude*= 1000;    //Convert to metres
 	
 	if(mode==0) {
 		recx=epoch->receiver.aproxPosition[0];
@@ -6360,35 +17055,34 @@ void getIonoPiercePoint (TEpoch *epoch, TPiercePoint *PiercePoint, int satIndex,
  * Comment     : QFAC function is from "Mapping and Predicting the Earth's
  *                  Ionosphere Using the Global Positioning System", Stefan
  *                  Schaer Inaugural dissertation
- * Name                                 |Da|Unit|Description
- * TPiercePoint *PiercePoint             IO N/A  TPiercePoint structure
- * double earthRadius                    I  N/A  Earth radius from IONEX file
- * double altitude                       I  N/A  IonoMap altitude
- * TOptions  *options                    I  N/A  TOptions structure
- * Returned value                        O  N/A  None
+ * Name                                   |Da|Unit|Description
+ * TPiercePoint *PiercePoint               IO N/A  TPiercePoint structure
+ * double earthRadius                      I  m    Earth radius from IONEX file
+ * double altitude                         I  Km   IonoMap altitude
+ * enum MappingFunctionTypes functionType  I  N/A  Mapping function used
+ * Returned value                          O  N/A  None
  *****************************************************************************/
-void getMappingFunction (TPiercePoint *PiercePoint, double earthRadius, double altitude, char functionType[5],TOptions *options){
+void getMappingFunction (TPiercePoint *PiercePoint, double earthRadius, double altitude, enum MappingFunctionTypes functionType) {
 
-	double	a0 = 1.0206;
-	double	a1 = 0.4663;
-	double	a2 = 3.5055;
-	double	a3 = -1.8415;
+	const double	a0 = 1.0206;
+	const double	a1 = 0.4663;
+	const double	a2 = 3.5055;
+	const double	a3 = -1.8415;
 	double  z = 90 + PiercePoint->elevation;
 
-	earthRadius*= 1000; //Convert to meters
-	altitude*= 1000;    //Convert to meters
+	altitude*= 1000;    //Convert to metres
 
-	if (strncmp(functionType,"COSZ",4)==0 || strncmp(functionType,"NONE",4)==0){
-		PiercePoint->mappingFunction = (altitude + earthRadius) / ( sqrt( pow(altitude + earthRadius,2) - pow(earthRadius*cos(PiercePoint->elevation*d2r),2) ) );
+	switch(functionType) {
+		case MappingFunctionCOSZ: 
+			PiercePoint->mappingFunction = (altitude + earthRadius) / ( sqrt( pow(altitude + earthRadius,2) - pow(earthRadius*cos(PiercePoint->elevation*d2r),2) ) );
+			break;
+		case MappingFunctionQFAC:
+			PiercePoint->mappingFunction = a0 + a1*pow((z/90),2) + a2*pow((z/90),4) + a3*pow((z/90),6);
+			break;
+		default:
+			PiercePoint->mappingFunction=1.;
+			break;
 	}
-	else if (strncmp(functionType,"QFAC",4)==0){
-		PiercePoint->mappingFunction = a0 + a1*pow((z/90),2) + a2*pow((z/90),4) + a3*pow((z/90),6);
-	}
-	else{
-		sprintf(messagestr,"Mapping function type \"%s\" in IONEX file not supported\n",functionType); 
-		printError(messagestr,options);
-	}
-
 }
 
 
@@ -6407,15 +17101,14 @@ void getMappingFunction (TPiercePoint *PiercePoint, double earthRadius, double a
  *                                         selected
  *                                         NULL => Satellite not found
  *****************************************************************************/
-TConstellationElement* getConstellationElement (enum GNSSystem GNSS, int PRN, TTime *t,TConstellation* constellation) {
+TConstellationElement* getConstellationElement (enum GNSSystem GNSS, int PRN, TTime *t, TConstellation* constellation) {
+
 	int i;
 
-	for (i=0;i<constellation->numSatellites;i++) {
-		if (constellation->sat[i].GNSS == GNSS && constellation->sat[i].PRN == PRN) {
-			if (tdiff(t,&constellation->sat[i].tLaunch)>0 && tdiff(t,&constellation->sat[i].tDecommissioned)<0) {
-				// If t is beyond tLaunch but lower than tDecommissioned
-				return &constellation->sat[i];
-			}
+	for (i=0;i<constellation->numSatellites[GNSS][PRN];i++) {
+		if (tdiff(t,&constellation->sat[GNSS][PRN][i].tLaunch)>0 && tdiff(t,&constellation->sat[GNSS][PRN][i].tDecommissioned)<0) {
+			// If t is beyond tLaunch but lower than tDecommissioned
+			return &constellation->sat[GNSS][PRN][i];
 		}
 	}
 	return NULL;
@@ -6453,13 +17146,13 @@ TStation *getStation (char *name, TStationList *stationList) {
  *               mean of all the values that have been inserted
  * Parameters  :
  * Name                           |Da|Unit|Description
- * TStat  *stat                    IO N/A  TStat structure to operate
+ * TStat  *Stat                    IO N/A  TStat structure to operate
  * double  value                   I  N/A  Value to include to stat
  *****************************************************************************/
-void addStat (TStat *stat, double value) {
-	stat->mean = (stat->n*stat->mean + value)/(stat->n+1);
-	stat->mean2 = (stat->n*stat->mean2 + value*value)/(stat->n+1);
-	stat->n++;
+void addStat (TStat *Stat, double value) {
+	Stat->mean = (Stat->n*Stat->mean + value)/(Stat->n+1);
+	Stat->mean2 = (Stat->n*Stat->mean2 + value*value)/(Stat->n+1);
+	Stat->n++;
 }
 
 
@@ -6497,7 +17190,7 @@ void ConcatenateSP3 (int RefData, TGNSSproducts *products, TGNSSproducts *pastSP
 	if (RefData==1) {
 		initPRN=0;
 	}
-	
+		
 	//Free memory from previous concatenations
 	//Concatenation from previous products will be in pastSP3Prod structure,
 	//as data from products has been previously moved to pastSP3Prod
@@ -6541,6 +17234,7 @@ void ConcatenateSP3 (int RefData, TGNSSproducts *products, TGNSSproducts *pastSP
 
 
 	for(GNSS=0;GNSS<MAX_GNSS;GNSS++) {
+
 		for(PRN=initPRN;PRN<MAX_SATELLITES_PER_GNSS;PRN++) {
 			//Concatenate SP3 orbits
 			
@@ -6551,13 +17245,11 @@ void ConcatenateSP3 (int RefData, TGNSSproducts *products, TGNSSproducts *pastSP
 			indPast = orbitsPast->index[GNSS][PRN];
 			indNext = orbitsNext->index[GNSS][PRN];
 
-
 			if (RefData==1) {
 				ind=indPast=indNext=0;
 			}
-			
-			if (ind==-1 && indPast==-1 && indNext==-1) continue;
 
+			if (ind==-1 && indPast==-1 && indNext==-1) continue;
 
 			// Check how many data can be allocated in arrays
 			if(indPast!=-1 && ind!=-1) {
@@ -6843,8 +17535,8 @@ void ConcatenateSP3 (int RefData, TGNSSproducts *products, TGNSSproducts *pastSP
 				ind=clocksTmp->numSatellites;
 				clocksTmp->numSatellites++;
 				clocksTmp->block = realloc(clocksTmp->block,sizeof(TSP3clockblock*)*clocksTmp->numSatellites);
-				clocksTmp->block[ind] = malloc(sizeof(TSP3clockblock)*clocksTmp->vsizeblock);
-				for (i=0;i<clocksTmp->vsizeblock;i++) {
+				clocksTmp->block[ind] = malloc(sizeof(TSP3clockblock)*clocksTmp->numRecords);
+				for (i=0;i<clocksTmp->numRecords;i++) {
 					initSP3clockblock(&clocksTmp->block[ind][i]);
 					memcpy(&clocksTmp->block[ind][i].t,&clocksTmp->block[0][i].t,sizeof(TTime)); //Copy timestamps from first satellite in list (any satellite could be used, as timestamp is the same for all satellites)
 				}
@@ -6860,6 +17552,7 @@ void ConcatenateSP3 (int RefData, TGNSSproducts *products, TGNSSproducts *pastSP
 				for ( i = 0; i < clocksPast->numRecords; i++ ) {
 					//Samples must be saved with an equal time between each samples. Therefore, we need to save epochs with 0s or add samples with 0's
 					//to account for data gaps
+
 					if (i==0) {
 						//The first sample must be compared with the start of the data
 						diffSample=tdiff(&clocksPast->block[indPast][i].t,&clocksTmp->startTimeConcat);
@@ -7084,24 +17777,47 @@ void ConcatenateSP3 (int RefData, TGNSSproducts *products, TGNSSproducts *pastSP
 void freeSP3data(TGNSSproducts *products) {
 
 	int i;
-	
-	//Free orbit data
-	for(i=0;i<products->SP3->orbits.numSatellitesRead;i++) {
-		free(products->SP3->orbits.block[i]);
-	}
-	free(products->SP3->orbits.block);
-	free(products->SP3->orbits.accuracy);
 
-	products->SP3->orbits.block=NULL;
-	products->SP3->orbits.accuracy=NULL;
+	if (products->SP3==NULL) return;
+
+	//Free orbit data
+	for(i=0;i<products->SP3->orbits.numSatellites;i++) {
+		if (products->SP3->orbits.block[i]!=NULL) {
+			free(products->SP3->orbits.block[i]);
+		}
+	}
+	if (products->SP3->orbits.block!=NULL) {
+		free(products->SP3->orbits.block);
+		products->SP3->orbits.block=NULL;
+	}
+	if (products->SP3->orbits.accuracy!=NULL) {
+		free(products->SP3->orbits.accuracy);
+		products->SP3->orbits.accuracy=NULL;
+	}
+
 
 	//Free clock data
-	for(i=0;i<products->SP3->clocks.numSatellitesRead;i++) {
+	for(i=0;i<products->SP3->clocks.numSatellites;i++) {
 		free(products->SP3->clocks.block[i]);
 	}
-	free(products->SP3->clocks.block);
 
-	products->SP3->clocks.block=NULL;
+	if (products->SP3->clocks.block!=NULL) {
+		free(products->SP3->clocks.block);
+		products->SP3->clocks.block=NULL;
+	}
+
+
+	//Free concatenated block (if available)
+	for(i=0;i<MAX_GNSS*MAX_SATELLITES_PER_GNSS;i++) {
+		if(products->SP3->orbits.Concatblock[i]!=NULL) {
+			free(products->SP3->orbits.Concatblock[i]);
+			products->SP3->orbits.Concatblock[i]=NULL;
+		}
+		if(products->SP3->clocks.Concatblock[i]!=NULL) {
+			free(products->SP3->clocks.Concatblock[i]);
+			products->SP3->clocks.Concatblock[i]=NULL;
+		}
+	}
 
 	free(products->SP3);
 
@@ -7119,37 +17835,38 @@ void freeSP3data(TGNSSproducts *products) {
  * Parameters  :
  * Name                           |Da|Unit|Description
  * char  *binary                   I  N/A  String with the binary values (one bit per byte)
+ * int   binarylen                 I  N/A  Length of binary string
  * char  *hex                      O  N/A  String with the text values
  * int   capital                   I  N/A  To indicate if we want upper case or lower case characters
  *                                          0 => Lower case
  *                                          1 => Upper case
  *****************************************************************************/
-void strbintostrhex (char *binary, char *hex, int capital) {
+void strbintostrhex (char *binary, int binarylen, char *hex, int capital) {
 
-	int 	i,j;
-	int 	len;
-	int 	modulo;
+	int 	i,j=0;
+	int		len=0;
+	int 	moduloValue;
 	int 	ascii;
 	char 	aux[2000],aux2[2000];
 	char	*endptr;                //This is just for strtol function
 
 	strcpy(aux,binary);	//Copy string to auxiliar variable, so we don't modify the input
 
-	len=strlen(binary);	//Find input length
-	modulo=len%4;		//Check if input bit length is a multiple of 4
+	moduloValue=binarylen%4;		//Check if input bit length is a multiple of 4
 
-	if(modulo!=0) {		//If it nos a multiple of 4 add trailing zeros
-		for(i=0;i<4-len%4;i++) {
-			sprintf(aux2,"%s0",aux);	
-			strcpy(aux,aux2);
+	if(moduloValue!=0) {		//If it not a multiple of 4 add trailing zeros
+		for(i=0;i<4-binarylen%4;i++) {
+			len+=sprintf(&aux[len],"0");
+			j++;
 		}
+		binarylen+=j;
 	}
 
 	j=0;			//j will indicate the position in the output string
 
 	//Loop to process all bits in groups of 4
-	for(i=0;i<(int)(len+modulo)/4;i++) {
-		getstr(aux2,aux,i*4,4);		//Get 4 bits
+	for(i=0;i<(int)(binarylen+moduloValue)/4;i++) {
+		getstr(aux2,aux,binarylen,i*4,4);	//Get 4 bits
 
 		ascii=strtol(aux2,&endptr,2);	//Get the integer value
 
@@ -7176,23 +17893,10 @@ char *SBASnavmode2SBASnavstr (int mode) {
 	//Static variables are shared between threads (as they are saved in the data segment).
 	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
 	//directive to make OpenMP create a local (static) copy for each thread
-	static char str[10];
+	static char str[2][5]={"NPA","PA"};
 	#pragma omp threadprivate(str)
 
-	strcpy(str,"GPS");
-
-	switch (mode) {
-	case 0:
-		strcpy(str,"NPA");
-		break;
-	case 1:
-		strcpy(str,"PA");
-		break;
-	default:
-		strcpy(str,"GPS");
-	}
-
-	return str;
+	return str[mode];
 }
 
 /*****************************************************************************
@@ -7202,15 +17906,15 @@ char *SBASnavmode2SBASnavstr (int mode) {
  * Parameters  :
  * Name                           |Da|Unit|Description
  * char  *hex                      I  N/A  String with the text values
+ * int  length                     I  N/A  Length of hex string
  * char  *binary                   O  N/A  String with the binary values (one bit per byte)
  *****************************************************************************/
-void strhextostrbin (char *hex,char *binary){
+void strhextostrbin (char *hex, int length, char *binary){
 
 	int i,j,k;
 	int ascii;		    	//Used to store the ASCII number of a character
-	int length=strlen(hex);		//Find the length of the user's input
 
-	char binary_reverse[5];
+	char binary_reverse[10];
 	
 	for(i=0;i<length;i++){		//Repeat until user's input have all been read
 					//i<length because the last character is "\0"
@@ -7241,8 +17945,7 @@ void strhextostrbin (char *hex,char *binary){
 			}	
 			if(ascii%2== 0) {  			//If ascii is divisible by 2 then put a zero
 				binary_reverse[j] = '0';	
-			}
-			else if(ascii%2==1) {  			//If it isn't divisible by 2 then put a 1
+			} else {  					//If it isn't divisible by 2 then put a 1
 				binary_reverse[j] = '1';   	
 			}
 			ascii /= 2;				//Find the quotient of ascii / 2
@@ -7307,9 +18010,9 @@ void strbintobinstr (char *binary, int binarylen, unsigned char *bitstr, int bit
  * Returned value (integer)        O  N/A  The integer value of two complement binary value
  *****************************************************************************/
 int twocomplementstrbintointeger (char *binary, int binarylen) {
-	int i;
-	char *endptr;		//for strtol function
-	char aux[250];		//string to put the complemented number (without the sign bit)
+	int 	i;
+	char 	*endptr;		//for strtol function
+	char 	aux[250];		//string to put the complemented number (without the sign bit)
 
 	if(binary[0]=='0') {	//Positive number
 		return strtol(binary,&endptr,2);
@@ -7326,6 +18029,36 @@ int twocomplementstrbintointeger (char *binary, int binarylen) {
 	}
 }
 
+/*****************************************************************************
+ * Name        : twocomplementstrbintolonglonginteger
+ * Description : Convert a two complement binary value in string 
+ *                 (one bit per byte) to a long long integer number
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * char  *binary                   I  N/A  String with the binary values (one bit per byte)
+ * int binarylen                   O  N/A  Length of binary string
+ * Returned value (long long int)  O  N/A  The long long integer value of two complement binary value
+ *****************************************************************************/
+long long int twocomplementstrbintolonglonginteger (char *binary, int binarylen) {
+	int 	i;
+	char 	*endptr;		//for strtoll function
+	char 	aux[250];		//string to put the complemented number (without the sign bit)
+
+	if(binary[0]=='0') {	//Positive number
+		return strtoll(binary,&endptr,2);
+	} else {		//Negative number
+		for(i=1;i<binarylen;i++) {		//Loop for complementing all the bits except the sign bit
+			if(binary[i]=='0') {
+				aux[i-1]='1';
+			} else {
+				aux[i-1]='0';
+			}
+		}
+		aux[i-1]='\0';	//Set the end of the string
+		return (long long int)(-1)*((long long int)(1)+strtoll(aux,&endptr,2));
+	}
+}
+
 
 /*****************************************************************************
  * Name        : checksumSBAS
@@ -7337,11 +18070,11 @@ int twocomplementstrbintointeger (char *binary, int binarylen) {
  *****************************************************************************/
 int checksumSBAS (unsigned char *msg) {
 
-	int key=0x1864CFB;						//25 bit polynomial for this CRC, with bits 0,1,3,4,5,6,7,10,11,14,17,18,23,24 equal to 1
-	int chk=0;							//Contains the value of the checksum
-	int pos=0;							//Indicates the bit number we are reading in the whole message (starting in bit 0)						
+	const int key=0x1864CFB;		//25 bit polynomial for this CRC, with bits 0,1,3,4,5,6,7,10,11,14,17,18,23,24 equal to 1
+	int chk=0;						//Contains the value of the checksum
+	int pos=0;						//Indicates the bit number we are reading in the whole message (starting in bit 0)						
 	int i;
-	int maxpos=250;							//The total message is 250 bits long (including the CRC bits)
+	const int maxpos=250;			//The total message is 250 bits long (including the CRC bits)
 	int end=0;
 	int position,shift;
 	unsigned char aux[32];
@@ -7354,14 +18087,14 @@ int checksumSBAS (unsigned char *msg) {
 		while ((chk & 0x1000000)==0 && !end) {			//(chk & 0x1000000)==0 means bit 25 of chk equal to 0.  !end means to not have arrived to the end of the message (not arrived to bit 250)
 									//This while is true while we don't arrive to the last bit or when bit 25 of chk (checksum) is not 0, which means
 									//that our current value of chk has more than 24 bits, which is the maximum number for this CRC
-				chk=chk<<1;					//Move chk one bit to the right (equivalent to multiply chk per 2)
+			chk=chk<<1;						//Move chk one bit to the right (equivalent to multiply chk per 2)
 			shift=7-(pos%8);				//shift indicates which bit in the current byte of the message we want to read (from right to left)
 			position=1<<shift;				//position=2^shift. Position is the mask to apply in order to read the current bit (all the others bits in the byte will be 0)
 			chk+=(aux[(int)(pos/8)] & position)>>shift;	//Select the current byte of the message, apply the mask and move the bit to the the least significant position,
 									//(so the integer value is 0 or 1), and then add this value to chk
 			pos++;						//pos indicates the current bit we are reading. Add 1 in order to read the next bit.
 			if (pos==maxpos) end=1;				//If we have arrived to the last bit set end=1
-			}
+		}
 		if ((chk & 0x1000000)!=0) chk=chk^key;			//(chk & 0x1000000)!=0 means bit 25 of chk not equal 0 (bit 25=1). chk=chk^key means chk = chk XOR key
 									//Doing this XOR, bit 25 will be 0 again, so the checksum will be 24 bits long. If we have not arrived to the end
 									//of the message, we will continue reading bits and computing the checksum
@@ -7404,7 +18137,7 @@ int openSBASwritefiles (FILE **fdlist, char **filelist, char *fileread, int sour
 	char			name[MAX_INPUT_LINE];
 	char			fullname[MAX_INPUT_LINE];
 	char			path[MAX_INPUT_LINE];
-	char   			extensionlist[12][5]={".smt",".s00",".s01",".sfc",".s06",".s07",".s10",".s18",".ssc",".s26",".s27",".s28"};
+	const char   	extensionlist[12][5]={".smt",".s00",".s01",".sfc",".s06",".s07",".s10",".s18",".ssc",".s26",".s27",".s28"};
 	char 		  	*filepointer;
 	struct 	stat 	path_stat;
 
@@ -7472,28 +18205,28 @@ int openSBASwritefiles (FILE **fdlist, char **filelist, char *fileread, int sour
 
 	if (filepointer==NULL) {
 		//There is no directory path in the file
-		getstr(name,fileread,0,8);
+		getstr(name,fileread,(int)strlen(fileread),0,8);
 		strcpy(fullname,fileread);
 	} else {
 		//There are directories in the path
-		getstr(name,filepointer,1,8);
+		getstr(name,filepointer,(int)strlen(filepointer),1,8);
 		strcpy(fullname,(char *)(filepointer+sizeof(char)));
 	}
 	//Check if a RINEX B file has to be written
 	if(options->writeRinexBfile==1) {
 		if(sourcefile==0) {
-			//The data file is a RINEXB, the new file will have the same filename but with a ".v" at the end (v stands for verified)
+			//The data file is a RINEXB, the new file will have the same filename but with a "_conv" at the end (v stands for verified)
 			strcpy(filelist[fdRINEXB],path);		//Put path in filelist
 			len=strlen(path);
 			strcpy(&filelist[fdRINEXB][len],fullname);	//Put original name in filename
 			len=strlen(filelist[fdRINEXB]);
-			strcpy(&filelist[fdRINEXB][len],".v");		//Add the ".v" at the end of the filename
+			strcpy(&filelist[fdRINEXB][len],"_conv");		//Add the "_conv" at the end of the filename
 		} else {
 			//The data file is a EMS file. We have to change the extension from ".ems" to ".yyb.v", being yy the year
 			//To get the year, we have to read the first line of the EMS file
 			if ((fd = fopen(fileread,"r"))) {
 					if(getL(line,&len,fd)!=-1) {
-					getstr(aux,line,4,2);
+					getstr(aux,line,len,4,2);
 					year=atoi(aux);
 					fclose(fd);
 				} else {
@@ -7508,8 +18241,8 @@ int openSBASwritefiles (FILE **fdlist, char **filelist, char *fileread, int sour
 			len=strlen(path);
 			strcpy(&filelist[fdRINEXB][len],name);		//Put original name (without extension) in filename
 			len=strlen(filelist[fdRINEXB]);
-			sprintf(aux,".%02db.v",year);
-			strcpy(&filelist[fdRINEXB][len],aux);		//Add the ".v" at the end of the filename
+			sprintf(aux,".%02db_conv",year);
+			strcpy(&filelist[fdRINEXB][len],aux);		//Add the "_conv" at the end of the filename
 		}
 		fdlist[fdRINEXB]=fopen(filelist[fdRINEXB],"w");
 		if (fdlist[fdRINEXB]==NULL) {
@@ -7528,14 +18261,14 @@ int openSBASwritefiles (FILE **fdlist, char **filelist, char *fileread, int sour
 				len=strlen(path);
 				strcpy(&filelist[fdEMS][len],name);		//Put original name (without extension) in filename
 				len=strlen(filelist[fdEMS]);
-				strcpy(&filelist[fdEMS][len],".ems.v");		//Add the ".v" at the end of the filename
+				strcpy(&filelist[fdEMS][len],".ems_conv");		//Add the ".v" at the end of the filename
 		} else {
 				//The data file is a EMS file. The new file will have the extension ".ems.v" (v stands for verified)
 				strcpy(filelist[fdEMS],path);			//Put path in filename
 				len=strlen(path);
 				strcpy(&filelist[fdEMS][len],fullname);		//Put original name in filename
 				len=strlen(filelist[fdEMS]);
-				strcpy(&filelist[fdEMS][len],".v");		//Add the ".v" at the end of the filename
+				strcpy(&filelist[fdEMS][len],"_conv");		//Add the ".v" at the end of the filename
 		}
 		fdlist[fdEMS]=fopen(filelist[fdEMS],"w");
 		if (fdlist[fdEMS]==NULL) {
@@ -7547,19 +18280,20 @@ int openSBASwritefiles (FILE **fdlist, char **filelist, char *fileread, int sour
 
 	//Check if a Pegasus file has to be written
 	if(options->writePegasusfile==1) {
+		len=(int)strlen(fullname);
 		//Get DoY from filename
-		getstr(aux,fullname,4,3);
+		getstr(aux,fullname,len,4,3);
 		doy=atoi(aux);
 
 		if(sourcefile==0) {
 			//The data file is a RINEXB, we can extract the year directly from the filename
-			getstr(aux,fullname,9,2);
+			getstr(aux,fullname,len,9,2);
 			year=atoi(aux)+2000;
 		} else {
 			//The data file is a EMS file, we need to read the first line of the file to extract the time in order to get the year and the GPS week
 			if ((fd = fopen(fileread,"r"))) {
 				if(getL(line,&len,fd)!=-1) {
-					getstr(aux,line,4,2);
+					getstr(aux,line,len,4,2);
 					year=atoi(aux)+2000;
 					fclose(fd);
 				} else {
@@ -7677,251 +18411,206 @@ void closefiles (FILE  **fdlist, int numfiles) {
 	
 }
 
-/*****************************************************************************
- * Name        : freeSBASblock
- * Description : Free memory sbasblock struct to avoid memory leak
- *               (each call to malloc needs its correspondent free call)
- * Parameters  :
- * Name                           |Da|Unit|Description
- * int  messagetype                I  N/A  Message type identifier number
- * TSBASblock  *sbasblock          O  N/A  TSBASblock struct
- * TOptions  *options              I  N/A  TOptions structure
- *****************************************************************************/
-void freeSBASblock (int messagetype,TSBASblock *sbasblock,TOptions  *options) {
-
-	int i,num;
-
-	switch(messagetype) {
-		case(PRNMASKASSIGNMENTS):
-			free(sbasblock->pos2PRN);
-			free(sbasblock->pos2GNSS);
-			for(i=0;i<MAX_GNSS;i++) {
-				free(sbasblock->PRNactive[i]);
-				free(sbasblock->PRN2pos[i]);
-			}
-			free(sbasblock->PRNactive);
-			free(sbasblock->PRN2pos);
-			break;
-		case(DONTUSE):
-			if(options->alarmmessageastype2==0) break;
-			/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
-		case(FASTCORRECTIONS2):case(FASTCORRECTIONS3):case(FASTCORRECTIONS4):case(FASTCORRECTIONS5):
-			free(sbasblock->IODF);
-			free(sbasblock->PRC);
-			free(sbasblock->UDREI);
-			free(sbasblock->UDRE);
-			free(sbasblock->UDREsigma);
-			break;
-		case(INTEGRITYINFO):
-			free(sbasblock->IODF);
-			free(sbasblock->UDREIacu);
-			free(sbasblock->UDREacu);
-			free(sbasblock->UDREacusigma);
-			break;
-		case(FASTCORRECTIONSDEGRADATIONFACTOR):
-			free(sbasblock->aiind);
-			free(sbasblock->aifactor);
-			free(sbasblock->timeoutintervalnonprecise);
-			free(sbasblock->timeoutintervalprecise);
-			free(sbasblock->fastcorrupdateinterval);
-			break;
-		case(DEGRADATIONPARAMETERS):
-			free(sbasblock->degradationfactors);
-			break;
-		case(LONGTERMSATELLITECORRECTIONS):
-			for(i=0;i<sbasblock->numlongtermsaterrcorrections;i++) {
-				free(sbasblock->longtermsaterrcorrections[i]);
-			}
-			free(sbasblock->longtermsaterrcorrections);
-			break;
-		case(MIXEDFASTLONGTERMCORRECTIONS):
-			free(sbasblock->IODF);
-			free(sbasblock->PRC);
-			free(sbasblock->UDREI);
-			free(sbasblock->UDRE);
-			free(sbasblock->UDREsigma);
-			
-			for(i=0;i<sbasblock->numlongtermsaterrcorrections;i++) {
-				free(sbasblock->longtermsaterrcorrections[i]);
-			}
-			free(sbasblock->longtermsaterrcorrections);
-			break;
-		case(GEONAVIGATIONMESSAGE):
-			free(sbasblock->geonavigationmessage);
-			break;
-		case(GEOSATELLITEALMANACS):
-			if(sbasblock->numgeoalmanacs==0) num=1;
-			else num=sbasblock->numgeoalmanacs;
-
-			for(i=0;i<num;i++) {
-				free(sbasblock->geoalmanacsmessage[i]);
-			}
-			free(sbasblock->geoalmanacsmessage);
-			break;
-		case(SBASSERVICEMESSAGE):
-			if(sbasblock->numregioncoordinates==0) num=1;
-			else num=sbasblock->numregioncoordinates;
-
-			free(sbasblock->servicemessage);
-			for(i=0;i<num;i++) {
-				free(sbasblock->regioncoordinates[i]);
-			}
-			free(sbasblock->regioncoordinates);
-			break;
-		case(SBASNETWORKTIMEPARAMETERS):
-			free(sbasblock->networktimemessage);
-			break;
-		case(CLOCKEPHEMERISCOVARIANCEMATRIX):
-			if(sbasblock->numclockephemeriscovariance==0) num=1;
-			else num=sbasblock->numclockephemeriscovariance;
-
-			for(i=0;i<num;i++) {
-				free(sbasblock->clockephemeriscovariance[i]);
-			}			
-			free(sbasblock->clockephemeriscovariance);
-			break;
-		case(IONOSPHERICGRIDPOINTSMASKS):
-			free(sbasblock->igpmaskmessage);
-			break;
-		case(IONOSPHERICDELAYCORRECTIONS):
-			for(i=0;i<15;i++) {
-				free(sbasblock->ionodelayparameters[i]);
-			}
-			free(sbasblock->ionodelayparameters);
-			break;
-		default:
-			break;
-	}
-}
-
 
 /*****************************************************************************
  * Name        : SBASMissingMessageClearData
- * Description : When 4 or more consecutive messages are missed, all fast 
-                 corrections data for all PRN have to be erased and UDREI set
-                 14 (Don't Use)
+ * Description : When 4 or more consecutive messages are missed: 
+ *                  SBAS 1F: all fast corrections data for all PRN have to be
+ *                           erased and UDREI set to 14 (Don't Use)
+ *                  SBAS DFMC:
+ *                    A.4 (last paragrah):
+ *                    When no valid SBAS message has been received for 4 seconds (indicating a 
+ *                    probable communications link problem or SBAS signal blockage), all
+ *                    DFREI data from that SBAS signal will timeout
  * Parameters  :
  * Name                           |Da|Unit|Description
  * int GEOindex                    I  N/A  Index of the GEO which had 4 or more missed messages
+ * int frequencyPos                I  N/A  Frequency position where 4 messages were lost
+ * TTime *currentepoch             I  N/A  Current epoch
  * TSBASdata  *SBASdata            IO N/A  Struct to save SBAS data
+ * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void SBASMissingMessageClearData (int GEOindex, TSBASdata  *SBASdata) {
+void SBASMissingMessageClearData (int GEOindex, int frequencyPos, TTime *currentepoch, TSBASdata  *SBASdata, TOptions  *options) {
 
-	int i,j,k;
+	int 	i,j,k;
+	double	timediffMsg,timediffTimeOut;
+	double	DFREItmout;
 
 	//We have lost 4 or more consecutive messages
 	//We have to assume that sigma UDRE for all satellites are set to "Not monitored". Thus, we have to erase all data from all satellites
 	//Loop through all Masks
-	for(i=0;i<5;i++) {
-		//Loop through all SBAS fast corrections
-		for(j=0;j<MAXSBASFASTCORR;j++) {
-			//Loop for all satellites in mask
-			for(k=0;k<51;k++) {
-				SBASdata[GEOindex].poslastFC[i][k] = -1;
-				SBASdata[GEOindex].numFC[i][k] = 0;
-				SBASdata[GEOindex].PRC[i][j][k] = 9999;
-				SBASdata[GEOindex].RRC[i][j][k] = 9999;
-				SBASdata[GEOindex].UDRE[i][j][k] = -1;
-				SBASdata[GEOindex].UDREsigma[i][j][k] = -1;
-				SBASdata[GEOindex].IODF[i][j][k] = -1;
-				SBASdata[GEOindex].lastfastcorrections[i][j][k].MJDN = -1;
-				SBASdata[GEOindex].lastfastcorrections[i][j][k].SoD = -1;
-				if (j==0 && i==0) {
-					SBASdata[GEOindex].lastfastmessage[k]=-1;
-					SBASdata[GEOindex].IODFintegrity[k]=-1;
-					SBASdata[GEOindex].oldIODFintegrity[k]=-1;
-					SBASdata[GEOindex].UDREI6[k]=-1;
-					SBASdata[GEOindex].UDRE6[k]=-1;
-					SBASdata[GEOindex].UDREsigma6[k]=-1;
-					SBASdata[GEOindex].oldUDREI6[k]=-1;
-					SBASdata[GEOindex].oldUDRE6[k]=-1;
-					SBASdata[GEOindex].oldUDREsigma6[k]=-1;
-					SBASdata[GEOindex].lastintegrityinfo[k].MJDN = -1;
-					SBASdata[GEOindex].lastintegrityinfo[k].SoD = -1.;
-					SBASdata[GEOindex].oldlastintegrityinfo[k].MJDN = -1;
-					SBASdata[GEOindex].oldlastintegrityinfo[k].SoD = -1.;
-				}
+	switch(frequencyPos) {
+		case SBAS1FFREQPOS:
+			for(i=0;i<5;i++) {
+				//Loop through all SBAS fast corrections
+				for(j=0;j<MAXSBASFASTCORR;j++) {
+					//Loop for all satellites in mask
+					for(k=0;k<51;k++) {
+						SBASdata[GEOindex].poslastFC[i][k] = -1;
+						SBASdata[GEOindex].numFC[i][k] = 0;
+						SBASdata[GEOindex].PRC[i][j][k] = 9999;
+						SBASdata[GEOindex].RRC[i][j][k] = 9999;
+						SBASdata[GEOindex].UDRE[i][j][k] = -1;
+						SBASdata[GEOindex].UDREsigma[i][j][k] = -1;
+						SBASdata[GEOindex].IODF[i][j][k] = -1;
+						SBASdata[GEOindex].lastfastcorrections[i][j][k].MJDN = -1;
+						SBASdata[GEOindex].lastfastcorrections[i][j][k].SoD = -1;
+						if (j==0 && i==0) {
+							SBASdata[GEOindex].lastfastmessage[k]=-1;
+							SBASdata[GEOindex].IODFintegrity[k]=-1;
+							SBASdata[GEOindex].oldIODFintegrity[k]=-1;
+							SBASdata[GEOindex].UDREI6[k]=-1;
+							SBASdata[GEOindex].UDRE6[k]=-1;
+							SBASdata[GEOindex].UDREsigma6[k]=-1;
+							SBASdata[GEOindex].oldUDREI6[k]=-1;
+							SBASdata[GEOindex].oldUDRE6[k]=-1;
+							SBASdata[GEOindex].oldUDREsigma6[k]=-1;
+							SBASdata[GEOindex].lastintegrityinfo[k].MJDN = -1;
+							SBASdata[GEOindex].lastintegrityinfo[k].SoD = -1.;
+							SBASdata[GEOindex].oldlastintegrityinfo[k].MJDN = -1;
+							SBASdata[GEOindex].oldlastintegrityinfo[k].SoD = -1.;
+						}
 
-				if(i==SBASdata[GEOindex].IODPfastcorr) {
-					SBASdata[GEOindex].useforbidden[SBASdata[GEOindex].pos2GNSS[i][k]][SBASdata[GEOindex].pos2PRN[i][k]]=14;
+						if(i==SBASdata[GEOindex].IODPfastcorr && i<4) {
+							//Valid IODP are from 0 to 3. Value 4 is for none received
+							if (SBASdata[GEOindex].pos2GNSS[frequencyPos][i][k]!=-1 && SBASdata[GEOindex].pos2PRN[frequencyPos][i][k]!=-1) {
+								//SBASdata[GEOindex].pos2GNSS[frequencyPos][i][k] or SBASdata[GEOindex].pos2PRN[frequencyPos][i][k] may be -1 if we received fast corrections but not the mask
+								SBASdata[GEOindex].useforbidden[SBASdata[GEOindex].pos2GNSS[frequencyPos][i][k]][SBASdata[GEOindex].pos2PRN[frequencyPos][i][k]]=14;
+							}
+						}
+					}
 				}
 			}
-		}
+			break;
+		 case SBASDFMCFREQPOS:
+			DFREItmout=(double)SBASdata[GEOindex].timeoutmessages[SBASDFMCFREQPOS][options->precisionapproach][INTEGRITYINFODFMC34];
+			//Loop through all Masks
+			for(i=0;i<5;i++) {
+				//Loop for all satellites in mask
+				for(j=0;j<92;j++) {
+					if (SBASdata[GEOindex].lastDFREIreceived[i][j].MJDN!=-1) {
+						timediffMsg=tdiff(currentepoch,&SBASdata[GEOindex].lastDFREIreceived[i][j]);
+						timediffTimeOut=timediffMsg-DFREItmout;
+						if (timediffTimeOut<=DIFFEQTHRESHOLD) { //The DIFFEQTHRESHOLD is to avoid problems with decimals
+							//DFREI data not timed out. Change the message reception time so during the modelling
+							//process all DFREI data is timed out
+							//The .1 second is to make message reception be one tenth of a second behind of the timeout (so for 0.1 data rate files they also timeout)
+							SBASdata[GEOindex].lastDFREIreceived[i][j]=tdadd(&SBASdata[GEOindex].lastDFREIreceived[i][j],timediffTimeOut-options->SBASmsgFlightTime);
+						}//If data is timed out, leave the reception time as it is
+					}
+				}
+			}
+			break;
+	 	default:
+			break;
 	}
 }		
 
 /*****************************************************************************
  * Name        : SBASErrorMessageTimeoutFastCorr
- * Description : When 4 or more consecutive messages are wrong, we need to timeout
- *                the fast corrections (for PA only) for this GEO and set it as not
- *                monitored (not available for navigation).
- *                This behaviour is done by following the following rules in MOPS-D
+ * Description : When 4 or more consecutive messages are wrong:
+ *                SBAS 1F:
+ *                  We need to timeout the fast corrections (for PA only) for this GEO
+ *                  and set it as not monitored (not available for navigation).
+ *                  This behaviour is done by following the following rules in MOPS-D
  *
- *                2.1.1.4.9 Message Timeout Periods:
- *                  For approach LNAV/VNAV, LP, LPV when no valid SBAS message has been received
- *                  for 4 seconds (indicating a probable communications link problem or SBAS signal
- *                  blockage), all UDREI data from that SBAS satellite shall timeout
+ *                  2.1.1.4.9 Message Timeout Periods:
+ *                    For approach LNAV/VNAV, LP, LPV when no valid SBAS message has been received
+ *                    for 4 seconds (indicating a probable communications link problem or SBAS signal
+ *                    blockage), all UDREI data from that SBAS satellite shall timeout
  *
- *                2.1.1.5.2 SBAS UNHEALTHY Designation
- *                  The equipment shall designate any GPS or SBAS satellite as SBAS UNHEALTHY upon
- *                  the occurrence of any of the following conditions:
- *                   a) The equipment has successfully decoded a UDREI of 15, indicating that the
- *                      SBAS has assessed the satellite’s signal as unusable;
- *                   b) The step detection function has declared a step error;
- *                   c) For SBAS satellites, URA index is 15 or higher; or
- *                   d) For SBAS satellites, failure of parity on 4 successive messages.
+ *                  2.1.1.5.2 SBAS UNHEALTHY Designation
+ *                    The equipment shall designate any GPS or SBAS satellite as SBAS UNHEALTHY upon
+ *                    the occurrence of any of the following conditions:
+ *                     a) The equipment has successfully decoded a UDREI of 15, indicating that the
+ *                        SBAS has assessed the satellite’s signal as unusable;
+ *                     b) The step detection function has declared a step error;
+ *                     c) For SBAS satellites, URA index is 15 or higher; or
+ *                     d) For SBAS satellites, failure of parity on 4 successive messages.
  *                   
- *                 The SBAS UNHEALTHY status for that satellite shall be changed only after the
- *                 condition has cleared (including time-out of UDREI data) and none of the above
- *                 conditions exist. When an SBAS satellite is designated as UNHEALTHY due to any one
- *                 of the above conditions, the integrity and correction data can continue to be applied.
- *                
+ *                   The SBAS UNHEALTHY status for that satellite shall be changed only after the
+ *                   condition has cleared (including time-out of UDREI data) and none of the above
+ *                   conditions exist. When an SBAS satellite is designated as UNHEALTHY due to any one
+ *                   of the above conditions, the integrity and correction data can continue to be applied.
+ *
+ *               SBAS DFMC:
+ *                    A.4 (last paragrah):
+ *                    When no valid SBAS message has been received for 4 seconds (indicating a 
+ *                    probable communications link problem or SBAS signal blockage), all
+ *                    DFREI data from that SBAS signal will timeout
+ *                    
  * Parameters  :
  * Name                           |Da|Unit|Description
  * int GEOindex                    I  N/A  Index of the GEO which had 4 or more missed messages
+ * int frequencyPos                I  N/A  Frequency position where 4 messages were lost
  * TTime *currentepoch             I  N/A  Current epoch
  * TSBASdata  *SBASdata            IO N/A  Struct to save SBAS data
  * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void SBASErrorMessageTimeoutFastCorr (int GEOindex, TTime *currentepoch, TSBASdata  *SBASdata, TOptions  *options) {
+void SBASErrorMessageTimeoutFastCorr (int GEOindex, int frequencyPos, TTime *currentepoch, TSBASdata  *SBASdata, TOptions  *options) {
 	int		i,j,k,l;
 	double	timediffMsg,timediffTimeOut;
-	double	UDREItmout;
+	double	UDREItmout,DFREItmout;
 
-	//UDREI data hast to timeout only on PA mode, so the reception time of the fast corrections will set just in the epoch where
-	//they are already timed out
-	UDREItmout=(double)(SBASdata[GEOindex].timeoutmessages[PAMODE][INTEGRITYINFO]);
+	switch(frequencyPos) {
+		case SBAS1FFREQPOS:
+			//UDREI data hast to timeout only on PA mode, so the reception time of the fast corrections will set just in the epoch where
+			//they are already timed out
+			UDREItmout=(double)(SBASdata[GEOindex].timeoutmessages[frequencyPos][PAMODE][INTEGRITYINFO]);
 
-	//Forced timeout of UDREI data is only for PA, so if user forced NPA mode do nothing
-	if (options->UserForcedNPA==0) {
-		//Loop through all Masks
-		for(i=0;i<5;i++) {
-			//Loop through all SBAS fast corrections
-			for(j=0;j<MAXSBASFASTCORR;j++) {
+			//Forced timeout of UDREI data is only for PA, so if user forced NPA mode do nothing
+			if (options->UserForcedNPA==0) {
+				//Loop through all Masks
+				for(i=0;i<5;i++) {
+					//Loop through all SBAS fast corrections
+					for(j=0;j<MAXSBASFASTCORR;j++) {
+						//Loop for all satellites in mask
+						for(k=0;k<51;k++) {
+							if (SBASdata[GEOindex].lastfastcorrections[i][j][k].MJDN!=-1) {
+								timediffMsg=tdiff(currentepoch,&SBASdata[GEOindex].lastfastcorrections[i][j][k]);
+								timediffTimeOut=timediffMsg-UDREItmout;
+								if (timediffTimeOut<=DIFFEQTHRESHOLD) { //The DIFFEQTHRESHOLD is to avoid problems with decimals
+									//UDRE data not timed out. Change the message reception time so during the modelling
+									//process all UDRE data is timed out
+									//The .1 second is to make message reception be one tenth of a second behind of the timeout (so for 0.1 data rate files they also timeout)
+									SBASdata[GEOindex].lastfastcorrections[i][j][k]=tdadd(&SBASdata[GEOindex].lastfastcorrections[i][j][k],timediffTimeOut-options->SBASmsgFlightTime);
+								}//If data is timed out, leave the reception time as it is
+							}
+						}
+					}
+				}
+			}
+			//Set GEO to do not use (not available for ranging)
+			if (GEOindex==0) {
+				//If it is the mixed GEO, we need to set all GEOs to do not use (not available for ranging)
+				for(l=1;l<=SBASdata[0].numSBASsatellites;l++) { //Loop through all GEOs
+					SBASdata[GEOindex].useforbidden[GEO][SBASdata[l].PRN]=15;
+				}
+			} else {
+				SBASdata[GEOindex].useforbidden[GEO][SBASdata[GEOindex].PRN]=15;
+			}
+			break;
+		 case SBASDFMCFREQPOS:
+			DFREItmout=(double)SBASdata[GEOindex].timeoutmessages[SBASDFMCFREQPOS][options->precisionapproach][INTEGRITYINFODFMC34];
+			//Loop through all Masks
+			for(i=0;i<5;i++) {
 				//Loop for all satellites in mask
-				for(k=0;k<51;k++) {
-					if (SBASdata[GEOindex].lastfastcorrections[i][j][k].MJDN!=-1) {
-						timediffMsg=tdiff(currentepoch,&SBASdata[GEOindex].lastfastcorrections[i][j][k]);
-						timediffTimeOut=timediffMsg-UDREItmout;
-						if (timediffTimeOut<=1E-4) { //The 1E-4 is to avoid problems with decimals
-							//UDRE data not timed out. Change the message reception time so during the modelling
-							//process all UDRE data is timed out
+				for(j=0;j<92;j++) {
+					if (SBASdata[GEOindex].lastDFREIreceived[i][j].MJDN!=-1) {
+						timediffMsg=tdiff(currentepoch,&SBASdata[GEOindex].lastDFREIreceived[i][j]);
+						timediffTimeOut=timediffMsg-DFREItmout;
+						if (timediffTimeOut<=DIFFEQTHRESHOLD) { //The DIFFEQTHRESHOLD is to avoid problems with decimals
+							//DFREI data not timed out. Change the message reception time so during the modelling
+							//process all DFREI data is timed out
 							//The .1 second is to make message reception be one tenth of a second behind of the timeout (so for 0.1 data rate files they also timeout)
-							SBASdata[GEOindex].lastfastcorrections[i][j][k]=tdadd(&SBASdata[GEOindex].lastfastcorrections[i][j][k],timediffTimeOut-.1);
+							SBASdata[GEOindex].lastDFREIreceived[i][j]=tdadd(&SBASdata[GEOindex].lastDFREIreceived[i][j],timediffTimeOut-options->SBASmsgFlightTime);
 						}//If data is timed out, leave the reception time as it is
 					}
 				}
 			}
-		}
-	}
-	//Set GEO to do not use (not available for ranging)
-	if (GEOindex==0) {
-		//If it is the mixed GEO, we need to set all GEOs to do not use (not available for ranging)
-		for(l=1;l<=SBASdata[0].numSBASsatellites;l++) { //Loop through all GEOs
-			SBASdata[GEOindex].useforbidden[GEO][SBASdata[l].PRN]=15;
-		}
-	} else {
-		SBASdata[GEOindex].useforbidden[GEO][SBASdata[GEOindex].PRN]=15;
+			break;
+	 	default:
+			break;
 	}
 }
 
@@ -7938,13 +18627,16 @@ void SBASErrorMessageTimeoutFastCorr (int GEOindex, TTime *currentepoch, TSBASda
  *****************************************************************************/
 void SBASGEOselection (TEpoch  *epoch, TSBASdata  *SBASdata, TOptions  *options) {
 
-	int 		i,j;
+	int 		i,j,k;
+	int			GEOPRN;
 	int 		numGEOcoord=0,satGEOindex,numGEOelev,maxelevationpos=-1;
 	int			GEOSatRead[MAXGEOPRN];
 	static int	numGEOelevprev=1;
-	double 		difftime, position[3];
+	double 		diffTime, position[3];
 	double 		elevation,azimuth,maxelevation=-999.;
 	char		ElevText[MAX_NUM_SBAS][MAX_INPUT_LINE];
+	TTime		t;
+	
 	
 	if(options->GEOPRNSelected!=2*MAXGEOPRN) {
 		if(SBASdata[0].numSBASsatellites==0) {
@@ -7964,9 +18656,9 @@ void SBASGEOselection (TEpoch  *epoch, TSBASdata  *SBASdata, TOptions  *options)
 			epoch->currentGEOPRN=SBASdata[options->GEOindex].PRN;
 			options->GEOPRNSelected=2*MAXGEOPRN;
 		} else if (options->GEOPRNSelected==2||options->GEOPRNSelected==-1) {
-			//If it is the first epoch, fill station orientation (needed for computing elevation)
-			if (tdiff(&epoch->t,&epoch->firstepoch)<1E-4) {
-				// Station NEU coordinates
+			//Check if it ground station orientation has been filled. if not, fill it
+			if (epoch->receiver.orientation[0][0]==-9999.) {
+				// Station NEU coordinates 
 				fillGroundStationNEU(epoch);
 				// Station orientation
 				fillGroundStationOrientation(epoch);
@@ -7977,125 +18669,305 @@ void SBASGEOselection (TEpoch  *epoch, TSBASdata  *SBASdata, TOptions  *options)
 			for(i=0;i<MAXGEOPRN;i++) {
 				GEOSatRead[i]=0;
 			}
-			//Read all GEO almanacs available
-			numGEOelev=0;
-			for(i=1;i<=SBASdata[0].numSBASsatellites;i++) {
-				//Check GEO is not under alarm
- 				if (SBASdata[0].alarmGEOPRN[SBASdata[i].PRN]==SBASdata[i].PRN && SBASdata[i].alarmTimeRemaining>0 && GEOSatRead[SBASdata[i].PRN]==0) {
-     				sprintf(ElevText[numGEOelev],"SBAS GEO %3d is under alarm",SBASdata[i].PRN);
-     				GEOSatRead[SBASdata[i].PRN]=1;
-     				numGEOelev++;
-     				continue;
- 				}
-				//Check if we have an available almanac message
-				if(SBASdata[i].lastmsgreceived[GEOSATELLITEALMANACS].MJDN!=-1) {
-					//Almanac message available
-					for(j=0;j<SBASdata[i].numgeoalmanacs;j++) {
-						//Compute GEO elevation for all GEOs in almanac message
+			switch(options->SBAScorrections) {
+				case SBAS1Fused: case SBASionoOnly:
+					//Read all GEO almanacs available
+					numGEOelev=0;
+					for(i=1;i<=SBASdata[0].numSBASsatellites;i++) {
 						//Check GEO is not under alarm
-						if (SBASdata[0].alarmGEOPRN[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]==(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER] &&
-							SBASdata[SBASdata[0].GEOPRN2pos[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]].alarmTimeRemaining>0) {
-							sprintf(ElevText[numGEOelev],"SBAS GEO %3d is under alarm",(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]);
-							GEOSatRead[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]=1;
+						if (SBASdata[0].alarmGEOPRN[SBAS1FFREQPOS][SBASdata[i].PRN]==SBASdata[i].PRN && SBASdata[i].alarmTimeRemaining[SBAS1FFREQPOS]>0 && GEOSatRead[SBASdata[i].PRN]==0) {
+							sprintf(ElevText[numGEOelev],"SBAS GEO %3d is under alarm",SBASdata[i].PRN);
+							GEOSatRead[SBASdata[i].PRN]=1;
 							numGEOelev++;
 							continue;
 						}
-						satGEOindex=SBASdata[0].GEOPRN2pos[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]];
-						//Check that we have data for the GEO given in the almanac. Otherwise we would take
-						//the risk that the GEO with highest elevation in the almanac is not provided in the
-						//SBAS file, therefore selecting a GEO that would not have any data
-						if (satGEOindex!=-1) {
-							if (GEOSatRead[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]==0) {
-								//GEO elevation has not been computed before
-								difftime=epoch->t.SoD-SBASdata[i].geoalmanacsmessage[j][T0ALMANAC];
+						//Check if we have an available almanac message
+						if(SBASdata[i].lastmsgreceived[SBAS1FFREQPOS][GEOSATELLITEALMANACS].MJDN!=-1) {
+							//Almanac message available
+							for(j=0;j<SBASdata[i].numgeoalmanacs;j++) {
+								//Compute GEO elevation for all GEOs in almanac message
+								satGEOindex=SBASdata[0].GEOPRN2pos[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]];
+								//Check that we have data for the GEO given in the almanac. Otherwise we would take
+								//the risk that the GEO with highest elevation in the almanac is not provided in the
+								//SBAS file, therefore selecting a GEO that would not have any data
+								if (satGEOindex!=-1) {
+									if (GEOSatRead[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]==0) {
+										//GEO elevation has not been computed before
+										//Check GEO is not under alarm
+										if (SBASdata[0].alarmGEOPRN[SBAS1FFREQPOS][(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]==(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER] && 
+												SBASdata[SBASdata[0].GEOPRN2pos[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]].alarmTimeRemaining[SBAS1FFREQPOS]>0) {
+											sprintf(ElevText[numGEOelev],"SBAS GEO %3d is under alarm",(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]);
+											GEOSatRead[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]=1;
+											numGEOelev++;
+											continue;
+										}
+										diffTime=epoch->t.SoD-SBASdata[i].geoalmanacsmessage[j][T0ALMANAC];
+										//Check for day rollover in time difference. As a threshold, we use the second at half of the day (86400/2=43200)
+										if(diffTime>43200) diffTime-=86400; 	//This occurs when we are at the end of the day and the time of applicability is in the next day
+										if(diffTime<-43200) diffTime+=86400;	//This occurs when we are at the beginning of the day and the time of applicability is in the previous day (because we have missed the previous message)
+										position[0]=SBASdata[i].geoalmanacsmessage[j][XGALMANAC]+SBASdata[i].geoalmanacsmessage[j][XGALMANACRATEOFCHANGE]*diffTime;
+										position[1]=SBASdata[i].geoalmanacsmessage[j][YGALMANAC]+SBASdata[i].geoalmanacsmessage[j][YGALMANACRATEOFCHANGE]*diffTime;
+										position[2]=SBASdata[i].geoalmanacsmessage[j][ZGALMANAC]+SBASdata[i].geoalmanacsmessage[j][ZGALMANACRATEOFCHANGE]*diffTime;
+									
+										getAzimuthElevation(epoch->receiver.orientation, epoch->receiver.aproxPosition, position, &azimuth, &elevation);
+										sprintf(ElevText[numGEOelev],"SBAS GEO %3d available with elevation %6.2f degrees",(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER],elevation*r2d);
+										GEOSatRead[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]=1;
+										if(elevation>maxelevation) {
+											//The elevation is higher than the satellites computed in the previous ones
+											maxelevation=elevation;
+											maxelevationpos=numGEOelev;
+											options->GEOindex=satGEOindex;
+											epoch->currentGEOPRN=SBASdata[options->GEOindex].PRN;
+										}
+										numGEOelev++;
+									}
+								}
+							}
+						}
+					}
+					//NOTE: If in the almanac message there is missing data from the GEO from which we have received data, this GEO will not be used 
+					if(options->GEOindex<0) {
+						//We still have no GEO selected, it could be due to we do not have an almanac message or due to the almanac message did not contain enough data
+						//Try to use the GEO navigation messages if we have them all
+						//Reset flag to indicate if a GEO elevation has already been computed with an almanac message
+						for(i=0;i<MAXGEOPRN;i++) {
+							GEOSatRead[i]=0;
+						}
+						for(i=0;i<numGEOelev;i++) {
+							ElevText[i][0]='\0';
+						}
+						//Check that we have GEO navigation message from all GEO from which we have received data
+						for(i=1;i<=SBASdata[0].numSBASsatellites;i++) {
+							//Check GEO is not under alarm
+							if (SBASdata[0].alarmGEOPRN[SBAS1FFREQPOS][SBASdata[i].PRN]==SBASdata[i].PRN && SBASdata[i].alarmTimeRemaining[SBAS1FFREQPOS]>0) {
+								numGEOcoord++;
+								continue;
+							}
+							if(SBASdata[i].lastmsgreceived[SBAS1FFREQPOS][GEONAVIGATIONMESSAGE].MJDN!=-1) {
+								diffTime=tdiff(&epoch->t,&SBASdata[i].lastmsgreceived[SBAS1FFREQPOS][GEONAVIGATIONMESSAGE]);
+								if(diffTime>(double)(SBASdata[i].timeoutmessages[SBAS1FFREQPOS][options->precisionapproach][GEONAVIGATIONMESSAGE]) ) {
+									SBASdata[i].lastmsgreceived[SBAS1FFREQPOS][GEONAVIGATIONMESSAGE].MJDN=-1;
+									break;
+								} else {
+									numGEOcoord++;
+								}
+							} else {
+								break;
+							}
+						}
+						if(numGEOcoord==SBASdata[0].numSBASsatellites) {
+							//We have all the navigation messages
+							numGEOelev=0;
+							for(i=1;i<=SBASdata[0].numSBASsatellites;i++) {
+								//Check GEO is not under alarm
+								if (SBASdata[0].alarmGEOPRN[SBAS1FFREQPOS][SBASdata[i].PRN]==SBASdata[i].PRN && SBASdata[i].alarmTimeRemaining[SBAS1FFREQPOS]>0) {
+									sprintf(ElevText[numGEOelev],"SBAS GEO %3d is under alarm",SBASdata[i].PRN);
+									numGEOelev++;
+									continue;
+								}
+								//Compute GEO elevation
+								diffTime=epoch->t.SoD-SBASdata[i].geonavigationmessage[T0NAV];
 								//Check for day rollover in time difference. As a threshold, we use the second at half of the day (86400/2=43200)
-								if(difftime>43200) difftime-=86400; 	//This occurs when we are at the end of the day and the time of applicability is in the next day
-								if(difftime<-43200) difftime+=86400;	//This occurs when we are at the beginning of the day and the time of applicability is in the previous day (because we have missed the previous message)
-								position[0]=SBASdata[i].geoalmanacsmessage[j][XGALMANAC]+SBASdata[i].geoalmanacsmessage[j][XGALMANACRATEOFCHANGE]*difftime;
-								position[1]=SBASdata[i].geoalmanacsmessage[j][YGALMANAC]+SBASdata[i].geoalmanacsmessage[j][YGALMANACRATEOFCHANGE]*difftime;
-								position[2]=SBASdata[i].geoalmanacsmessage[j][ZGALMANAC]+SBASdata[i].geoalmanacsmessage[j][ZGALMANACRATEOFCHANGE]*difftime;
-							
+								if(diffTime>43200) diffTime-=86400; 	//This occurs when we are at the end of the day and the time of applicability is in the next day
+								if(diffTime<-43200) diffTime+=86400;	//This occurs when we are at the beginning of the day and the time of applicability is in the previous day (because we have missed the previous message)
+								position[0]=SBASdata[i].geonavigationmessage[XG]+SBASdata[i].geonavigationmessage[XGRATEOFCHANGE]*diffTime+0.5*SBASdata[i].geonavigationmessage[XGACCELERATION]*diffTime*diffTime;
+								position[1]=SBASdata[i].geonavigationmessage[YG]+SBASdata[i].geonavigationmessage[YGRATEOFCHANGE]*diffTime+0.5*SBASdata[i].geonavigationmessage[YGACCELERATION]*diffTime*diffTime;
+								position[2]=SBASdata[i].geonavigationmessage[ZG]+SBASdata[i].geonavigationmessage[ZGRATEOFCHANGE]*diffTime+0.5*SBASdata[i].geonavigationmessage[ZGACCELERATION]*diffTime*diffTime;
+
 								getAzimuthElevation(epoch->receiver.orientation, epoch->receiver.aproxPosition, position, &azimuth, &elevation);
-								sprintf(ElevText[numGEOelev],"SBAS GEO %3d available with elevation %5.2f degrees",(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER],elevation*r2d);
-								GEOSatRead[(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER]]=1;
+								sprintf(ElevText[numGEOelev],"SBAS GEO %3d available with elevation %6.2f degrees",(int)SBASdata[i].PRN,elevation*r2d);
 								if(elevation>maxelevation) {
 									//The elevation is higher than the satellites computed in the previous ones
 									maxelevation=elevation;
 									maxelevationpos=numGEOelev;
-									options->GEOindex=satGEOindex;
+									options->GEOindex=i;
 									epoch->currentGEOPRN=SBASdata[options->GEOindex].PRN;
 								}
 								numGEOelev++;
 							}
-						}
-					}
-				}
-			}
-			//NOTE: If in the almanac message there is missing data from the GEO from which we have received data, this GEO 
-			if(options->GEOindex<0) {
-				//We still have no GEO selected, it could be due to we do not have an almanac message or due to the almanac message did not contain enough data
-				//Try to use the GEO navigation messages if we have them all
-				//Reset flag to indicate if a GEO elevation has already been computed with an almanac message
-				for(i=0;i<MAXGEOPRN;i++) {
-					GEOSatRead[i]=0;
-				}
-				for(i=0;i<numGEOelev;i++) {
-					ElevText[i][0]='\0';
-				}
-				//Check that we have GEO navigation message from all GEO from which we have received data
-				for(i=1;i<=SBASdata[0].numSBASsatellites;i++) {
-					//Check GEO is not under alarm
-					if (SBASdata[0].alarmGEOPRN[SBASdata[i].PRN]==SBASdata[i].PRN && SBASdata[i].alarmTimeRemaining>0) {
-						numGEOcoord++;
-						continue;
-					}
-					if(SBASdata[i].lastmsgreceived[GEONAVIGATIONMESSAGE].MJDN==-1) {
-						difftime=tdiff(&epoch->t,&SBASdata[i].lastmsgreceived[GEONAVIGATIONMESSAGE]);
-						if(difftime>(double)(SBASdata[i].timeoutmessages[options->precisionapproach][GEONAVIGATIONMESSAGE]) ) {
-							SBASdata[i].lastmsgreceived[GEONAVIGATIONMESSAGE].MJDN=-1;
-							break;
 						} else {
-							numGEOcoord++;
+							//Missing almanac data or GEO navigation messages. Leave options->GEOindex negative in order to keep checking this condition
+							options->GEOindex=-3;
+							return;
 						}
-					} else {
-						break;
 					}
-				}
-				if(numGEOcoord==SBASdata[0].numSBASsatellites) {
-					//We have all the navigation messages
+					break;
+				case SBASDFMCused:
+					//Read all GEO almanacs available
 					numGEOelev=0;
 					for(i=1;i<=SBASdata[0].numSBASsatellites;i++) {
 						//Check GEO is not under alarm
-						if (SBASdata[0].alarmGEOPRN[SBASdata[i].PRN]==SBASdata[i].PRN && SBASdata[i].alarmTimeRemaining>0) {
+						if (SBASdata[0].alarmGEOPRN[SBASDFMCFREQPOS][SBASdata[i].PRN]==SBASdata[i].PRN && SBASdata[i].alarmTimeRemaining[SBASDFMCFREQPOS]>0 && GEOSatRead[SBASdata[i].PRN]==0) {
 							sprintf(ElevText[numGEOelev],"SBAS GEO %3d is under alarm",SBASdata[i].PRN);
+							GEOSatRead[SBASdata[i].PRN]=1;
 							numGEOelev++;
 							continue;
 						}
-						//Compute GEO elevation
-						difftime=epoch->t.SoD-SBASdata[i].geonavigationmessage[T0NAV];
-						//Check for day rollover in time difference. As a threshold, we use the second at half of the day (86400/2=43200)
-						if(difftime>43200) difftime-=86400; 	//This occurs when we are at the end of the day and the time of applicability is in the next day
-						if(difftime<-43200) difftime+=86400;	//This occurs when we are at the beginning of the day and the time of applicability is in the previous day (because we have missed the previous message)
-						position[0]=SBASdata[i].geonavigationmessage[XG]+SBASdata[i].geonavigationmessage[XGRATEOFCHANGE]*difftime+0.5*SBASdata[i].geonavigationmessage[XGACCELERATION]*difftime*difftime;
-						position[1]=SBASdata[i].geonavigationmessage[YG]+SBASdata[i].geonavigationmessage[YGRATEOFCHANGE]*difftime+0.5*SBASdata[i].geonavigationmessage[YGACCELERATION]*difftime*difftime;
-						position[2]=SBASdata[i].geonavigationmessage[ZG]+SBASdata[i].geonavigationmessage[ZGRATEOFCHANGE]*difftime+0.5*SBASdata[i].geonavigationmessage[ZGACCELERATION]*difftime*difftime;
+						//Check if we have an available almanac message
+						if(SBASdata[i].lastmsgreceived[SBASDFMCFREQPOS][SBASALMANACSDFMC].MJDN!=-1) {
+							//Almanac message available. Almanac orbit parameter do not timed-out
+							//Almanac reference time is in SBAS time. We need to check to what constellation the time is aligned
+							if (SBASdata[i].lastmsgreceived[SBASDFMCFREQPOS][OBADDFREIPARAMETERS].MJDN!=-1) {
+								//We won't check if message MT37 is timed-out, as a SBAS system is not going to change its reference time
+								memcpy(&t,&epoch->t,sizeof(TTime));
+								switch((int)SBASdata[i].commonOBAD[TIMEREFID]) {
+									case 1: //GLONASS
+										//Note that if leap seconds number is not correct (due to a new leap second was added), it will not be very
+										//important as the computed position after 1 second difference will barely make any change to the elevation
+										t=tdadd(&t,-epoch->leapSeconds); //To convert from GPS to GLONASS
+										break;
+									case 3: //BeiDou
+										t=tdadd(&t,-DIFFBDS2GPSTIME); //To convert from GPS to BeiDou
+										break;
+									default:
+										break;										
+								}
+							} else {
+								//No MT37 with reference time. Wait until a MT37 arrives
+								continue;
+							}
 
-						getAzimuthElevation(epoch->receiver.orientation, epoch->receiver.aproxPosition, position, &azimuth, &elevation);
-						sprintf(ElevText[numGEOelev],"GEO %3d available with elevation %5.2f degrees",(int)SBASdata[i].geoalmanacsmessage[j][PRNNUMBER],elevation*r2d);
-						if(elevation>maxelevation) {
-							//The elevation is higher than the satellites computed in the previous ones
-							maxelevation=elevation;
-							maxelevationpos=numGEOelev;
-							options->GEOindex=i;
-							epoch->currentGEOPRN=SBASdata[options->GEOindex].PRN;
+							for(j=0;j<SBASdata[i].numDFMCalmanac;j++) {
+								//Get position where the almanac is saved (the position corresponds to PRN-120)
+								k=SBASdata[i].posWithDataDFMCalmanac[j];
+								GEOPRN=k+120;
+								//Compute GEO elevation for all GEOs in almanac message
+								satGEOindex=SBASdata[0].GEOPRN2pos[GEOPRN];
+								//Check that we have data for the GEO given in the almanac. Otherwise we would take
+								//the risk that the GEO with highest elevation in the almanac is not provided in the
+								//SBAS file, therefore selecting a GEO that would not have any data
+								if (satGEOindex!=-1) {
+									if (GEOSatRead[GEOPRN]==0) {
+										//GEO elevation has not been computed before
+										//Check GEO is not under alarm
+										if (SBASdata[0].alarmGEOPRN[SBASDFMCFREQPOS][GEOPRN]==GEOPRN &&	SBASdata[SBASdata[0].GEOPRN2pos[GEOPRN]].alarmTimeRemaining[SBASDFMCFREQPOS]>0) {
+											sprintf(ElevText[numGEOelev],"SBAS GEO %3d is under alarm",GEOPRN);
+											GEOSatRead[GEOPRN]=1;
+											numGEOelev++;
+											continue;
+										}
+										getPositionBRDC(NULL,&SBASdata[i].DFMCalmanac[GEOPRN-120], &t, position);
+										getAzimuthElevation(epoch->receiver.orientation, epoch->receiver.aproxPosition, position, &azimuth, &elevation);
+										sprintf(ElevText[numGEOelev],"SBAS GEO %3d available with elevation %6.2f degrees",GEOPRN,elevation*r2d);
+										GEOSatRead[GEOPRN]=1;
+										if(elevation>maxelevation) {
+											//The elevation is higher than the satellites computed in the previous ones
+											maxelevation=elevation;
+											maxelevationpos=numGEOelev;
+											options->GEOindex=satGEOindex;
+											epoch->currentGEOPRN=GEOPRN;
+										}
+										numGEOelev++;
+									}
+								}
+							}
 						}
-						numGEOelev++;
 					}
-				} else {
-					//Missing almanac data or GEO navigation messages. Leave options->GEOindex negative in order to keep checking this condition
-					options->GEOindex=-3;
-					return;
-				}
+					//NOTE: If in the almanac message there is missing data from the GEO from which we have received data, this GEO will not be used 
+					if(options->GEOindex<0) {
+						//We still have no GEO selected, it could be due to we do not have an almanac message or due to the almanac message did not contain enough data
+						//Try to use the GEO navigation messages if we have them all
+						//Reset flag to indicate if a GEO elevation has already been computed with an almanac message
+						for(i=0;i<MAXGEOPRN;i++) {
+							GEOSatRead[i]=0;
+						}
+						for(i=0;i<numGEOelev;i++) {
+							ElevText[i][0]='\0';
+						}
+						//Check that we have GEO navigation message from all GEO from which we have received data
+						for(i=1;i<=SBASdata[0].numSBASsatellites;i++) {
+							//Check GEO is not under alarm
+							if (SBASdata[0].alarmGEOPRN[SBASDFMCFREQPOS][SBASdata[i].PRN]==SBASdata[i].PRN && SBASdata[i].alarmTimeRemaining[SBASDFMCFREQPOS]>0) {
+								numGEOcoord++;
+								continue;
+							}
+							if (SBASdata[i].timeoutmessages[SBASDFMCFREQPOS][options->precisionapproach][SBASEPHEMERISDFMC]!=-1) {
+								//User manually set MT3940 time-out value (stored in both message type 39 and 40). Use it instead of the IvalidMT3940 value in MT37
+								if(SBASdata[i].lastMT3940received.MJDN!=-1) {
+									//For MT39/40, the time-out is accounted since the reception of the last bit of the last MT39 or MT40 received
+									diffTime=tdiff(&epoch->t,&SBASdata[i].lastMT3940received);
+									if(diffTime>(double)SBASdata[i].timeoutmessages[SBASDFMCFREQPOS][options->precisionapproach][SBASEPHEMERISDFMC] ) {
+										//MT39/40 timed out
+										break;
+									} else {
+										numGEOcoord++;
+									}
+								} else {
+									//No MT39/40 received
+									break;
+								}
+							} else {
+								if (SBASdata[i].lastmsgreceived[SBASDFMCFREQPOS][OBADDFREIPARAMETERS].MJDN!=-1) {
+									//Check MT37 is not timed out. The time-out is accounted since the reception of the last bit of the message
+									diffTime=tdiff(&epoch->t,&SBASdata[i].lastmsgreceived[SBASDFMCFREQPOS][OBADDFREIPARAMETERS]);
+									if(diffTime>(double)(SBASdata[i].timeoutmessages[SBASDFMCFREQPOS][options->precisionapproach][OBADDFREIPARAMETERS])) {
+										//MT37 timed out. We cannot compute if MT39/40 is timed out
+										break;
+									}
+									if(SBASdata[i].lastMT3940received.MJDN!=-1) {
+										//For MT39/40, the time-out is accounted since the reception of the last bit of the last MT39 or MT40 received
+										diffTime=tdiff(&epoch->t,&SBASdata[i].lastMT3940received);
+										if(diffTime>(SBASdata[i].commonOBAD[IVALIDMT3940]*SBASdata[i].tmoutFactor[options->precisionapproach]) ) {
+											//MT39/40 timed out
+											break;
+										} else {
+											numGEOcoord++;
+										}
+									} else {
+										//No MT39/40 received
+										break;
+									}
+								} else {
+									//No MT37 with valid MT39/40 and reference time. Wait until a MT37 arrives
+									break;
+								}
+							}
+						}
+						if(numGEOcoord==SBASdata[0].numSBASsatellites) {
+							//We have all the navigation messages
+							numGEOelev=0;
+							for(i=1;i<=SBASdata[0].numSBASsatellites;i++) {
+								//Check GEO is not under alarm
+								if (SBASdata[0].alarmGEOPRN[SBASDFMCFREQPOS][SBASdata[i].PRN]==SBASdata[i].PRN && SBASdata[i].alarmTimeRemaining[SBASDFMCFREQPOS]>0) {
+									sprintf(ElevText[numGEOelev],"SBAS GEO %3d is under alarm",SBASdata[i].PRN);
+									numGEOelev++;
+									continue;
+								}
+								memcpy(&t,&epoch->t,sizeof(TTime));
+								switch((int)SBASdata[i].commonOBAD[TIMEREFID]) {
+									case 1: //GLONASS
+										//Note that if leap seconds number is not correct (due to a new leap second was added), it will not be very
+										//important as the computed position after 1 second difference will barely make any change to the elevation
+										t=tdadd(&t,-epoch->leapSeconds); //To convert from GPS to GLONASS
+										break;
+									case 3: //BeiDou
+										t=tdadd(&t,-DIFFBDS2GPSTIME); //To convert from GPS to BeiDou
+										break;
+									default:
+										break;										
+								}
+								//Compute GEO elevation
+								getPositionBRDC(NULL,&SBASdata[i].navSBASmessage, &t, position);
+								getAzimuthElevation(epoch->receiver.orientation, epoch->receiver.aproxPosition, position, &azimuth, &elevation);
+								sprintf(ElevText[numGEOelev],"SBAS GEO %3d available with elevation %6.2f degrees",(int)SBASdata[i].PRN,elevation*r2d);
+								if(elevation>maxelevation) {
+									//The elevation is higher than the satellites computed in the previous ones
+									maxelevation=elevation;
+									maxelevationpos=numGEOelev;
+									options->GEOindex=i;
+									epoch->currentGEOPRN=SBASdata[options->GEOindex].PRN;
+								}
+								numGEOelev++;
+							}
+						} else {
+							//Missing almanac data or GEO navigation messages. Leave options->GEOindex negative in order to keep checking this condition
+							options->GEOindex=-3;
+							return;
+						}
+					}
+					break;
+				default:
+					break;
 			}
 			//Check if solution has converged. If not, do not mark the GEO as selected, so when
 			//solution has converged, the GEO with higher elevation is selected
@@ -8131,7 +19003,6 @@ void SBASGEOselection (TEpoch  *epoch, TSBASdata  *SBASdata, TOptions  *options)
 		} else { //MINGEOPRN<=options->GEOPRN<=MAXGEOPRN
 			//The user has given the GEO PRN
 			options->GEOindex=SBASdata[0].GEOPRN2pos[options->GEOPRN];
-			epoch->currentGEOPRN=SBASdata[options->GEOindex].PRN;
 			if(options->GEOindex<0) {
 				//We have no data from this satellite. Maybe in future epochs we receive data
 				//until we do not receive data, we will leave options->GEOindex negative in order to keep checking this condition
@@ -8139,6 +19010,7 @@ void SBASGEOselection (TEpoch  *epoch, TSBASdata  *SBASdata, TOptions  *options)
 				return;
 			} else {
 				options->GEOPRNSelected=2*MAXGEOPRN;
+				epoch->currentGEOPRN=SBASdata[options->GEOindex].PRN;
 			}
 		}
 	} 
@@ -8158,75 +19030,82 @@ void SBASGEOselection (TEpoch  *epoch, TSBASdata  *SBASdata, TOptions  *options)
  *****************************************************************************/
 void SBASGEOAlarmCheck (TEpoch  *epoch, TSBASdata  *SBASdata, TOptions  *options) {
 
-	int 	i,j;
-	int 	GEOPositionWithLatestAlarm;
-	double 	difftime;
+	int 	i,j,k;
+	int 	GEOPositionWithLatestAlarm=-1;
+	double 	diffTime;
 
-	if(options->usetype0messages==1 && SBASdata[0].numAlarmGEO>0) {
-		//We have received a type 0 messages and we are treating it as it is, or
-		//we are treating type 0 messages as type 2, but we have received a type 0 message will all zeros (0)
-		//In this case, we need to erase all data from the current GEO (if we use mixed data, we will also erase the mixed data)
+	for(k=0;k<(NUMPOSFREQSBASMSG-1);k++) { //Check frequency positions for L1 and L5 and not the additional one for other unused/unknown data
+		if(options->usetype0messages==1 && SBASdata[0].numAlarmGEO[k]>0) {
+			//We have received a type 0 messages and we are treating it as it is, or
+			//we are treating type 0 messages as type 2, but we have received a type 0 message will all zeros (0)
+			//In this case, we need to erase all data from the current GEO (if we use mixed data, we will also erase the mixed data)
 
-		SBASdata[0].alarmTimeRemaining=-1; //Reset time remaining so it is saved for mixed GEO
+			SBASdata[0].alarmTimeRemaining[k]=-1; //Reset time remaining so it is saved for mixed GEO
 
-		for(i=0;i<SBASdata[0].numAlarmGEO;i++) {
-			//Check for the position in the SBASdata for the GEO from which we received the type 0 message
-			j=SBASdata[0].alarmGEOindex[i];
+			for(i=0;i<SBASdata[0].numAlarmGEO[k];i++) {
+				//Check for the position in the SBASdata for the GEO from which we received the type 0 message
+				
+				j=SBASdata[0].alarmGEOindex[k][i];
 
-			//Check if we have cleared the data from the GEO
-			if(SBASdata[0].cleared==0) {
-				SBASdata[0].cleared=1;
-				//Erase all data from mixed GEO except for almanac data only if mixed GEO is enabled
-				if (options->mixedGEOdata==1) {
-					ClearSBASdata(SBASdata,0);
+				//Check if we have cleared the data from the GEO
+				if(SBASdata[0].cleared[k]==0) {
+					SBASdata[0].cleared[k]=1;
+					//Erase all data from mixed GEO except for almanac data only if mixed GEO is enabled
+					if (options->mixedGEOdata==1) {
+						ClearSBASdata(SBASdata,0,k);
+					}
+				}
+				if(SBASdata[j].cleared[k]==0) {
+					SBASdata[j].cleared[k]=1;
+					//Erase all data from this GEO except for almanac data
+					ClearSBASdata(SBASdata,j,k);
+				}
+
+				//When we receive a type 0 message, we have to wait for one minute until we can use it again
+				diffTime=tdiff(&epoch->t,&SBASdata[j].lastmsgreceived[k][DONTUSE]); 
+				if((1-(diffTime-(int)diffTime))<DIFFEQTHRESHOLD) diffTime=(int)diffTime+1; //This is to account for problems when converting to integer, when a number is 1.99999998
+				if((int)diffTime>=60) {
+					//The minute cooldown has passed. Clear alarm condition
+					SBASdata[j].dontuse[k]=0;
+					SBASdata[j].problems[k]=0;
+					SBASdata[0].numAlarmGEO[k]--;
+					SBASdata[0].alarmGEOPRN[k][SBASdata[j].PRN]=-1;
+					SBASdata[0].alarmGEOindex[k][i]=-1;
+					SBASdata[j].alarmTimeRemaining[k]=0;
+				} else {
+					SBASdata[j].alarmTimeRemaining[k]=60-(int)diffTime;
+				}
+
+				//Save time remaining to finish alarm (for printing in SBASUNSEL message)
+				if (SBASdata[j].alarmTimeRemaining[k]>SBASdata[0].alarmTimeRemaining[k]) {
+					SBASdata[0].alarmTimeRemaining[k]=SBASdata[j].alarmTimeRemaining[k];
+					GEOPositionWithLatestAlarm=j;
 				}
 			}
-			if(SBASdata[j].cleared==0) {
-				SBASdata[j].cleared=1;
-				//Erase all data from this GEO except for almanac data
-				ClearSBASdata(SBASdata,j);
+			if (GEOPositionWithLatestAlarm!=-1) {
+				//Save time of message type 0 for mixed GEO (for printing in SBASUNSEL message)
+				SBASdata[0].alarmtime[k]=SBASdata[GEOPositionWithLatestAlarm].lastmsgreceived[k][DONTUSE];
 			}
 
-			//When we receive a type 0 message, we have to wait for one minute until we can use it again
-			difftime=tdiff(&epoch->t,&SBASdata[j].lastmsgreceived[DONTUSE]); 
-			if((1-(difftime-(int)difftime))<1E-4) difftime=(int)difftime+1; //This is to account for problems when converting to integer, when a number is 1.99999998
-			if((int)difftime>=60) {
-				//The minute cooldown has passed. Clear alarm condition
-				SBASdata[j].dontuse=0;
-				SBASdata[j].problems=0;
-				SBASdata[0].numAlarmGEO--;
-				SBASdata[0].alarmGEOPRN[SBASdata[j].PRN]=-1;
-				SBASdata[0].alarmGEOindex[i]=-1;
-			}
 
-			//Save time remaining to finish alarm (for printing in SBASUNSEL message)
-			SBASdata[j].alarmTimeRemaining=60-(int)difftime;
-			if (SBASdata[j].alarmTimeRemaining>SBASdata[0].alarmTimeRemaining) {
-				SBASdata[0].alarmTimeRemaining=SBASdata[j].alarmTimeRemaining;
-				GEOPositionWithLatestAlarm=j;
-			}
-		}
-
-		//Save time of message type 0 for mixed GEO (for printing in SBASUNSEL message)
-		SBASdata[0].alarmtime=SBASdata[GEOPositionWithLatestAlarm].lastmsgreceived[DONTUSE];
-
-		if (SBASdata[0].numAlarmGEO==0) {
-			//When no alarms are remaining, we can disable the alarm for the mixed satellite
-			//The mixed satellite, (even though it is disabled) is used to account for the alarms
-			SBASdata[0].dontuse=0;
-			SBASdata[0].cleared=0;
-			SBASdata[0].problems=0;
-		} else {
-			//GEOs with alarm remaining. The satellite unselected may be the one in the middle of the
-			//index list, therefore we need to check it and move the next satellites to the first 
-			//position so the satellites with alarm are at the beginning of the list
-			for(i=0;i<SBASdata[0].numAlarmGEO;i++) {
-				if (SBASdata[0].alarmGEOindex[i]==-1) {
-					for(j=i+1;j<MAX_SBAS_PRN;j++) {
-						if(SBASdata[0].alarmGEOindex[j]!=-1) {
-							SBASdata[0].alarmGEOindex[i]=SBASdata[0].alarmGEOindex[j];
-							SBASdata[0].alarmGEOindex[j]=-1;
-							break;
+			if (SBASdata[0].numAlarmGEO[k]==0) {
+				//When no alarms are remaining, we can disable the alarm for the mixed satellite
+				//The mixed satellite, (even though it is disabled) is used to account for the alarms
+				SBASdata[0].dontuse[k]=0;
+				SBASdata[0].cleared[k]=0;
+				SBASdata[0].problems[k]=0;
+			} else {
+				//GEOs with alarm remaining. The satellite unselected may be the one in the middle of the
+				//index list, therefore we need to check it and move the next satellites to the first 
+				//position so the satellites with alarm are at the beginning of the list
+				for(i=0;i<SBASdata[0].numAlarmGEO[k];i++) {
+					if (SBASdata[0].alarmGEOindex[k][i]==-1) {
+						for(j=i+1;j<MAX_SBAS_PRN;j++) {
+							if(SBASdata[0].alarmGEOindex[k][j]!=-1) {
+								SBASdata[0].alarmGEOindex[k][i]=SBASdata[0].alarmGEOindex[k][j];
+								SBASdata[0].alarmGEOindex[k][j]=-1;
+								break;
+							}
 						}
 					}
 				}
@@ -8244,15 +19123,15 @@ void SBASGEOAlarmCheck (TEpoch  *epoch, TSBASdata  *SBASdata, TOptions  *options
  *                This function is called by a single thread.
  * Parameters  :
  * Name                           |Da|Unit|Description
- * TTime currentepoch              I  N/A  Current epoch
+ * TTime *currentepoch             I  N/A  Current epoch
  * TSBASdata  *SBASdata            IO N/A  Struct to save SBAS data
  * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void SBAShandlespecialevents (TTime currentepoch, TSBASdata  *SBASdata, TOptions  *options) {
+void SBAShandlespecialevents (TTime *currentepoch, TSBASdata  *SBASdata, TOptions  *options) {
 
 	int						i,j,k;
 	int						UDREI,IODP,IODPfastcorr,posFC;
-	double 					difftime;
+	double 					diffTime;
 	unsigned int			nearestInt;
 	static unsigned int		initialized=0;
 	static unsigned int		Decimateval;
@@ -8266,64 +19145,66 @@ void SBAShandlespecialevents (TTime currentepoch, TSBASdata  *SBASdata, TOptions
 	//Check if this epoch is decimated
 	if (options->decimate==0.) return;
 	else {
-		nearestInt = (int)(currentepoch.SoD*10000.);
+		nearestInt = (int)(currentepoch->SoD*10000.);
 		if ( (nearestInt%Decimateval) == 0 ) return;
 	}
 
 	//Check if we have received a type 0 message
-	if(options->usetype0messages==1 && SBASdata[0].numAlarmGEO>0) {
-		//We have received a type 0 messages and we are treating it as it is, or
-		//we are treating type 0 messages as type 2, but we have received a type 0 message will all zeros (0)
-		//In this case, we need to erase all data from the current GEO (if we use mixed data, we will also erase the mixed data)
+	for(k=0;k<(NUMPOSFREQSBASMSG-1);k++) { //Check frequency positions for L1 and L5 and not the addtional one for other unused/unknown data
+		if(options->usetype0messages==1 && SBASdata[0].numAlarmGEO[k]>0) {
+			//We have received a type 0 messages and we are treating it as it is, or
+			//we are treating type 0 messages as type 2, but we have received a type 0 message will all zeros (0)
+			//In this case, we need to erase all data from the current GEO (if we use mixed data, we will also erase the mixed data)
 
-		for(i=0;i<SBASdata[0].numAlarmGEO;i++) {
-			//Check for the position in the SBASdata for the GEO from which we received the type 0 message
-			j=SBASdata[0].alarmGEOindex[i];
+			for(i=0;i<SBASdata[0].numAlarmGEO[k];i++) {
+				//Check for the position in the SBASdata for the GEO from which we received the type 0 message
+				j=SBASdata[0].alarmGEOindex[k][i];
 
-			//Check if we have cleared the data from the GEO
-			if(SBASdata[0].cleared==0) {
-				SBASdata[0].cleared=1;
-				//Erase all data from mixed GEO except for almanac data only if mixed GEO is enabled
-				if (options->mixedGEOdata==1) {
-					ClearSBASdata(SBASdata,0);
+				//Check if we have cleared the data from the GEO
+				if(SBASdata[0].cleared[k]==0) {
+					SBASdata[0].cleared[k]=1;
+					//Erase all data from mixed GEO except for almanac data only if mixed GEO is enabled
+					if (options->mixedGEOdata==1) {
+						ClearSBASdata(SBASdata,0,k);
+					}
+				}
+				if(SBASdata[j].cleared[k]==0) {
+					SBASdata[j].cleared[k]=1;
+					//Erase all data from this GEO except for almanac data
+					ClearSBASdata(SBASdata,j,k);
+				}
+
+				//When we receive a type 0 message, we have to wait for one minute until we can use it again
+				diffTime=tdiff(currentepoch,&SBASdata[j].lastmsgreceived[k][DONTUSE]);
+				if((1-(diffTime-(int)diffTime))<DIFFEQTHRESHOLD) diffTime=(double)((int)diffTime+1); //This is to account for problems when converting to integer, when a number is 1.99999998
+				if((int)diffTime>=60) {
+					//The minute cooldown has passed. Clear alarm condition
+					SBASdata[j].dontuse[k]=0;
+					SBASdata[j].problems[k]=0;
+					SBASdata[0].numAlarmGEO[k]--;
+					SBASdata[0].alarmGEOPRN[k][SBASdata[j].PRN]=-1;
+					SBASdata[0].alarmGEOindex[k][i]=-1;
 				}
 			}
-			if(SBASdata[j].cleared==0) {
-				SBASdata[j].cleared=1;
-				//Erase all data from this GEO except for almanac data
-				ClearSBASdata(SBASdata,j);
-			}
 
-			//When we receive a type 0 message, we have to wait for one minute until we can use it again
-			difftime=tdiff(&currentepoch,&SBASdata[j].lastmsgreceived[DONTUSE]);
-			if((1-(difftime-(int)difftime))<1E-4) difftime=(double)((int)difftime+1); //This is to account for problems when converting to integer, when a number is 1.99999998
-			if((int)difftime>=60) {
-				//The minute cooldown has passed. Clear alarm condition
-				SBASdata[j].dontuse=0;
-				SBASdata[j].problems=0;
-				SBASdata[0].numAlarmGEO--;
-				SBASdata[0].alarmGEOPRN[SBASdata[j].PRN]=-1;
-				SBASdata[0].alarmGEOindex[i]=-1;
-			}
-		}
-
-		if (SBASdata[0].numAlarmGEO==0) {
-			//When no alarms are remaining, we can disable the alarm for the mixed satellite
-			//The mixed satellite, (even though it is disabled) is used to account for the alarms
-			SBASdata[0].dontuse=0;
-			SBASdata[0].cleared=0;
-			SBASdata[0].problems=0;
-		} else {
-			//GEOs with alarm remaining. The satellite unselected may be the one in the middle of the
-			//index list, therefore we need to check it and move the next satellites to the first 
-			//position so the satellites with alarm are at the beginning of the list
-			for(i=0;i<SBASdata[0].numAlarmGEO;i++) {
-				if (SBASdata[0].alarmGEOindex[i]==-1) {
-					for(j=i+1;j<MAX_SBAS_PRN;j++) {
-						if(SBASdata[0].alarmGEOindex[j]!=-1) {
-							SBASdata[0].alarmGEOindex[i]=SBASdata[0].alarmGEOindex[j];
-							SBASdata[0].alarmGEOindex[j]=-1;
-							break;
+			if (SBASdata[0].numAlarmGEO[k]==0) {
+				//When no alarms are remaining, we can disable the alarm for the mixed satellite
+				//The mixed satellite, (even though it is disabled) is used to account for the alarms
+				SBASdata[0].dontuse[k]=0;
+				SBASdata[0].cleared[k]=0;
+				SBASdata[0].problems[k]=0;
+			} else {
+				//GEOs with alarm remaining. The satellite unselected may be the one in the middle of the
+				//index list, therefore we need to check it and move the next satellites to the first 
+				//position so the satellites with alarm are at the beginning of the list
+				for(i=0;i<SBASdata[0].numAlarmGEO[k];i++) {
+					if (SBASdata[0].alarmGEOindex[k][i]==-1) {
+						for(j=i+1;j<MAX_SBAS_PRN;j++) {
+							if(SBASdata[0].alarmGEOindex[k][j]!=-1) {
+								SBASdata[0].alarmGEOindex[k][i]=SBASdata[0].alarmGEOindex[k][j];
+								SBASdata[0].alarmGEOindex[k][j]=-1;
+								break;
+							}
 						}
 					}
 				}
@@ -8334,70 +19215,72 @@ void SBAShandlespecialevents (TTime currentepoch, TSBASdata  *SBASdata, TOptions
 	//Next conditions will be done if we have selected a GEO PRN
 	if(options->GEOindex>=0) {
 
-		//Select IODP
-		if(SBASdata[options->GEOindex].IODPfastcorr==-1) return; //No IODP available. Nothing else can be checked
-		IODPfastcorr=SBASdata[options->GEOindex].IODPfastcorr; //IODPfastcorr is the IODP for current mask, which will be the same for all the for loop
-		//Check for UDREI=14 or UDREI=15
-		for(i=0;i<SBASdata[options->GEOindex].numsatellites[IODPfastcorr];i++) {
-			IODP=SBASdata[options->GEOindex].IODPfastcorr; //We have to save again the IODP because in any satellite we may use the IODP for the current or the previous mask
-			posFC=SBASdata[options->GEOindex].poslastFC[IODP][i];
-			if (posFC==-1) {
-				//No data in current mask, try previous
-				IODP=SBASdata[options->GEOindex].oldIODPfastcorr;
+		if (options->SBASFreqPosToProcess==SBAS1FFREQPOS) {
+			//Select IODP
+			if(SBASdata[options->GEOindex].IODPfastcorr==4) return; //No IODP available. Nothing else can be checked
+			IODPfastcorr=SBASdata[options->GEOindex].IODPfastcorr; //IODPfastcorr is the IODP for current mask, which will be the same for all the for loop
+			//Check for UDREI=14 or UDREI=15
+			for(i=0;i<SBASdata[options->GEOindex].numsatellites[SBAS1FFREQPOS][IODPfastcorr];i++) {
+				IODP=SBASdata[options->GEOindex].IODPfastcorr; //We have to save again the IODP because in any satellite we may use the IODP for the current or the previous mask
 				posFC=SBASdata[options->GEOindex].poslastFC[IODP][i];
 				if (posFC==-1) {
-					//No data for this satelllite
-					continue;
-				}
-			}
-
-			UDREI=0;
-			if(SBASdata[options->GEOindex].lastfastmessage[i]==INTEGRITYINFO) {
-				//Last fast correction data received is from message type 6
-				if(SBASdata[options->GEOindex].IODFintegrity[i]==3) {
-					//Alarm. Use IODF from message type 6 regardles of other IODF
-					if(SBASdata[options->GEOindex].UDREI6[i]>=14) UDREI=SBASdata[options->GEOindex].UDREI6[i];
-				} else if (SBASdata[options->GEOindex].IODFintegrity[i]!=SBASdata[options->GEOindex].IODF[IODP][posFC][i]) {
-					//IODF from message type 6 does not match the IODF from messages type 2-5,24 and IODF!=3
-					//We cannot use the UDREsigma from message type 6, so we keep using the last one from messages type 2-5,24
-					if(SBASdata[options->GEOindex].UDREI[IODP][posFC][i]>=14) UDREI=SBASdata[options->GEOindex].UDREI[IODP][posFC][i];
-				} else {
-					if(SBASdata[options->GEOindex].UDREI6[i]>=14) UDREI=SBASdata[options->GEOindex].UDREI6[i];
-				}
-				tudre=SBASdata[options->GEOindex].lastintegrityinfo[i];
-			} else {
-				//Last fast correction data received is from message type is from type 2-5,24
-				if(SBASdata[options->GEOindex].UDREI[IODP][posFC][i]>=14) UDREI=SBASdata[options->GEOindex].UDREI[IODP][posFC][i];
-				tudre=SBASdata[options->GEOindex].lastfastcorrections[IODP][posFC][i];
-			}
-			//Check UDREI has not timed out
-			difftime=tdiff(&currentepoch,&tudre);
-			if(difftime<=(double)(SBASdata[options->GEOindex].timeoutmessages[options->precisionapproach][INTEGRITYINFO])) {
-				//UDRE not timed out. 
-				if(UDREI>=14) {
-					//We have received an UDREI=14 or UDREI=15. We need to erase all the data
-					for(k=0;k<5;k++) {
-						SBASdata[options->GEOindex].poslastFC[k][i] = -1;
-						SBASdata[options->GEOindex].numFC[k][i] = 0;
-						if(k==SBASdata[options->GEOindex].IODPfastcorr) {
-							SBASdata[options->GEOindex].useforbidden[SBASdata[options->GEOindex].pos2GNSS[k][i]][SBASdata[options->GEOindex].pos2PRN[k][i]]=UDREI;
-						}
-						for(j=0;j<MAXSBASFASTCORR;j++) {
-							SBASdata[options->GEOindex].PRC[k][j][i] = 9999;
-							SBASdata[options->GEOindex].RRC[k][j][i] = 9999;
-							SBASdata[options->GEOindex].UDREI[k][j][i] = -1;
-							SBASdata[options->GEOindex].UDRE[k][j][i] = -1;
-							SBASdata[options->GEOindex].UDREsigma[k][j][i] = -1;
-							SBASdata[options->GEOindex].IODF[k][j][i] = -1;
-							SBASdata[options->GEOindex].lastfastcorrections[k][j][i].MJDN = -1;
-							SBASdata[options->GEOindex].lastfastcorrections[k][j][i].SoD = -1;
-						}
+					//No data in current mask, try previous
+					IODP=SBASdata[options->GEOindex].oldIODPfastcorr;
+					posFC=SBASdata[options->GEOindex].poslastFC[IODP][i];
+					if (posFC==-1) {
+						//No data for this satelllite
+						continue;
 					}
+				}
+
+				UDREI=0;
+				if(SBASdata[options->GEOindex].lastfastmessage[i]==INTEGRITYINFO) {
+					//Last fast correction data received is from message type 6
+					if(SBASdata[options->GEOindex].IODFintegrity[i]==3) {
+						//Alarm. Use IODF from message type 6 regardles of other IODF
+						if(SBASdata[options->GEOindex].UDREI6[i]>=14) UDREI=SBASdata[options->GEOindex].UDREI6[i];
+					} else if (SBASdata[options->GEOindex].IODFintegrity[i]!=SBASdata[options->GEOindex].IODF[IODP][posFC][i]) {
+						//IODF from message type 6 does not match the IODF from messages type 2-5,24 and IODF!=3
+						//We cannot use the UDREsigma from message type 6, so we keep using the last one from messages type 2-5,24
+						if(SBASdata[options->GEOindex].UDREI[IODP][posFC][i]>=14) UDREI=SBASdata[options->GEOindex].UDREI[IODP][posFC][i];
+					} else {
+						if(SBASdata[options->GEOindex].UDREI6[i]>=14) UDREI=SBASdata[options->GEOindex].UDREI6[i];
+					}
+					tudre=SBASdata[options->GEOindex].lastintegrityinfo[i];
 				} else {
-					k=SBASdata[options->GEOindex].IODPfastcorr;
-					if (SBASdata[options->GEOindex].useforbidden[SBASdata[options->GEOindex].pos2GNSS[k][i]][SBASdata[options->GEOindex].pos2PRN[k][i]]>=14) {
-						//We have received UDREI<=13, we need to clear the useforbidden if it was active
-						SBASdata[options->GEOindex].useforbidden[SBASdata[options->GEOindex].pos2GNSS[k][i]][SBASdata[options->GEOindex].pos2PRN[k][i]]=0;
+					//Last fast correction data received is from message type is from type 2-5,24
+					if(SBASdata[options->GEOindex].UDREI[IODP][posFC][i]>=14) UDREI=SBASdata[options->GEOindex].UDREI[IODP][posFC][i];
+					tudre=SBASdata[options->GEOindex].lastfastcorrections[IODP][posFC][i];
+				}
+				//Check UDREI has not timed out
+				diffTime=tdiff(currentepoch,&tudre);
+				if(diffTime<=(double)(SBASdata[options->GEOindex].timeoutmessages[SBAS1FFREQPOS][options->precisionapproach][INTEGRITYINFO])) {
+					//UDRE not timed out. 
+					if(UDREI>=14) {
+						//We have received an UDREI=14 or UDREI=15. We need to erase all the data
+						for(k=0;k<5;k++) {
+							SBASdata[options->GEOindex].poslastFC[k][i] = -1;
+							SBASdata[options->GEOindex].numFC[k][i] = 0;
+							if(k==SBASdata[options->GEOindex].IODPfastcorr) {
+								SBASdata[options->GEOindex].useforbidden[SBASdata[options->GEOindex].pos2GNSS[SBAS1FFREQPOS][k][i]][SBASdata[options->GEOindex].pos2PRN[SBAS1FFREQPOS][k][i]]=UDREI;
+							}
+							for(j=0;j<MAXSBASFASTCORR;j++) {
+								SBASdata[options->GEOindex].PRC[k][j][i] = 9999;
+								SBASdata[options->GEOindex].RRC[k][j][i] = 9999;
+								SBASdata[options->GEOindex].UDREI[k][j][i] = -1;
+								SBASdata[options->GEOindex].UDRE[k][j][i] = -1;
+								SBASdata[options->GEOindex].UDREsigma[k][j][i] = -1;
+								SBASdata[options->GEOindex].IODF[k][j][i] = -1;
+								SBASdata[options->GEOindex].lastfastcorrections[k][j][i].MJDN = -1;
+								SBASdata[options->GEOindex].lastfastcorrections[k][j][i].SoD = -1;
+							}
+						}
+					} else {
+						k=SBASdata[options->GEOindex].IODPfastcorr;
+						if (SBASdata[options->GEOindex].useforbidden[SBASdata[options->GEOindex].pos2GNSS[SBAS1FFREQPOS][k][i]][SBASdata[options->GEOindex].pos2PRN[SBAS1FFREQPOS][k][i]]>=14) {
+							//We have received UDREI<=13, we need to clear the useforbidden if it was active
+							SBASdata[options->GEOindex].useforbidden[SBASdata[options->GEOindex].pos2GNSS[SBAS1FFREQPOS][k][i]][SBASdata[options->GEOindex].pos2PRN[SBAS1FFREQPOS][k][i]]=0;
+						}
 					}
 				}
 			}
@@ -8686,13 +19569,13 @@ int IPP2Sqr (double IPPlat, double IPPlon, double *IGPlat, double *IGPlon, doubl
 	//Compute the IGP for |IGPlat|>80. 
 	//We look for the IGP closest to the west of the IPP
 	
-	if ((IPPlat>=85.)||(IPPlat<-85.)) {     
+	if ((IPPlat>85.)||(IPPlat<-85.)) {     
 
 		*increment=0;
 
 		*IGPlon=modulo(IPPlon+360,360);
 
-		if (IPPlat>=85.) {  
+		if (IPPlat>85.) {  
 			*IGPlat=85;
 			if (*IGPlon<360) tmplon=270;
 			if (*IGPlon<270) tmplon=180;
@@ -8718,7 +19601,7 @@ int IPP2Sqr (double IPPlat, double IPPlon, double *IGPlat, double *IGPlon, doubl
 		//Compute the IGP in the other cases.
 		*increment=10;
 		difflat=5;
-		if ((IPPlat>=-60.) && (IPPlat<60.)) {
+		if ((IPPlat>=-60.) && (IPPlat<=60.)) {
 			*increment=5;
 			difflat=0;
 		}
@@ -9083,7 +19966,7 @@ int IGPLatLon2BandNumberIGP (double IGPlat, double IGPlon, int *Bandnumber, int 
  * int *IGPnumber                  O  N/A  Vector indicating the number in the mask of the IGPs around the IPP 
  * int *IGPBandNumber              O  N/A  Vector indicating the band number of the IGPs around the IPP 
  *****************************************************************************/
-void IGPsearch (double IPPlat, double IPPlon, double IGPlat, double IGPlon, double lat_inc, double lon_inc, int IGPinMask[5][11][202], int IGP2Mask[11][202], int *InterpolationMode, int *IGPnumber, int *IGPBandNumber) {
+void IGPsearch (TSBASdata *SBASdata, int GEOindex, double IPPlat, double IPPlon, double IGPlat, double IGPlon, double lat_inc, double lon_inc, int *InterpolationMode, int *IGPnumber, int *IGPBandNumber) {
 
 	double 	IPPlon_aux,IGPlat_aux1,IGPlat_aux2,IGPlon_aux1,IGPlon_aux2,x,y,W;
 	int 	inside,numIGPvalid;
@@ -9113,10 +19996,10 @@ void IGPsearch (double IPPlat, double IPPlon, double IGPlat, double IGPlon, doub
  
 	IGPLatLon2BandNumberIGP(IGPlat_aux2,IGPlon_aux2,&Bandnumber1,&IGP1,&IGP90);
 	if (IGP90>0) {
-		if (IGPinMask[IGP2Mask[9][IGP90]][9][IGP90]==1) {
+		if (SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[9][IGP90]][9][IGP90]==1) {
 			Bandnumber1=9;
 			IGP1=IGP90;
-		} else if (IGPinMask[IGP2Mask[10][IGP90]][10][IGP90]==1) {
+		} else if (SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[10][IGP90]][10][IGP90]==1) {
 			Bandnumber1=10;
 			IGP1=IGP90;
 		}
@@ -9124,10 +20007,10 @@ void IGPsearch (double IPPlat, double IPPlon, double IGPlat, double IGPlon, doub
 
 	IGPLatLon2BandNumberIGP(IGPlat_aux2,IGPlon_aux1,&Bandnumber2,&IGP2,&IGP90);
 	if (IGP90>0) {
-		if (IGPinMask[IGP2Mask[9][IGP90]][9][IGP90]==1) {
+		if (SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[9][IGP90]][9][IGP90]==1) {
 			Bandnumber2=9;
 			IGP2=IGP90;
-		} else if (IGPinMask[IGP2Mask[10][IGP90]][10][IGP90]==1) {
+		} else if (SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[10][IGP90]][10][IGP90]==1) {
 			Bandnumber2=10;
 			IGP2=IGP90;
 		}
@@ -9135,10 +20018,10 @@ void IGPsearch (double IPPlat, double IPPlon, double IGPlat, double IGPlon, doub
 
 	IGPLatLon2BandNumberIGP(IGPlat_aux1,IGPlon_aux1,&Bandnumber3,&IGP3,&IGP90);
 	if (IGP90>0) {
-		if (IGPinMask[IGP2Mask[9][IGP90]][9][IGP90]==1) {
+		if (SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[9][IGP90]][9][IGP90]==1) {
 			Bandnumber3=9;
 			IGP3=IGP90;
-		} else if (IGPinMask[IGP2Mask[10][IGP90]][10][IGP90]==1) {
+		} else if (SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[10][IGP90]][10][IGP90]==1) {
 			Bandnumber3=10;
 			IGP3=IGP90;
 		}
@@ -9146,10 +20029,10 @@ void IGPsearch (double IPPlat, double IPPlon, double IGPlat, double IGPlon, doub
 
 	IGPLatLon2BandNumberIGP(IGPlat_aux1,IGPlon_aux2,&Bandnumber4,&IGP4,&IGP90);
 	if (IGP90>0) {
-		if (IGPinMask[IGP2Mask[9][IGP90]][9][IGP90]==1) {
+		if (SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[9][IGP90]][9][IGP90]==1) {
 			Bandnumber4=9;
 			IGP4=IGP90;
-		} else if (IGPinMask[IGP2Mask[10][IGP90]][10][IGP90]==1) {
+		} else if (SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[10][IGP90]][10][IGP90]==1) {
 			Bandnumber4=10;
 			IGP4=IGP90;
 		}
@@ -9166,17 +20049,17 @@ void IGPsearch (double IPPlat, double IPPlon, double IGPlat, double IGPlon, doub
  
 
 	//NOTICE that, after introducing the Bands 9 and 10 we will look for IGPs that are only in the Band 9 or 10 (and they are not in the others bands). 
-	//Thence, if these IGPs are not in the mask (i.e, IGPinMask[IGP2Mask[9][IGP90]][9][IGP90]!=1 or IGPinMask[IGP2Mask[10][IGP90]][10][IGP90]!=1), the IGP will set as "0", because it does not exist for the other bands!!!. 
+	//Thence, if these IGPs are not in the mask (i.e, SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[9][IGP90]][9][IGP90]!=1 or SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[10][IGP90]][10][IGP90]!=1), the IGP will set as "0", because it does not exist for the other bands!!!. 
 	//This is the reason why we must to check if the IGP1,IGP2,IGP3 and IGP4 are zero before to use them as matrix index.
 
 	IGP1valid=0;
 	IGP2valid=0;
 	IGP3valid=0;
 	IGP4valid=0;
-	if (IGP1>0) IGP1valid=IGPinMask[IGP2Mask[Bandnumber1][IGP1]][Bandnumber1][IGP1];
-	if (IGP2>0) IGP2valid=IGPinMask[IGP2Mask[Bandnumber2][IGP2]][Bandnumber2][IGP2];
-	if (IGP3>0) IGP3valid=IGPinMask[IGP2Mask[Bandnumber3][IGP3]][Bandnumber3][IGP3];
-	if (IGP4>0) IGP4valid=IGPinMask[IGP2Mask[Bandnumber4][IGP4]][Bandnumber4][IGP4];
+	if (IGP1>0) IGP1valid=SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[Bandnumber1][IGP1]][Bandnumber1][IGP1];
+	if (IGP2>0) IGP2valid=SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[Bandnumber2][IGP2]][Bandnumber2][IGP2];
+	if (IGP3>0) IGP3valid=SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[Bandnumber3][IGP3]][Bandnumber3][IGP3];
+	if (IGP4>0) IGP4valid=SBASdata[GEOindex].IGPinMask[SBASdata[GEOindex].IGP2Mask[Bandnumber4][IGP4]][Bandnumber4][IGP4];
 		 
 	numIGPvalid=IGP1valid+IGP2valid+IGP3valid+IGP4valid;
 
@@ -9232,10 +20115,10 @@ void IGPsearch (double IPPlat, double IPPlon, double IGPlat, double IGPlon, doub
  *                                         [1:4] Interpolation in triangle (the number indicates the excluded vertex)
  *                                         -1    No interpolation in square
  *                                         [-1:-4] No Interpolation in triangle (the number indicates the excluded vertex)
- * double IGPDelays[5]             I  m    Vertical delays in the four grid points [1-4] from MT 26 (position 0 is not used) (in meters)
- * double IGPSigma2[5]             I  m^2  Sigma^2 in the four grid points [1-4] after applying formula A-58 in MOPS-C (position 0 is not used) (in meters^2)
- * double *VerticalDelay           O  m    Interpolated ionospheric vertical delay (in meters)
- * double *Sigma2                  O  m^2  Interpolated sigma error (in meters^2)
+ * double IGPDelays[5]             I  m    Vertical delays in the four grid points [1-4] from MT 26 (position 0 is not used) (in metres)
+ * double IGPSigma2[5]             I  m^2  Sigma^2 in the four grid points [1-4] after applying formula A-58 in MOPS-C (position 0 is not used) (in metres^2)
+ * double *VerticalDelay           O  m    Interpolated ionospheric vertical delay (in metres)
+ * double *Sigma2                  O  m^2  Interpolated sigma error (in metres^2)
  * double **IPP_Weight             O  N/A  Weights for each of the corners involved in the IPP interpolation
  *****************************************************************************/
 void SBASionoInterpolation (double IPPlat,double IPPlon,double IGPlat1,double IGPlon1,double IGPlat2,double IGPlon2,int *InterpolationMode,double IGPDelays[5],double IGPSigma2[5],double *VerticalDelay,double *Sigma2,double *IPP_Weight) {
@@ -9482,8 +20365,8 @@ void SBASionoInterpolation (double IPPlat,double IPPlon,double IGPlat1,double IG
 	
 	OUTPUT:
 	------
-	*VerticalDelay: Vertical Delay at the IPP (in meters)
-	*Sigma2: User Ionospheric Vertical Error at the IPP (in meters^2)
+	*VerticalDelay: Vertical Delay at the IPP (in metres)
+	*Sigma2: User Ionospheric Vertical Error at the IPP (in metres^2)
 
 	InterpolationMode= -1 ===> NOT MONITORED
 	(in this case, also *Sigma2=-1)
@@ -9857,13 +20740,296 @@ int InsideOutside (double latpos, double lonpos, double lat1, double lon1, doubl
 }
 
 /*****************************************************************************
+ * Name        : FillGEOelevationGrid
+ * Description : Compute the elevation of the GEO for each position in the grid
+ *                in SBASplots mode
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * TSBASdata  *SBASdata            I  N/A  Struct to save SBAS data
+ * TEpoch *epoch                   O  N/A  TEpoch struct
+ * TSBASPlots *SBASplots           O  N/A  TSBASPlots struct
+ * TOptions  *options              I  N/A  TOptions struct
+ * int *retvalue                   O  N/A  Return value. 1->OK -1->Error allocating memory
+ *****************************************************************************/
+void FillGEOelevationGrid (TSBASdata  *SBASdata, TEpoch *epoch, TSBASPlots *SBASplots, TOptions  *options, int *retvalue)  {
+
+	int		 	i,j,k;
+	int			availOrbit,GEOPRN;
+	int			latPos,lonPos;
+	double 		diffTime, position[3];
+	double 		elevation,azimuth;
+	double		latitude,longitude;
+	TTime		t;
+
+	if (SBASplots->numGEOelevPos!=SBASdata[0].numSBASsatellites) {
+		//There are more GEOs in view than the allocated GEOs. Resize array
+		SBASplots->GEOelevPos=realloc(SBASplots->GEOelevPos,sizeof(float*)*SBASdata[0].numSBASsatellites);
+		if (SBASplots->GEOelevPos==NULL) {
+			*retvalue=-1;
+			return;
+		}
+		for(i=SBASplots->numGEOelevPos;i<SBASdata[0].numSBASsatellites;i++) {
+			SBASplots->GEOelevPos[i]=malloc(sizeof(float*)*SBASplots->AvailabilityLatSize);
+			if (SBASplots->GEOelevPos[i]==NULL) {
+				*retvalue=-1;
+				return;
+			}
+			for(j=0;j<SBASplots->AvailabilityLatSize;j++) {
+				SBASplots->GEOelevPos[i][j]=malloc(sizeof(float)*SBASplots->AvailabilityLonSize);
+				if (SBASplots->GEOelevPos[i][j]==NULL) {
+					*retvalue=-1;
+					return;
+				}
+				for(k=0;k<SBASplots->AvailabilityLonSize;k++) {
+					SBASplots->GEOelevPos[i][j][k]=99.99f; //Set a very high value, so GEO is not used until we receive its coordinates
+				}
+			}
+		}
+		if(options->NoIonoPlot==0) {
+			SBASplots->GEOelevPosIono=realloc(SBASplots->GEOelevPosIono,sizeof(float*)*SBASdata[0].numSBASsatellites);
+			if (SBASplots->GEOelevPosIono==NULL) {
+				*retvalue=-1;
+				return;
+			}
+			for(i=SBASplots->numGEOelevPos;i<SBASdata[0].numSBASsatellites;i++) {
+				SBASplots->GEOelevPosIono[i]=malloc(sizeof(float*)*SBASplots->IonoLatSize);
+				if (SBASplots->GEOelevPosIono[i]==NULL) {
+					*retvalue=-1;
+					return;
+				}
+				for(j=0;j<SBASplots->IonoLatSize;j++) {
+					SBASplots->GEOelevPosIono[i][j]=malloc(sizeof(float)*SBASplots->IonoLonSize);
+					if (SBASplots->GEOelevPosIono[i][j]==NULL) {
+						*retvalue=-1;
+						return;
+					}
+					for(k=0;k<SBASplots->IonoLonSize;k++) {
+						SBASplots->GEOelevPosIono[i][j][k]=99.99f; //Set a very high value, so GEO is not used until we receive its coordinates
+					}
+				}
+			}
+		}
+		SBASplots->numGEOelevPos=SBASdata[0].numSBASsatellites;
+	}
+
+
+	for(i=1;i<=SBASdata[0].numSBASsatellites;i++) {
+		switch(options->SBAScorrections) {
+			case SBASMaps1freqUsed:
+				if (SBASplots->GEOWithElevComputed[i-1]==1) continue; //GEO already computed
+				availOrbit=0;
+				//Check if we have an available almanac message
+				if(SBASdata[i].lastmsgreceived[SBAS1FFREQPOS][GEOSATELLITEALMANACS].MJDN!=-1) {
+					//Almanac message available
+					for(j=0;j<SBASdata[i].numgeoalmanacs;j++) {
+						//Compute GEO elevation for all GEOs in almanac message
+						if ((int)(SBASdata[i].geoalmanacsmessage[j][PRNNUMBER])!=SBASdata[i].PRN) continue; //It is not the current GEO on the list
+						diffTime=epoch->t.SoD-SBASdata[i].geoalmanacsmessage[j][T0ALMANAC];
+						//Check for day rollover in time difference. As a threshold, we use the second at half of the day (86400/2=43200)
+						if(diffTime>43200) diffTime-=86400; 	//This occurs when we are at the end of the day and the time of applicability is in the next day
+						if(diffTime<-43200) diffTime+=86400;	//This occurs when we are at the beginning of the day and the time of applicability is in the previous day (because we have missed the previous message)
+						position[0]=SBASdata[i].geoalmanacsmessage[j][XGALMANAC]+SBASdata[i].geoalmanacsmessage[j][XGALMANACRATEOFCHANGE]*diffTime;
+						position[1]=SBASdata[i].geoalmanacsmessage[j][YGALMANAC]+SBASdata[i].geoalmanacsmessage[j][YGALMANACRATEOFCHANGE]*diffTime;
+						position[2]=SBASdata[i].geoalmanacsmessage[j][ZGALMANAC]+SBASdata[i].geoalmanacsmessage[j][ZGALMANACRATEOFCHANGE]*diffTime;
+						availOrbit=1;
+						break;
+					}
+				}
+				if(availOrbit==0) { 
+					//We could not compute elevation using almanc. try with navigation message
+					if(SBASdata[i].lastmsgreceived[SBAS1FFREQPOS][GEONAVIGATIONMESSAGE].MJDN!=-1) {
+						diffTime=tdiff(&epoch->t,&SBASdata[i].lastmsgreceived[SBAS1FFREQPOS][GEONAVIGATIONMESSAGE]);
+						if(diffTime>(double)(SBASdata[i].timeoutmessages[SBAS1FFREQPOS][options->precisionapproach][GEONAVIGATIONMESSAGE]) ) {
+							SBASdata[i].lastmsgreceived[SBAS1FFREQPOS][GEONAVIGATIONMESSAGE].MJDN=-1;
+							availOrbit=1;
+						}
+					}
+					if(availOrbit==1) {
+						//We have navigation message
+						//Compute GEO elevation
+						diffTime=epoch->t.SoD-SBASdata[i].geonavigationmessage[T0NAV];
+						//Check for day rollover in time difference. As a threshold, we use the second at half of the day (86400/2=43200)
+						if(diffTime>43200) diffTime-=86400; 	//This occurs when we are at the end of the day and the time of applicability is in the next day
+						if(diffTime<-43200) diffTime+=86400;	//This occurs when we are at the beginning of the day and the time of applicability is in the previous day (because we have missed the previous message)
+						position[0]=SBASdata[i].geonavigationmessage[XG]+SBASdata[i].geonavigationmessage[XGRATEOFCHANGE]*diffTime+0.5*SBASdata[i].geonavigationmessage[XGACCELERATION]*diffTime*diffTime;
+						position[1]=SBASdata[i].geonavigationmessage[YG]+SBASdata[i].geonavigationmessage[YGRATEOFCHANGE]*diffTime+0.5*SBASdata[i].geonavigationmessage[YGACCELERATION]*diffTime*diffTime;
+						position[2]=SBASdata[i].geonavigationmessage[ZG]+SBASdata[i].geonavigationmessage[ZGRATEOFCHANGE]*diffTime+0.5*SBASdata[i].geonavigationmessage[ZGACCELERATION]*diffTime*diffTime;
+					}
+				}
+				break;
+			case SBASMapsDFMCused:
+				if (SBASplots->GEOWithElevComputed[i-1]==1) continue; //GEO already computed
+				availOrbit=0;
+				//Check if we have an available almanac message
+				if(SBASdata[i].lastmsgreceived[SBASDFMCFREQPOS][SBASALMANACSDFMC].MJDN!=-1) {
+					//Almanac message available. Almanac orbit parameter do not timed-out
+					//Almanac reference time is in SBAS time. We need to check to what constellation the time is aligned
+					if (SBASdata[i].lastmsgreceived[SBASDFMCFREQPOS][OBADDFREIPARAMETERS].MJDN!=-1) {
+						//We won't check if message MT37 is timed-out, as a SBAS system is not going to change its reference time
+						memcpy(&t,&epoch->t,sizeof(TTime));
+						switch((int)SBASdata[i].commonOBAD[TIMEREFID]) {
+							case 1: //GLONASS
+								//Note that if leap seconds number is not correct (due to a new leap second was added), it will not be very
+								//important as the computed position after 1 second difference will barely make any change to the elevation
+								t=tdadd(&t,-epoch->leapSeconds); //To convert from GPS to GLONASS
+								break;
+							case 3: //BeiDou
+								t=tdadd(&t,-DIFFBDS2GPSTIME); //To convert from GPS to BeiDou
+								break;
+							default:
+								break;										
+						}
+					} else {
+						//No MT37 with reference time. Wait until a MT37 arrives
+						continue;
+					}
+
+					for(j=0;j<SBASdata[i].numDFMCalmanac;j++) {
+						//Get position where the almanac is saved (the position corresponds to PRN-120)
+						k=SBASdata[i].posWithDataDFMCalmanac[j];
+						GEOPRN=k+120;
+						if (GEOPRN!=SBASdata[i].PRN) continue; //It is not the current GEO on the list
+						//Compute GEO elevation for all GEOs in almanac message
+						getPositionBRDC (NULL,&SBASdata[i].DFMCalmanac[GEOPRN-120], &t, position);
+						availOrbit=1;
+						break;
+					}
+				}
+				//NOTE: If in the almanac message there is missing data from the GEO from which we have received data, this GEO will not be used 
+				if(availOrbit==0) {
+					//We could not compute elevation using almanc. try with navigation message
+					//Check that we have GEO navigation message
+					if (SBASdata[i].timeoutmessages[SBASDFMCFREQPOS][options->precisionapproach][SBASEPHEMERISDFMC]!=-1) {
+						//User manually set MT3940 time-out value (stored in both message type 39 and 40). Use it instead of the IvalidMT3940 value in MT37
+						if(SBASdata[i].lastMT3940received.MJDN!=-1) {
+							//For MT39/40, the time-out is accounted since the reception of the last bit of the last MT39 or MT40 received
+							diffTime=tdiff(&epoch->t,&SBASdata[i].lastMT3940received);
+							if(diffTime>(double)SBASdata[i].timeoutmessages[SBASDFMCFREQPOS][options->precisionapproach][SBASEPHEMERISDFMC] ) {
+								//MT39/40 timed out
+							} else {
+								availOrbit=1;
+							}
+						} else {
+							//No MT39/40 received
+						}
+					} else {
+						if (SBASdata[i].lastmsgreceived[SBASDFMCFREQPOS][OBADDFREIPARAMETERS].MJDN!=-1) {
+							//Check MT37 is not timed out. The time-out is accounted since the reception of the last bit of the message
+							diffTime=tdiff(&epoch->t,&SBASdata[i].lastmsgreceived[SBASDFMCFREQPOS][OBADDFREIPARAMETERS]);
+							if(diffTime>(double)(SBASdata[i].timeoutmessages[SBASDFMCFREQPOS][options->precisionapproach][OBADDFREIPARAMETERS])) {
+								//MT37 timed out. We cannot compute if MT39/40 is timed out
+								break;
+							}
+							if(SBASdata[i].lastMT3940received.MJDN!=-1) {
+								//For MT39/40, the time-out is accounted since the reception of the last bit of the last MT39 or MT40 received
+								diffTime=tdiff(&epoch->t,&SBASdata[i].lastMT3940received);
+								if(diffTime>(SBASdata[i].commonOBAD[IVALIDMT3940]*SBASdata[i].tmoutFactor[options->precisionapproach]) ) {
+									//MT39/40 timed out
+								} else {
+									availOrbit=1;
+								}
+							} else {
+								//No MT39/40 received
+							}
+						} else {
+							//No MT37 with IvalidMT39/40 and reference time. Wait until a MT37 arrives
+							break;
+						}
+					}
+					if(availOrbit==1) {
+						//We have all the navigation messages
+						memcpy(&t,&epoch->t,sizeof(TTime));
+						switch((int)SBASdata[i].commonOBAD[TIMEREFID]) {
+							case 1: //GLONASS
+								//Note that if leap seconds number is not correct (due to a new leap second was added), it will not be very
+								//important as the computed position after 1 second difference will barely make any change to the elevation
+								t=tdadd(&t,-epoch->leapSeconds); //To convert from GPS to GLONASS
+								break;
+							case 3: //BeiDou
+								t=tdadd(&t,-DIFFBDS2GPSTIME); //To convert from GPS to BeiDou
+								break;
+							default:
+								break;										
+						}
+						//Compute GEO elevation
+						getPositionBRDC(NULL,&SBASdata[i].navSBASmessage, &t, position);
+					}
+				}
+				break;
+			default:
+				availOrbit=0;
+				break;
+		}
+		if (availOrbit==0) continue;
+		//Satellite GEO position available. Compute the elevation in each position in the grid
+		//Loop for latitude
+		latPos=-1;
+		for(latitude=options->minLatplots;latitude<=options->maxLatplots;latitude+=options->AvailabilityPlotStep) {
+			//Compute latitude vector position
+			latPos++;
+
+			//Loop for longitude
+			lonPos=-1;
+			for(longitude=options->minLonplots;longitude<=options->maxLonplots;longitude+=options->AvailabilityPlotStep) {
+				//Compute longitude vector position
+				lonPos++;
+				//Transform from latitude, longitude, height to XYZ. If non height value set, we will assume we are on height 0 (over the WGS84 geoid)
+				epoch->receiver.aproxPositionNEU[0]=latitude*d2r;
+				epoch->receiver.aproxPositionNEU[1]=longitude*d2r;
+				epoch->receiver.aproxPositionNEU[2]=options->SBASPlotsRecHeight;
+				NEU2XYZ(epoch->receiver.aproxPositionNEU,epoch->receiver.aproxPosition);
+				fillGroundStationOrientation(epoch);
+
+				getAzimuthElevation(epoch->receiver.orientation, epoch->receiver.aproxPosition, position, &azimuth, &elevation);
+
+				SBASplots->GEOelevPos[i-1][latPos][lonPos]=(float)elevation;
+				
+
+			}
+		}
+		if(options->NoIonoPlot==0) {
+			latPos=-1;
+			for(latitude=options->minLatplots;latitude<=options->maxLatplots;latitude+=options->IonoPlotStep) {
+				//Compute latitude vector position
+				latPos++;
+
+				//Loop for longitude
+				lonPos=-1;
+				for(longitude=options->minLonplots;longitude<=options->maxLonplots;longitude+=options->IonoPlotStep) {
+					//Compute longitude vector position
+					lonPos++;
+					//Transform from latitude, longitude, height to XYZ. If non height value set, we will assume we are on height 0 (over the WGS84 geoid)
+					epoch->receiver.aproxPositionNEU[0]=latitude*d2r;
+					epoch->receiver.aproxPositionNEU[1]=longitude*d2r;
+					epoch->receiver.aproxPositionNEU[2]=options->SBASPlotsRecHeight;
+					NEU2XYZ(epoch->receiver.aproxPositionNEU,epoch->receiver.aproxPosition);
+					fillGroundStationOrientation(epoch);
+
+					getAzimuthElevation(epoch->receiver.orientation, epoch->receiver.aproxPosition, position, &azimuth, &elevation);
+
+					SBASplots->GEOelevPosIono[i-1][latPos][lonPos]=(float)elevation;
+					
+
+				}
+			}
+		}
+
+		//Set GEO flag to indicate that elevation has been computed
+		SBASplots->GEOWithElevComputed[i-1]=1;
+		SBASplots->numGEOWithElevComputed++;
+	}
+
+	*retvalue=1;
+}
+	
+/*****************************************************************************
  * Name        : AWGN_generator
  * Description : Generate an AWGN sample using Box-Muller Transformation method
  *               
  * Parameters  : 
  * Name                           |Da|Unit|Description
  * double stddev                   I  m    Standard deviation of the AWGN to be generated
- * Returned value (double)         O  m    AWGN sample value (in meters) 
+ * Returned value (double)         O  m    AWGN sample value (in metres) 
  *****************************************************************************/
 double AWGN_generator (double stddev) {
 
@@ -9909,16 +21075,16 @@ double AWGN_generator (double stddev) {
  *                                          1 -> a > b
  *****************************************************************************/
 int qsort_compare_float(const void *a,const void *b) {
-    float *x = (float *) a;
-    float *y = (float *) b;
-    if (*x < *y) return -1;
-    else if (*x > *y) return 1;
+    float x = *(const float *) a;
+    float y = *(const float *) b;
+    if (x < y) return -1;
+    else if (x > y) return 1;
     return 0;
     //NOTE: In some codes, instead of setting the return value with if-else,
     //they use the following line:
-    //return (*x-*y);
+    //return (x-y);
     //This instructions is valid, except in the cases in the limits of decimal representation.
-    //For example, if a = MAX_FLOAT_VALUE and b = -10, then a-b will overflow the result and 
+    //For example, if x = MAX_FLOAT_VALUE and y = -10, then a-b will overflow the result and 
     // return an undefined value
 }
 
@@ -9939,16 +21105,16 @@ int qsort_compare_float(const void *a,const void *b) {
  *                                          1 -> a > b
  *****************************************************************************/
 int qsort_compare_double(const void *a,const void *b) {
-    double *x = (double *) a;
-    double *y = (double *) b;
-    if (*x < *y) return -1;
-    else if (*x > *y) return 1;
+    double x = *(const double *) a;
+    double y = *(const double *) b;
+    if (x < y) return -1;
+    else if (x > y) return 1;
     return 0;
     //NOTE: In some codes, instead of setting the return value with if-else,
     //they use the following line:
-    //return (*x-*y);
+    //return (x-y);
     //This instructions is valid, except in the cases in the limits of decimal representation.
-    //For example, if a = MAX_DOUBLE_VALUE and b = -10, then a-b will overflow the result and 
+    //For example, if x = MAX_DOUBLE_VALUE and y = -10, then a-b will overflow the result and 
     // return an undefined value
 }
 
@@ -9969,18 +21135,80 @@ int qsort_compare_double(const void *a,const void *b) {
  *                                          1 -> a > b
  *****************************************************************************/
 int qsort_compare_int(const void *a,const void *b) {
-    int *x = (int *) a;
-    int *y = (int *) b;
-    if (*x < *y) return -1;
-    else if (*x > *y) return 1;
+    int x = *(const int *) a;
+    int y = *(const int *) b;
+    if (x < y) return -1;
+    else if (x > y) return 1;
     return 0;
     //NOTE: In some codes, instead setting the return value with if-else,
     //they use the following line:
-    //return (*x-*y);
+    //return (x-y);
     //This instructions is valid, except in the cases in the limits of integer representation.
-    //For example, if a = MAX_INTEGER_VALUE and b = -10, then a-b will overflow the result and 
+    //For example, if x = MAX_INTEGER_VALUE and y = -10, then a-b will overflow the result and 
     // return an undefined value
 }
+
+/*****************************************************************************
+ * Name        : qsort_compare_int_reverse
+ * Description : Function to compare two integers for qsort function
+ *               (from C library <stdlib.h>). The requisite for this function
+ *               stated in the qsort man page is that when a<b, a negative
+ *               value should be returned, when a=b zero should be a returned,
+ *               and when a>b, a positive value should be returned.
+ *               As we want reverse order, it will have reverse return values
+ *               as in qsort_compare_int function
+ *
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * const void *a                   I  N/A  First integer value as 'const void' pointer
+ * const void *b                   I  N/A  Second integer value as 'const void' pointer
+ * Returned value (int)            O  N/A  -1 -> a > b
+ *                                          0 -> a=b
+ *                                          1 -> a < b
+ *****************************************************************************/
+int qsort_compare_int_reverse(const void *a,const void *b) {
+    int x = *(const int *) a;
+    int y = *(const int *) b;
+    if (x > y) return -1;
+    else if (x < y) return 1;
+    return 0;
+    //NOTE: In some codes, instead setting the return value with if-else,
+    //they use the following line:
+    //return (y-x);
+    //This instructions is valid, except in the cases in the limits of integer representation.
+    //For example, if y = MAX_INTEGER_VALUE and x = -10, then b-a will overflow the result and
+    // return an undefined value
+}
+
+
+/*****************************************************************************
+ * Name        : qsort_compare_transtime
+ * Description : Function to compare two TBRDCblock structures by the
+ *               transmission time for qsort function (from C library <stdlib.h>).
+ *               The requisite for this function stated in the qsort man page 
+ *               is that when a<b, a negative value should be returned, when
+ *               a=b zero should be a returned, and when a>b, a positive value 
+ *               should be returned
+ *
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * const void *a                   I  N/A  First pointer to TBRDCblock structure  as 'const void' pointer 
+ * const void *b                   I  N/A  Second pointer to TBRDCblock structure as 'const void' pointer 
+ * Returned value (int)            O  N/A  -1 -> a < b
+ *                                          0 -> a=b
+ *                                          1 -> a > b
+ *****************************************************************************/
+int qsort_compare_transtime(const void *a,const void *b) {
+	TTime		t1 = ((const TBRDCblock *)a)->TtransTime;
+	TTime		t2 = ((const TBRDCblock *)b)->TtransTime;
+	double		diff;
+
+	diff=tdiff(&t1,&t2);
+    if (diff<0.) return -1;
+    else if (diff>0.) return 1;
+    return 0;
+}
+
 
 /*****************************************************************************
  * Name        : mkdir_recursive
@@ -10086,9 +21314,11 @@ int mkdir_recursive(char *filepath) {
  * Description : Initialize a TRangeList structure
  * Parameters  :
  * Name                            |Da|Unit|Description
+ * enum GNSSystem GNSS              I  N/A  Constellation of the first satellite in the first range
+ * int PRN                          I  N/A  PRN  of the first satellite in the first range
  * TRangeList *List                 O  N/A  Structure with the list of satellite ranges
  *****************************************************************************/
-void InitRangeList (TRangeList *List) {
+void InitRangeList (enum GNSSystem GNSS, int PRN, TRangeList *List) {
 
     List->size=1;
     List->listSatGNSS=NULL;
@@ -10101,10 +21331,10 @@ void InitRangeList (TRangeList *List) {
     List->listSatPRN[0]=malloc(sizeof(int*));
     List->listSatPRN[0][0]=malloc(sizeof(int)*2);
     List->numJumpslist=malloc(sizeof(int));
-    List->listSatPRN[0][0][0]=1;
-    List->listSatPRN[0][0][1]=32; //This is for the last range, which will not have end value
-    List->listSatGNSS[0][0][0]=GPS;
-    List->listSatGNSS[0][0][1]=GPS; //This is for the last range, which will not have end value
+    List->listSatPRN[0][0][0]=PRN;
+    List->listSatPRN[0][0][1]=999; //This is for the last range, which will not have end value
+    List->listSatGNSS[0][0][0]=GNSS;
+    List->listSatGNSS[0][0][1]=(enum GNSSystem)(MAX_GNSS-1); //This is for the last range, which will not have end value
     List->numJumpslist[0]=1;
 }
 
@@ -10133,7 +21363,7 @@ void freeRangeList (TRangeList *List) {
     List->listSatGNSS=NULL;
     List->listSatPRN=NULL;
     List->numJumpslist=NULL;
-    List->size=1;
+    List->size=0;
 }
 
 /*****************************************************************************
@@ -10161,8 +21391,8 @@ void AddRangeList (enum GNSSystem GNSS, int PRN, TRangeList *List) {
 
 	List->listSatGNSS[i][0][0]=GNSS;
 	List->listSatPRN[i][0][0]=PRN;
-	List->listSatGNSS[i][0][1]=GPS; //This is the last constellation, due to the last range will not have an end
-	List->listSatPRN[i][0][1]=32; //Value to see that no end range value was set
+	List->listSatGNSS[i][0][1]=(enum GNSSystem)(MAX_GNSS-1); //This is the last constellation, due to the last range will not have an end
+	List->listSatPRN[i][0][1]=999; //Value to see that no end range value was set
 	List->numJumpslist[i]=1;
 }
 
@@ -10184,8 +21414,8 @@ void ExtendRangeList (enum GNSSystem GNSS, int PRN, int pos, TRangeList *List) {
 	List->listSatPRN[pos][List->numJumpslist[pos]]=malloc(sizeof(int)*2);
 	List->listSatGNSS[pos][List->numJumpslist[pos]][0]=GNSS;
 	List->listSatPRN[pos][List->numJumpslist[pos]][0]=PRN;
-	List->listSatGNSS[pos][List->numJumpslist[pos]][1]=GPS; //This is the last constellation, due to the last range will not have an end value set
-	List->listSatPRN[pos][List->numJumpslist[pos]][1]=32; //Value to see that no end range value was set
+	List->listSatGNSS[pos][List->numJumpslist[pos]][1]=(enum GNSSystem)(MAX_GNSS-1); //This is the last constellation, due to the last range will not have an end value set
+	List->listSatPRN[pos][List->numJumpslist[pos]][1]=999; //Value to see that no end range value was set
 	List->numJumpslist[pos]++;
 }
 
@@ -10201,52 +21431,245 @@ void ExtendRangeList (enum GNSSystem GNSS, int PRN, int pos, TRangeList *List) {
  *****************************************************************************/
 void SatRangeList2String (int i, TRangeList *List,  char *auxstr) {
 
-	int 			j;
-	unsigned int	k; //to avoid warning: comparison between signed and unsigned integer expression
-	const int		listMaxSatGNSS[MAX_GNSS]={MAX_SAT_GPS,MAX_SAT_GAL,MAX_SAT_GLO,MAX_SAT_GEO,MAX_SAT_BDS,MAX_SAT_QZS,MAX_SAT_IRN};
-	char 			auxstr2[200];
+	int 			j,k;
+	int				len=0;
 
     auxstr[0]='\0';
 	for(j=0;j<List->numJumpslist[i];j++) {
 		if(List->listSatGNSS[i][j][0]==List->listSatGNSS[i][j][1] && List->listSatPRN[i][j][0]==List->listSatPRN[i][j][1]) {
 			//Range of only one satellite
-			sprintf(auxstr2,"%s %c%02d",auxstr,gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0]);
-			sprintf(auxstr,"%s",auxstr2);
+			len+=sprintf(&auxstr[len]," %c%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0]);
 		} else if (List->listSatGNSS[i][j][0]!=List->listSatGNSS[i][j][1]) {
 			//Constellation changed
 			if (List->listSatGNSS[i][j][1]-List->listSatGNSS[i][j][0]==1) {
 				//One constellation change only
 				if (List->listSatPRN[i][j][1]==999) {
-					sprintf(auxstr2,"%s %c%02d-%02d %c01-%02d",auxstr,gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],listMaxSatGNSS[List->listSatGNSS[i][j][0]],gnsstype2char(List->listSatGNSS[i][j][1]),listMaxSatGNSS[List->listSatGNSS[i][j][1]]);
+					if (List->listSatPRN[i][j][0]==listMaxSatGNSS[List->listSatGNSS[i][j][0]]) {
+						len+=sprintf(&auxstr[len]," %c%02d %c01-%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],gnsstype2char(List->listSatGNSS[i][j][1]),listMaxSatGNSS[List->listSatGNSS[i][j][1]]);
+					} else {
+						len+=sprintf(&auxstr[len]," %c%02d-%02d %c01-%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],listMaxSatGNSS[List->listSatGNSS[i][j][0]],gnsstype2char(List->listSatGNSS[i][j][1]),listMaxSatGNSS[List->listSatGNSS[i][j][1]]);
+					}
 				} else {
-					sprintf(auxstr2,"%s %c%02d-%02d %c01-%02d",auxstr,gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],listMaxSatGNSS[List->listSatGNSS[i][j][0]],gnsstype2char(List->listSatGNSS[i][j][1]),List->listSatPRN[i][j][1]);
+					if (List->listSatPRN[i][j][0]==listMaxSatGNSS[List->listSatGNSS[i][j][0]]) {
+						len+=sprintf(&auxstr[len]," %c%02d %c01-%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],gnsstype2char(List->listSatGNSS[i][j][1]),List->listSatPRN[i][j][1]);
+					} else {
+						len+=sprintf(&auxstr[len]," %c%02d-%02d %c01-%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],listMaxSatGNSS[List->listSatGNSS[i][j][0]],gnsstype2char(List->listSatGNSS[i][j][1]),List->listSatPRN[i][j][1]);
+					}
 				}
-				sprintf(auxstr,"%s",auxstr2);
 			} else {
 				//Multiple constellation change
 				//First constellation change is printed outside of the for loop
-				sprintf(auxstr2,"%s %c%02d-%02d",auxstr,gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],listMaxSatGNSS[List->listSatGNSS[i][j][0]]);
-				sprintf(auxstr,"%s",auxstr2);
+				if (List->listSatPRN[i][j][0]==listMaxSatGNSS[List->listSatGNSS[i][j][0]]) {
+					len+=sprintf(&auxstr[len]," %c%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0]);
+				} else {
+					len+=sprintf(&auxstr[len]," %c%02d-%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],listMaxSatGNSS[List->listSatGNSS[i][j][0]]);
+				}
 				for(k=1;k<(List->listSatGNSS[i][j][1]-List->listSatGNSS[i][j][0]);k++) {
 					//Intermidiate constellation changes
-					sprintf(auxstr2,"%s %c01-%02d",auxstr,gnsstype2char(List->listSatGNSS[i][j][0]+k),listMaxSatGNSS[List->listSatGNSS[i][j][0]+k]);
-					sprintf(auxstr,"%s",auxstr2);
+					len+=sprintf(&auxstr[len]," %c01-%02d",gnsstype2char(List->listSatGNSS[i][j][0]+k),listMaxSatGNSS[List->listSatGNSS[i][j][0]+k]);
 				}
 				//Last constellation change
 				if (List->listSatPRN[i][j][1]==999) {
-					sprintf(auxstr2,"%s %c01-%02d",auxstr,gnsstype2char(List->listSatGNSS[i][j][1]),listMaxSatGNSS[List->listSatGNSS[i][j][1]]);
+					len+=sprintf(&auxstr[len]," %c01-%02d",gnsstype2char(List->listSatGNSS[i][j][1]),listMaxSatGNSS[List->listSatGNSS[i][j][1]]);
 				} else {
-					sprintf(auxstr2,"%s %c01-%02d",auxstr,gnsstype2char(List->listSatGNSS[i][j][1]),List->listSatPRN[i][j][1]);
+					len+=sprintf(&auxstr[len]," %c01-%02d",gnsstype2char(List->listSatGNSS[i][j][1]),List->listSatPRN[i][j][1]);
 				}
 			}
 		} else if (List->listSatPRN[i][j][1]==999) {
-			sprintf(auxstr2,"%s %c%02d-%02d",auxstr,gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],listMaxSatGNSS[List->listSatGNSS[i][j][1]]);
-			sprintf(auxstr,"%s",auxstr2);
+			if (List->listSatPRN[i][j][0]==listMaxSatGNSS[List->listSatGNSS[i][j][0]]) {
+				len+=sprintf(&auxstr[len]," %c%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0]);
+			} else {
+				len+=sprintf(&auxstr[len]," %c%02d-%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],listMaxSatGNSS[List->listSatGNSS[i][j][1]]);
+			}
 		} else {
-			sprintf(auxstr2,"%s %c%02d-%02d",auxstr,gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],List->listSatPRN[i][j][1]);
-			sprintf(auxstr,"%s",auxstr2);
+			len+=sprintf(&auxstr[len]," %c%02d-%02d",gnsstype2char(List->listSatGNSS[i][j][0]),List->listSatPRN[i][j][0],List->listSatPRN[i][j][1]);
 		}
 	}
+}
+
+/*****************************************************************************
+ * Name        : GroupSatRangeByMeas
+ * Description : After grouping satellites by range in a string (using
+ *                 "SatRangeList2String" function), grouped the range strings
+ *                 by measurement 
+ * Parameters  :
+ * Name                            |Da|Unit|Description
+ * int shortMeas                    I  N/A  Print only the last two letter of the
+ *                                           measurement name (use only when grouping
+ *                                           by single measurements -no combinations-)
+ * int numItems                     I  N/A  Number of items in the lists
+ * enum MeasurementType *measList   I  N/A  List with the measurements of each range
+ * double *ThresholdList            I  N/A  Threshold value for each range
+ * char **strList                   I  N/A  String with the range of satellites
+ * int *outNumItems                 O  N/A  Number of lines in the output list
+ * char **outMeasGroup              O  N/A  String to print with the grouped measurements
+ * char **outStrList                O  N/A  String to print with the range grouped
+ *                                            by measurement
+ * double *outThresholdList         O  N/A  Output Threshold value for each grouped range
+ *****************************************************************************/
+void GroupSatRangeByMeas (int shortMeas, int numItems, enum MeasurementType *measList, double *ThresholdList, char **strList, int *outNumItems, char **outMeasGroup, char **outStrList, double *outThresholdList) {
+
+	int		i,j;
+	int		len;
+	int		readedLines[numItems];
+
+	for (i=0;i<numItems;i++) {
+		readedLines[i]=0;
+	}
+
+	*outNumItems=0;
+
+	for(i=0;i<numItems;i++) {
+		if (readedLines[i]==1) continue;
+		readedLines[i]=1;
+		//The first measurement in the group will be the current measurement
+		len=sprintf(outMeasGroup[*outNumItems],"%s",meastype2measstr(measList[i])+shortMeas);
+		strcpy(outStrList[*outNumItems],strList[i]);
+		outThresholdList[*outNumItems]=ThresholdList[i];
+		j=i+1;
+		if(j==numItems) {
+			//No more lines available
+		} else {
+			//Loop through all lines to check how many of them can be grouped
+			for(;j<numItems;j++) {
+				if (readedLines[j]==1) continue;
+				if (strcmp(strList[i],strList[j])==0 && ThresholdList[i]==ThresholdList[j]) {
+					//Range and threshold match. They can be grouped toguether
+					len+=sprintf(&outMeasGroup[*outNumItems][len]," %s",meastype2measstr(measList[j])+shortMeas);
+					readedLines[j]=1;
+				}
+			}
+		}
+		(*outNumItems)++;
+	}
+}
+
+/*****************************************************************************
+ * Name        : AreFilterMeasurementsEqual
+ * Description : Check if two measurements in the filter list are the same,
+ *                 that is, same measurements type, manual or auto selection
+ *                 and same smoothing
+ *
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * int checkSmooth                 I  N/A  0 -> Do not check if measurement is smoothed
+ *                                         1 -> Check if measurement is smoothed
+ * int RecType1                    I  N/A  Receiver type of measurement 1
+ * enum GNSSystem GNSS1            I  N/A  Constellation of measurement 1
+ * int PRN1                        I  N/A  PRN number of measurement 1
+ * int Pos1                        I  N/A  Position of measurement 1 in the list
+ * int RecType2                    I  N/A  Receiver type of measurement 2
+ * enum GNSSystem GNSS2            I  N/A  Constellation of measurement 2
+ * int PRN2                        I  N/A  PRN number of measurement 2
+ * int Pos2                        I  N/A  Position of measurement 2 in the list
+ * TOptions  *options              I  N/A  TOptions structure
+ * Returned value (int)            O  N/A   0 -> The two measurement differ
+ *                                          1 -> Both measurements are equal
+ *****************************************************************************/
+int AreFilterMeasurementsEqual (int checkSmooth, int RecType1, enum GNSSystem GNSS1, int PRN1, int Pos1, int RecType2, enum GNSSystem GNSS2, int PRN2, int Pos2, TOptions  *options) {
+	
+	int	i;
+
+	if (options->filterMeasTypeList[RecType1][GNSS1][PRN1][Pos1]==options->filterMeasTypeList[RecType2][GNSS2][PRN2][Pos2] && 
+			options->filterMeasKind[RecType1][GNSS1][PRN1][Pos1]==options->filterMeasKind[RecType2][GNSS2][PRN2][Pos2] &&
+			options->filterMeasList[RecType1][GNSS1][PRN1][Pos1][0]==options->filterMeasList[RecType2][GNSS2][PRN2][Pos2][0] &&
+			options->filterListWithMeas[RecType1][GNSS1][PRN1][Pos1]==options->filterListWithMeas[RecType2][GNSS2][PRN2][Pos2] && 
+			options->numCombfilterMeas[RecType1][GNSS1][PRN1][Pos1]==options->numCombfilterMeas[RecType2][GNSS2][PRN2][Pos2] &&
+			options->filterMeasSmoothed[RecType1][GNSS1][PRN1][Pos1]==options->filterMeasSmoothed[RecType2][GNSS2][PRN2][Pos2])  
+	{
+		if (options->filterListWithMeas[RecType1][GNSS1][PRN1][Pos1]==1) {
+			//Measurements provided by user. Check they are the same
+			for(i=1;i<=options->numCombfilterMeas[RecType1][GNSS1][PRN1][Pos1];i++) {
+				if (options->filterMeasList[RecType1][GNSS1][PRN1][Pos1][i]!=options->filterMeasList[RecType2][GNSS2][PRN2][Pos2][i]) {
+					return 0;
+				}
+			}
+		} else {
+			//Auto measurement selection. Check frequencies are the same
+			for(i=0;i<options->numCombfilterMeas[RecType1][GNSS1][PRN1][Pos1];i++) {
+				if (options->filterMeasfreq[RecType1][GNSS1][PRN1][Pos1][i]!=options->filterMeasfreq[RecType2][GNSS2][PRN2][Pos2][i]) {
+					return 0;
+				}
+			}
+		}
+		if (checkSmooth==1) {
+			//Check if smoothed
+			if (options->filterMeasSmoothed[RecType1][GNSS1][PRN1][Pos1]==1) {
+				if (options->numCombfilterSmoothMeas[RecType1][GNSS1][PRN1][Pos1]!=options->numCombfilterSmoothMeas[RecType2][GNSS2][PRN2][Pos2]||
+						options->filterSmoothListWithMeas[RecType1][GNSS1][PRN1][Pos1]!=options->filterSmoothListWithMeas[RecType2][GNSS2][PRN2][Pos2]||
+						options->filterSmoothMeasList[RecType1][GNSS1][PRN1][Pos1][0]!=options->filterSmoothMeasList[RecType2][GNSS2][PRN2][Pos2][0]) {
+					return 0;
+				}
+				if (options->filterSmoothListWithMeas[RecType1][GNSS1][PRN1][Pos1]==1) {
+					//Measurements provided by user. Check they are the same
+					for(i=1;i<=options->numCombfilterSmoothMeas[RecType1][GNSS1][PRN1][Pos1];i++) {
+						if (options->filterSmoothMeasList[RecType1][GNSS1][PRN1][Pos1][i]!=options->filterSmoothMeasList[RecType2][GNSS2][PRN2][Pos2][i]) {
+							return 0;
+						}
+					}
+				} else {
+					//Auto measurement selection. Check frequencies are the same
+					for(i=0;i<options->numCombfilterSmoothMeas[RecType1][GNSS1][PRN1][Pos1];i++) {
+						if (options->filterSmoothMeasfreq[RecType1][GNSS1][PRN1][Pos1][i]!=options->filterSmoothMeasfreq[RecType2][GNSS2][PRN2][Pos2][i]) {
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	} else {
+		return 0;
+	}
+	return 1;
+}
+
+/*****************************************************************************
+ * Name        : AreDopplerMeasurementsEqual
+ * Description : Check if two measurements in the Doppler filter list are the same,
+ *                 that is, same measurements type, manual or auto selection
+ *
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * int RecType1                    I  N/A  Receiver type of measurement 1
+ * enum GNSSystem GNSS1            I  N/A  Constellation of measurement 1
+ * int PRN1                        I  N/A  PRN number of measurement 1
+ * int Pos1                        I  N/A  Position of measurement 1 in the list
+ * int RecType2                    I  N/A  Receiver type of measurement 2
+ * enum GNSSystem GNSS2            I  N/A  Constellation of measurement 2
+ * int PRN2                        I  N/A  PRN number of measurement 2
+ * int Pos2                        I  N/A  Position of measurement 2 in the list
+ * TOptions  *options              I  N/A  TOptions structure
+ * Returned value (int)            O  N/A   0 -> The two measurement differ
+ *                                          1 -> Both measurements are equal
+ *****************************************************************************/
+int AreDopplerMeasurementsEqual (int RecType1, enum GNSSystem GNSS1, int PRN1, int Pos1, int RecType2, enum GNSSystem GNSS2, int PRN2, int Pos2, TOptions  *options) {
+
+	int	i;
+
+	if (options->DopplerMeasTypeList[RecType1][GNSS1][PRN1][Pos1]==options->DopplerMeasTypeList[RecType2][GNSS2][PRN2][Pos2] && 
+			options->DopplerMeasList[RecType1][GNSS1][PRN1][Pos1][0]==options->DopplerMeasList[RecType2][GNSS2][PRN2][Pos2][0] &&
+			options->DopplerListWithMeas[RecType1][GNSS1][PRN1][Pos1]==options->DopplerListWithMeas[RecType2][GNSS2][PRN2][Pos2] && 
+			options->numCombDopplerMeas[RecType1][GNSS1][PRN1][Pos1]==options->numCombDopplerMeas[RecType2][GNSS2][PRN2][Pos2])
+	{
+		if (options->DopplerListWithMeas[RecType1][GNSS1][PRN1][Pos1]==1) {
+			//Measurements provided by user. Check they are the same
+			for(i=1;i<=options->numCombDopplerMeas[RecType1][GNSS1][PRN1][Pos1];i++) {
+				if (options->DopplerMeasList[RecType1][GNSS1][PRN1][Pos1][i]!=options->DopplerMeasList[RecType2][GNSS2][PRN2][Pos2][i]) {
+					return 0;
+				}
+			}
+		} else {
+			//Auto measurement selection. Check frequencies are the same
+			for(i=0;i<options->numCombDopplerMeas[RecType1][GNSS1][PRN1][Pos1];i++) {
+				if (options->DopplerMeasfreq[RecType1][GNSS1][PRN1][Pos1][i]!=options->DopplerMeasfreq[RecType2][GNSS2][PRN2][Pos2][i]) {
+					return 0;
+				}
+			}
+		}
+	} else {
+		return 0;
+	}
+	return 1;
 }
 
 /*****************************************************************************
@@ -10259,11 +21682,10 @@ void SatRangeList2String (int i, TRangeList *List,  char *auxstr) {
  * enum GNSSystem GNSS             I  N/A  Constellation
  * int PRN                         I  N/A  PRN number
  * int NumMeas                     I  N/A  Number of measurement in the filter
- * int *SNRWeightused              O  N/A  Flag to indicate if a SNR weight is used
  * char *str                       O  N/A  String to be printed
  * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void WeightType2String (enum GNSSystem GNSS, int PRN, int NumMeas, int *SNRWeightused, char *str, TOptions *options) {
+void WeightType2String (enum GNSSystem GNSS, int PRN, int NumMeas, char *str, TOptions *options) {
 	
 	char ConstantVal[20];
 	if (options->WeightConstantsValues[GNSS][PRN][NumMeas][0]==-2) {
@@ -10274,61 +21696,55 @@ void WeightType2String (enum GNSSystem GNSS, int PRN, int NumMeas, int *SNRWeigh
 
 	switch(options->weightMode[GNSS][PRN][NumMeas]) {
 		case SBASOnlyWeight:
-			sprintf(str,"StdDev^2: SBAS variance");
+			sprintf(str,"StdDev^2: SBAS variance (metres^2)");
 			break;
 		case DGNSSOnlyWeight:
-			sprintf(str,"StdDev^2: DGNSS variance");
+			sprintf(str,"StdDev^2: DGNSS variance (metres^2)");
 			break;
 		case FixedWeight:
-			sprintf(str,"StdDev: %s",ConstantVal);
+			sprintf(str,"StdDev: %s (metres)",ConstantVal);
 			break;
 		case SBASFixedWeight: 
-			sprintf(str,"StdDev^2: SBAS variance + (%s)^2",ConstantVal);
+			sprintf(str,"StdDev^2: SBAS variance + (%s)^2 (metres^2)",ConstantVal);
 			break;
 		case DGNSSFixedWeight:
-			sprintf(str,"StdDev^2: DGNSS variance + (%s)^2",ConstantVal);
+			sprintf(str,"StdDev^2: DGNSS variance + (%s)^2 (metres^2)",ConstantVal);
 			break;
 		case ElevationWeight:
-			sprintf(str,"StdDev: %s + %.6g*e^(elev/%.6g)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1],options->WeightConstantsValues[GNSS][PRN][NumMeas][2]*r2d);
+			sprintf(str,"StdDev: %s + %.6g*e^(elev/%.6g) (metres)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1],options->WeightConstantsValues[GNSS][PRN][NumMeas][2]*r2d);
 			break;
 		case SBASElevWeight:
-			sprintf(str,"StdDev^2: SBAS variance + (%s + %.6g*e^(elev/%.6g)^2",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1],options->WeightConstantsValues[GNSS][PRN][NumMeas][2]*r2d);
+			sprintf(str,"StdDev^2: SBAS variance + (%s + %.6g*e^(elev/%.6g)^2 (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1],options->WeightConstantsValues[GNSS][PRN][NumMeas][2]*r2d);
 			break;
 		case DGNSSElevWeight:
-			sprintf(str,"StdDev^2: DGNSS variance + (%s + %.6g*e^(elev/%.6g))^2",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1],options->WeightConstantsValues[GNSS][PRN][NumMeas][2]*r2d);
+			sprintf(str,"StdDev^2: DGNSS variance + (%s + %.6g*e^(elev/%.6g))^2 (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1],options->WeightConstantsValues[GNSS][PRN][NumMeas][2]*r2d);
 			break;
 		case Elevation2Weight:
-			sprintf(str,"StdDev^2: %s + %.6g/(sin(elev)^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
+			sprintf(str,"StdDev^2: %s + %.6g/(sin(elev)^2) (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
 			break;
 		case SBASElev2Weight:
-			sprintf(str,"StdDev^2: SBAS variance + %s + %.6g/(sin(elev)^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
+			sprintf(str,"StdDev^2: SBAS variance + %s + %.6g/(sin(elev)^2) (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
 			break;
 		case DGNSSElev2Weight:
-			sprintf(str,"StdDev^2: DGNSS variance + %s + %.6g/(sin(elev)^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
+			sprintf(str,"StdDev^2: DGNSS variance + %s + %.6g/(sin(elev)^2) (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
 			break;
 		case SNRWeight:
-			sprintf(str,"StdDev^2: %s + %.6g*10^(-SNR/10)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
-			*SNRWeightused=1;
+			sprintf(str,"StdDev^2: %s + %.6g*10^(-SNR/10) (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
 			break;
 		case SBASSNRWeight:
-			sprintf(str,"StdDev^2: SBAS variance + %s + %.6g*10^(-SNR/10)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
-			*SNRWeightused=1;
+			sprintf(str,"StdDev^2: SBAS variance + %s + %.6g*10^(-SNR/10) (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
 			break;
 		case DGNSSSNRWeight:
-			sprintf(str,"StdDev^2: DGNSS variance + %s + %.6g*10^(-SNR/10)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
-			*SNRWeightused=1;
+			sprintf(str,"StdDev^2: DGNSS variance + %s + %.6g*10^(-SNR/10) (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
 			break;
 		case SNRElevWeight:
-			sprintf(str,"StdDev^2: %s + %.6g*10^(-SNR/10)/(sin(elev)^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
-			*SNRWeightused=1;
+			sprintf(str,"StdDev^2: %s + %.6g*10^(-SNR/10)/(sin(elev)^2) (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
 			break;
 		case SBASSNRElevWeight:
-			sprintf(str,"StdDev^2: SBAS variance + %s + %.6g*10^(-SNR/10)/(sin(elev)^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
-			*SNRWeightused=1;
+			sprintf(str,"StdDev^2: SBAS variance + %s + %.6g*10^(-SNR/10)/(sin(elev)^2) (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
 			break;
 		case DGNSSSNRElevWeight:
-			sprintf(str,"StdDev^2: DGNSS variance + %s + %.6g*10^(-SNR/10)/(sin(elev)^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
-			*SNRWeightused=1;
+			sprintf(str,"StdDev^2: DGNSS variance + %s + %.6g*10^(-SNR/10)/(sin(elev)^2) (metres^2)",ConstantVal,options->WeightConstantsValues[GNSS][PRN][NumMeas][1]);
 			break;
 		default:
 			//This the unknown weight, which is not possible. Leave the default just to avoid compiler warning
@@ -10344,16 +21760,19 @@ void WeightType2String (enum GNSSystem GNSS, int PRN, int NumMeas, int *SNRWeigh
  * Parameters  :
  * Name                            |Da|Unit|Description
  * enum SNRWeightComb SNRweightComb I  N/A  SNR Combination weight mode
+ * enum MeasurementType meas        I  N/A  Combination to be weighted by the SNR
  * double K1                        I  N/A  Combining factor for first frequency
  * double K2                        I  N/A  Combining factor for second frequency
+ * double K3                        I  N/A  Combining factor for third frequency
+ * double K4                        I  N/A  Combining factor for fourth frequency
  * Returned value (char*)           O  N/A  SNR Combination weight mode string
  *****************************************************************************/
-char *SNRCombModeNum2String(enum SNRWeightComb SNRweightComb, double K1, double K2) {
+char *SNRCombModeNum2String(enum SNRWeightComb SNRweightComb, enum MeasurementType meas, double K1, double K2, double K3, double K4) {
 
 	//Static variables are shared between threads (as they are saved in the data segment).
 	//To avoid race conditions, we need to set the directive '#pragma omp threadprivate()'
 	//directive to make OpenMP create a local (static) copy for each thread
-	static char str[50];
+	static char str[80];
 	#pragma omp threadprivate(str)
 
     switch(SNRweightComb) {
@@ -10363,17 +21782,27 @@ char *SNRCombModeNum2String(enum SNRWeightComb SNRweightComb, double K1, double 
         case SNRWeightCombj:
             strcpy(str,"Use SNR from measurement of second frequency");
             break;
+        case SNRWeightCombk:
+            strcpy(str,"Use SNR from measurement of third frequency");
+            break;
+        case SNRWeightCombl:
+            strcpy(str,"Use SNR from measurement of fourth frequency");
+            break;
         case SNRWeightCombMax:
-            strcpy(str,"Use maximum SNR of both measurements");
+            strcpy(str,"Use maximum SNR of all measurements");
             break;
         case SNRWeightCombMin:
-            strcpy(str,"Use minimum SNR of both measurements");
+            strcpy(str,"Use minimum SNR of all measurements");
             break;
         case SNRWeightCombMean:
-            strcpy(str,"Use the mean SNR of both measurements");
+            strcpy(str,"Use the mean SNR of all measurements");
             break;
         case SNRWeightCombUser:
-            sprintf(str,"SNR = SNRi*%.3g + SNRj*%.3g",K1,K2);
+			if (meas<IGF1012) {
+	            sprintf(str,"SNR = SNRi*%.3g + SNRj*%.3g",K1,K2);
+			} else {
+	            sprintf(str,"SNR = SNRi*%.3g + SNRj*%.3g + SNRk*%.3g + SNRl*%.3g",K1,K2,K3,K4);
+			}
             break;
         default:
             strcpy(str,"Unknown");
@@ -10390,7 +21819,7 @@ char *SNRCombModeNum2String(enum SNRWeightComb SNRweightComb, double K1, double 
  *                linear interpolation of the EGM6 grid
  * Parameters  :
  * Name                            |Da|Unit|Description
- * double *position                 I  º/m  Position in ENU (N: [-90..90], E: [-180..180], H: meters)
+ * double *position                 I  º/m  Position in ENU (N: [-90..90], E: [-180..180], H: metres)
  * Returned value (double)          O    m  EGM96 Geoid height
  *****************************************************************************/
 double getEGM96Height (double *position) {

@@ -2,7 +2,7 @@
    Copyright & License:
    ====================
    
-   Copyright 2009 - 2020 gAGE/UPC & ESA
+   Copyright 2009 - 2024 gAGE/UPC & ESA
    
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@
  *             Jesus Romero Sanchez ( gAGE/UPC ) 
  *          glab.gage @ upc.edu
  * File: input.c
- * Code Management Tool File Version: 5.5  Revision: 1
- * Date: 2020/12/11
+ * Code Management Tool File Version: 6.0  Revision: 0
+ * Date: 2024/11/22
  ***************************************************************************/
 
 /****************************************************************************
@@ -391,18 +391,37 @@
  * Change Log:   Fixed not separating the receiver APC corrections by constellations. This made that
  *                 the last frequency read from the last constellation was the value saved.
  * -----------
+ *          gLAB v6.0.0
+ * Release: 2024/11/22
+ * Change Log:   Added preprocessor directive READNOLOCKENABLED in function 'getL' to select between
+ *               Added multi-constellation support (Galileo, GLONASS, GEO, BDS, QZSS and IRNSS).
+ *               Added multi-frequency support (all RINEX frequencies).
+ *               Added SBAS DFMC processing.
+ *                 using or not using non thread locking reading functions (these are not available in
+ *                 MAC). To use non thread locking reading functions (which is faster), provide the
+ *                 parameter '-DREADNOLOCK' to the compiler.
+ *               Optimized 'getL' function code.
+ *               Fixed not using SNR data when SNR as a measurement was given in the header, but all
+ *                 these measurements were empty in the data lines and the SNR was provided as a flag.
+ *               Fixed bug in SBAS 1F which made to discard all corrections when a message type 0 was
+ *                 read as a type 2.
+ * -----------
  *       END_RELEASE_HISTORY
  *****************************/
 
+#if defined __WIN32__
+ 	//This is to allow %lld, %llu and %n format specifiers in printf with MinGW
+	#define __USE_MINGW_ANSI_STDIO  1
+#endif
+
 /* External classes */
+#include "dataHandling.h"
 #include "input.h"
 #include "output.h"
 #include <limits.h>
 #include <unistd.h>
+#include <stdio.h>
 
-//Import global variable printProgress
-extern int 	printProgress;
-extern int 	printProgressConvert;
 
 /**************************************
  * Declarations of internal operations
@@ -475,7 +494,7 @@ int crc24q (unsigned char *msg, int len) {
 	//25 bit polynomial for this CRC, with bits 0,1,3,4,5,6,7,10,11,14,17,18,23,24 equal to 1
 	unsigned long int parity = 0;
 	unsigned long int data = 0;
-	unsigned long int remainder = 0;
+	unsigned long int remainderVal = 0;
 	int check = 0;
 	int pos = 0;
 	int j;
@@ -487,10 +506,10 @@ int crc24q (unsigned char *msg, int len) {
 		a = msg[len+3+j];
 		b = msg[j];
 		parity += ( a<<(16-j*8) );
-		remainder += ( b<<(16-j*8) );
+		remainderVal += ( b<<(16-j*8) );
 	}
 
-	data = remainder;
+	data = remainderVal;
 	for (shift=1;shift<=BYTEBITS*(len+3);shift++) {
 		pos = shift%BYTEBITS;
 		n = shift/BYTEBITS;
@@ -502,13 +521,13 @@ int crc24q (unsigned char *msg, int len) {
 		else data = ( data<<1 ) + bitInt(msg[3+n], 8-pos);
 
 		if ( (data & 0x1000000) != 0 ) {
-			remainder = data^key;
-			data = remainder;
+			remainderVal = data^key;
+			data = remainderVal;
 		}
-		else if( shift == BYTEBITS*(len+3) ) remainder = data;
+		else if( shift == BYTEBITS*(len+3) ) remainderVal = data;
 	}
 
-	if ( remainder == parity ) check = 1;
+	if ( remainderVal == parity ) check = 1;
 
 	return check;
 }
@@ -664,35 +683,37 @@ TlockTime *getLockT (TlockTime *lt, int indicator) {
  *                               one bit of binary per char
  *****************************************************************************/
 TMSG1004 *readMSG1004 (TMSG1004 *sc, int ns, char *body_str) {
-	char sid[7];
-	char l1_code;
-	char l1_pseudo[25];
-	char l1_partPhase[21];
-	char l1_lock[8];
-	char l1_N[9];
-	char l1_cnr[9];
-	char l2_code[3];
-	char differ[15];
-	char l2_partPhase[21];
-	char l2_lock[8];
-	char l2_cnr[9];
-	char *endptr;
-	int i;
+	char 	sid[7];
+	char 	l1_code;
+	char 	l1_pseudo[25];
+	char 	l1_partPhase[21];
+	char 	l1_lock[8];
+	char 	l1_N[9];
+	char 	l1_cnr[9];
+	char 	l2_code[3];
+	char 	differ[15];
+	char 	l2_partPhase[21];
+	char 	l2_lock[8];
+	char 	l2_cnr[9];
+	char 	*endptr;
+	int 	i,len;
 	unsigned long long int a;
 
+	len=(int)strlen(body_str);
+
 	for ( i = 0; i < ns; i++ ) {
-		getstr(sid,body_str, 125 * i, 6);
+		getstr(sid,body_str,len, 125 * i, 6);
 		l1_code=body_str[6 + 125 * i];
-		getstr(l1_pseudo, body_str, 7 + 125 * i, 24);
-		getstr(l1_partPhase, body_str, 31 + 125 * i, 20);
-		getstr(l1_lock, body_str, 51 + 125 * i, 7);
-		getstr(l1_N, body_str, 58 + 125 * i, 8);
-		getstr(l1_cnr, body_str, 66 + 125 * i, 8);
-		getstr(l2_code, body_str, 74 + 125 * i, 2);
-		getstr(differ, body_str, 76 + 125 * i, 14);
-		getstr(l2_partPhase, body_str, 90 + 125 * i, 20);
-		getstr(l2_lock, body_str, 110 + 125 * i, 7);
-		getstr(l2_cnr, body_str, 117 + 125 * i, 8);
+		getstr(l1_pseudo, body_str,len, 7 + 125 * i, 24);
+		getstr(l1_partPhase, body_str,len, 31 + 125 * i, 20);
+		getstr(l1_lock, body_str,len, 51 + 125 * i, 7);
+		getstr(l1_N, body_str,len, 58 + 125 * i, 8);
+		getstr(l1_cnr, body_str,len, 66 + 125 * i, 8);
+		getstr(l2_code, body_str,len, 74 + 125 * i, 2);
+		getstr(differ, body_str,len, 76 + 125 * i, 14);
+		getstr(l2_partPhase, body_str,len, 90 + 125 * i, 20);
+		getstr(l2_lock, body_str,len, 110 + 125 * i, 7);
+		getstr(l2_cnr, body_str,len, 117 + 125 * i, 8);
 
 		sc[i].satellite_id = strtol(sid, &endptr, 2);
 		if ( l1_code == '0' ) sc[i].l1_code_indicator = 0;
@@ -854,9 +875,8 @@ TMSG1008 *readMSG1008 (TMSG1008 *sc, unsigned char *msg) {
  * TEpoch *epoch                   O  N/A  TEpoch structure
  * TEpoch *epochDGNSS              O  N/A  TEpoch structure
  * TRTCM3 *rtcm3                   I  N/A  TRTCM3 structure
- * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void readRTCM3header (TEpoch *epoch, TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options) {
+void readRTCM3header (TEpoch *epoch, TEpoch *epochDGNSS, TRTCM3 *rtcm3) {
 	char					*ca;
 	enum MeasurementType	meas;
 
@@ -879,7 +899,7 @@ void readRTCM3header (TEpoch *epoch, TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions
 	if ( ca != NULL ) {
 		*ca = '\0';
 		strcpy(epochDGNSS->receiver.antenna.type_radome,&ca[1]);
-		trim(epochDGNSS->receiver.antenna.type_radome);
+		trim(epochDGNSS->receiver.antenna.type_radome,(int)strlen(epochDGNSS->receiver.antenna.type_radome));
 	}
 
 	// ARP
@@ -888,38 +908,34 @@ void readRTCM3header (TEpoch *epoch, TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions
 	epochDGNSS->receiver.ARP[0] = 0.0; // N
 
 	// Types of Observations
-	// "C1","L1","S1","P2","L2","S2"
+	// "C1C","L1C","S1C","C2P","L2P","S2P"
 	epochDGNSS->measOrder[GPS].nDiffMeasurements = 6;
+	epochDGNSS->measOrder[GPS].nDiffMeasurementsRINEXHeader = 6;
 	epochDGNSS->measOrder[GPS].GNSS = GPS;
-	epochDGNSS->numGNSS = 1;
-	meas = measstr2meastype("C1");
+	epochDGNSS->numGNSSHeader = 1;
+	epochDGNSS->numPrintGNSS = 1;
+	meas = C1C;
 	epochDGNSS->measOrder[GPS].conversionFactor[meas] = 1.0;
-	epochDGNSS->measOrder[GPS].usable[meas] = 1;
 	epochDGNSS->measOrder[GPS].meas2Ind[meas] = 0;
 	epochDGNSS->measOrder[GPS].ind2Meas[0] = meas;
-	meas = measstr2meastype("L1");
+	meas = L1C;
 	epochDGNSS->measOrder[GPS].conversionFactor[meas] = GPSl1;
-	epochDGNSS->measOrder[GPS].usable[meas] = 1;
 	epochDGNSS->measOrder[GPS].meas2Ind[meas] = 1;
 	epochDGNSS->measOrder[GPS].ind2Meas[1] = meas;
-	meas = measstr2meastype("S1");
+	meas = S1C;
 	epochDGNSS->measOrder[GPS].conversionFactor[meas] = 1.0;
-	epochDGNSS->measOrder[GPS].usable[meas] = 1;
 	epochDGNSS->measOrder[GPS].meas2Ind[meas] = 2;
 	epochDGNSS->measOrder[GPS].ind2Meas[2] = meas;
-	meas = measstr2meastype("P2");
+	meas = C2P;
 	epochDGNSS->measOrder[GPS].conversionFactor[meas] = 1.0;
-	epochDGNSS->measOrder[GPS].usable[meas] = 1;
 	epochDGNSS->measOrder[GPS].meas2Ind[meas] = 3;
 	epochDGNSS->measOrder[GPS].ind2Meas[3] = meas;
-	meas = measstr2meastype("L2");
+	meas = L2P;
 	epochDGNSS->measOrder[GPS].conversionFactor[meas] = GPSl2;
-	epochDGNSS->measOrder[GPS].usable[meas] = 1;
 	epochDGNSS->measOrder[GPS].meas2Ind[meas] = 4;
 	epochDGNSS->measOrder[GPS].ind2Meas[4] = meas;
-	meas = measstr2meastype("S2");
+	meas = S2P;
 	epochDGNSS->measOrder[GPS].conversionFactor[meas] = 1.0;
-	epochDGNSS->measOrder[GPS].usable[meas] = 1;
 	epochDGNSS->measOrder[GPS].meas2Ind[meas] = 5;
 	epochDGNSS->measOrder[GPS].ind2Meas[5] = meas;
 
@@ -948,6 +964,11 @@ void readRTCM3header (TEpoch *epoch, TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions
 		}
 	}
 
+	//Build SNR lookup index
+	epochDGNSS->measOrder[GPS].meas2SNRInd[C1C]=epochDGNSS->measOrder[GPS].meas2Ind[S1C];
+	epochDGNSS->measOrder[GPS].meas2SNRInd[L1C]=epochDGNSS->measOrder[GPS].meas2Ind[S1C];
+	epochDGNSS->measOrder[GPS].meas2SNRInd[C2P]=epochDGNSS->measOrder[GPS].meas2Ind[S2P];
+	epochDGNSS->measOrder[GPS].meas2SNRInd[L2P]=epochDGNSS->measOrder[GPS].meas2Ind[S2P];
 }
 
 /*****************************************************************************
@@ -963,6 +984,7 @@ int readRTCM3obs (TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options) {
 	int						totalSeconds;
 	int						mins, intHour;
 	unsigned int			i;
+	int						j,k,l;
 	int						lli1, lli2;
 	int						ind, snr1, snr2;
 	static int				lastCSindex=0;
@@ -976,7 +998,7 @@ int readRTCM3obs (TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options) {
 	totalSeconds = totalSeconds-(int)((86400. * floor(totalSeconds / 86400.)));
 	// Hours
 	hour_d = (double)(totalSeconds) / 3600.0;
-	*rtcm3->hour = (int)(floor(hour_d));
+	rtcm3->hour = (int)(floor(hour_d));
 	intHour = (int)(floor(hour_d));
 	doubleHour = floor(hour_d);
 	// Minutes
@@ -986,7 +1008,7 @@ int readRTCM3obs (TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options) {
 	sec = (mins_d-(double)(mins)) * 60.0;
 
 	// Check if a day has passed
-	if ( rtcm3->doWeHaveHeader > 2 && intHour < (int)*rtcm3->previousHour ) {
+	if ( rtcm3->doWeHaveHeader > 2 && intHour < (int)rtcm3->previousHour ) {
 		doy2date((int)options->rtcmYear, (int)options->rtcmDoy + 1, &options->rtcmMonth, &options->rtcmDay);
 	}
 
@@ -1009,14 +1031,30 @@ int readRTCM3obs (TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options) {
 	sprintf(auxstr,"%.4f",epochDGNSS->t.SoD);
 	epochDGNSS->t.SoD=atof(auxstr);
 
-	// Loop for every satellite
+	//Remove index values from previous epoch
+	for (j=0;j<epochDGNSS->numSatellites;j++) {
+		epochDGNSS->satIndex[epochDGNSS->sat[j].GNSS][epochDGNSS->sat[j].PRN]=-1;
+		epochDGNSS->sat2Printpos[j]=-1;
+	}
+
+	//Set variables for number of satellites
+	epochDGNSS->numPrintGNSS=1;
+	epochDGNSS->GNSS2PrintPos[GPS]=0;
 	epochDGNSS->numSatellites = rtcm3->header.gps_no;
+	epochDGNSS->numSatellitesGNSS[GPS]=rtcm3->header.gps_no;
+	//Set satellite number for all other constellations to 0
+	for(j=1;j<MAX_GNSS;j++) {
+		epochDGNSS->numSatellitesGNSS[j]=0;
+	}
+
+	// Loop for every satellite
 	for ( i = 0; i < rtcm3->header.gps_no; i++ ) {
 		lli1 = 0; lli2 = 0;
 
 		epochDGNSS->sat[i].PRN = rtcm3->msg1004[i].satellite_id;
 		ind = rtcm3->msg1004[i].satellite_id;
 		epochDGNSS->sat[i].GNSS = GPS;
+		epochDGNSS->satIndex[epochDGNSS->sat[i].GNSS][epochDGNSS->sat[i].PRN]=i;
 		C1 = rtcm3->msg1004[i].l1_pseudoR + rtcm3->msg1004[i].l1_N_ambiguity;
 		L1 = (C1 + rtcm3->msg1004[i].l1_part_phaseR) * GPSf1 / c0;
 		S1 = rtcm3->msg1004[i].l1_cnr;
@@ -1028,31 +1066,37 @@ int readRTCM3obs (TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options) {
 		snr2 = min(max(floor(S2/6),1),9);
 		if ( rtcm3->L2flagLLI[ind] == 1 ) lli2 = 1;
 
-		// C1P
+		// C1C
 		ind = 0;
 		epochDGNSS->sat[i].meas[ind].value = C1;
 		epochDGNSS->sat[i].meas[ind].rawvalue = C1;
 		epochDGNSS->sat[i].meas[ind].LLI = 0;
-		epochDGNSS->sat[i].meas[ind].SNR = (int)snr1;
-		epochDGNSS->sat[i].meas[ind].SNRdBHz = S1;
+		epochDGNSS->sat[i].meas[ind].hasSNRflag = 1;
+		epochDGNSS->sat[i].meas[ind].SNRflag = (int)snr1;
+		epochDGNSS->sat[i].meas[ind].SNRflagdBHz = SNRtable[(int)snr1];
+		epochDGNSS->sat[i].meas[ind].SNRvalue = S1; //SNR will be read from SNR measurement
 		epochDGNSS->sat[i].meas[ind].dataFlag = 0;
 
-		// L1P
+		// L1C
 		ind = 1;
 		epochDGNSS->sat[i].meas[ind].value = L1;
 		epochDGNSS->sat[i].meas[ind].rawvalue = L1;
 		epochDGNSS->sat[i].meas[ind].LLI = lli1;
-		epochDGNSS->sat[i].meas[ind].SNR = (int)snr1;
-		epochDGNSS->sat[i].meas[ind].SNRdBHz = S1;
+		epochDGNSS->sat[i].meas[ind].hasSNRflag = 1;
+		epochDGNSS->sat[i].meas[ind].SNRflag = (int)snr1;
+		epochDGNSS->sat[i].meas[ind].SNRflagdBHz = SNRtable[(int)snr1];
+		epochDGNSS->sat[i].meas[ind].SNRvalue = S1; //SNR will be read from this variable
 		epochDGNSS->sat[i].meas[ind].dataFlag = 0;
 
-		// S1
+		// S1C
 		ind = 2;
 		epochDGNSS->sat[i].meas[ind].value = S1;
 		epochDGNSS->sat[i].meas[ind].rawvalue = S1;
 		epochDGNSS->sat[i].meas[ind].LLI = 0;
-		epochDGNSS->sat[i].meas[ind].SNR = 0;
-		epochDGNSS->sat[i].meas[ind].SNRdBHz = 0;
+		epochDGNSS->sat[i].meas[ind].hasSNRflag = 0;
+		epochDGNSS->sat[i].meas[ind].SNRflag = 0;
+		epochDGNSS->sat[i].meas[ind].SNRflagdBHz = 0;
+		epochDGNSS->sat[i].meas[ind].SNRvalue = S1; //SNR will be read from this variable
 		epochDGNSS->sat[i].meas[ind].dataFlag = 0;
 
 		// C2P
@@ -1060,26 +1104,32 @@ int readRTCM3obs (TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options) {
 		epochDGNSS->sat[i].meas[ind].value = C2;
 		epochDGNSS->sat[i].meas[ind].rawvalue = C2;
 		epochDGNSS->sat[i].meas[ind].LLI = 0;
-		epochDGNSS->sat[i].meas[ind].SNR = (int)snr2;
-		epochDGNSS->sat[i].meas[ind].SNRdBHz = S2;
+		epochDGNSS->sat[i].meas[ind].hasSNRflag = 1;
+		epochDGNSS->sat[i].meas[ind].SNRflag = (int)snr2;
+		epochDGNSS->sat[i].meas[ind].SNRflagdBHz = SNRtable[(int)snr2];
+		epochDGNSS->sat[i].meas[ind].SNRvalue = S2; //SNR will be read from SNR measurement
 		epochDGNSS->sat[i].meas[ind].dataFlag = 0;
 
-		// L2
+		// L2P
 		ind = 4;
 		epochDGNSS->sat[i].meas[ind].value = L2;
 		epochDGNSS->sat[i].meas[ind].rawvalue = L2;
 		epochDGNSS->sat[i].meas[ind].LLI = lli2;
-		epochDGNSS->sat[i].meas[ind].SNR = (int)snr2;
-		epochDGNSS->sat[i].meas[ind].SNRdBHz = S2;
+		epochDGNSS->sat[i].meas[ind].hasSNRflag = 1;
+		epochDGNSS->sat[i].meas[ind].SNRflag = (int)snr2;
+		epochDGNSS->sat[i].meas[ind].SNRflagdBHz = SNRtable[(int)snr2];
+		epochDGNSS->sat[i].meas[ind].SNRvalue = S2; //SNR will be read from SNR measurement
 		epochDGNSS->sat[i].meas[ind].dataFlag = 0;
 
-		// S2
+		// S2P
 		ind = 5;
 		epochDGNSS->sat[i].meas[ind].value = S2;
 		epochDGNSS->sat[i].meas[ind].rawvalue = S2;
 		epochDGNSS->sat[i].meas[ind].LLI = 0;
-		epochDGNSS->sat[i].meas[ind].SNR = 0;
-		epochDGNSS->sat[i].meas[ind].SNRdBHz = 0;
+		epochDGNSS->sat[i].meas[ind].hasSNRflag = 0;
+		epochDGNSS->sat[i].meas[ind].SNRflag = 0;
+		epochDGNSS->sat[i].meas[ind].SNRflagdBHz = 0;
+		epochDGNSS->sat[i].meas[ind].SNRvalue = S2; //SNR will be read from this variable
 		epochDGNSS->sat[i].meas[ind].dataFlag = 0;
 
 		// Update satellites' dictionary
@@ -1087,10 +1137,26 @@ int readRTCM3obs (TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options) {
 			epochDGNSS->satCSIndex[epochDGNSS->sat[i].GNSS][epochDGNSS->sat[i].PRN]=lastCSindex;
 			lastCSindex++;
 		}
+
+		//Fill pending measurements
+		if (options->MeasSelected[REFSTAPOS][epochDGNSS->sat[i].GNSS][epochDGNSS->sat[i].PRN]==MEASUNSELECTED) {
+			FillMeasurements(epochDGNSS->sat[i].GNSS,epochDGNSS->sat[i].PRN,i,epochDGNSS,options);
+		}
+	}
+
+	//Create list with order of printing for satellites
+	l=0;
+	for(j=0;j<epochDGNSS->numPrintGNSS;j++) {
+		for(k=0;k<epochDGNSS->numSatellites;k++) {
+			if (epochDGNSS->GNSS2PrintPos[epochDGNSS->sat[k].GNSS]==j) {
+				epochDGNSS->printIndex2satIndex[l]=k;
+				l++;
+			}
+		}
 	}
 
 	// Update the previous hour to control if a day has passed
-	*rtcm3->previousHour = intHour;
+	rtcm3->previousHour = intHour;
 
 	return 1;
 }
@@ -1112,7 +1178,7 @@ int readRTCM3obs (TEpoch *epochDGNSS, TRTCM3 *rtcm3, TOptions *options) {
  *                                         3 => RTCM version 3 detected succesfully
  *****************************************************************************/
 int converterRTCM3 (FILE *fd, TRTCM3 *rtcm3, char *fileRINEXpointer, TEpoch *epoch, TEpoch *epochDGNSS, TOptions *options) {
-	FILE			*frin;
+	FILE			*frin=NULL;
 	int				i;
 	unsigned int	j;
 	int				chk = 0;
@@ -1134,18 +1200,21 @@ int converterRTCM3 (FILE *fd, TRTCM3 *rtcm3, char *fileRINEXpointer, TEpoch *epo
 		fstat(fileno(fd), &filestat);
 		filesize = (double)filestat.st_size;
 		fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",0.0,"",options->ProgressEndCharac);
-		fflush(options->terminalStream);
+		fflush_function(options->terminalStream);
 	}
 
 	if ( options->RTCMmode == ConvertRTCM3 ) {
 		frin = fopen(fileRINEXpointer, "wa");
 	}
 	
-	while ( !feof(fd) && out == 0 ) {
+	while ( !feof_function(fd) && out == 0 ) {
 
-		ch = fgetc(fd);
+		ch = fgetc_function(fd);
 		CurrentPos++;
-		if ( feof(fd) != 0 ) return 2;
+		if ( feof_function(fd) != 0 ) {
+			if (options->RTCMmode == ConvertRTCM3) fclose(frin);
+			return 2;
+		}
 		if ( ch == 0xD3 ) {
 			//moved code
 			if (printProgressConvert==1) {
@@ -1158,12 +1227,12 @@ int converterRTCM3 (FILE *fd, TRTCM3 *rtcm3, char *fileRINEXpointer, TEpoch *epo
 							//Printing to a terminal
 							fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",CurrentPercentage,"",options->ProgressEndCharac);
 							//In Windows, cursor is not disabled
-							fflush(options->terminalStream);
+							fflush_function(options->terminalStream);
 						} else {
 							//Printing for the GUI. Only print if the integer of the percentage have changed (to avoid message spamming)
 							if ((int)CurrentPercentage!=(int)PreviousPercentage) {
 								fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",CurrentPercentage,"",options->ProgressEndCharac);
-								fflush(options->terminalStream);
+								fflush_function(options->terminalStream);
 							}
 						}
 						PreviousPercentage=CurrentPercentage;
@@ -1178,7 +1247,7 @@ int converterRTCM3 (FILE *fd, TRTCM3 *rtcm3, char *fileRINEXpointer, TEpoch *epo
 			if ( rtcm3->doWeHaveAntennaPos && rtcm3->doWeHaveAntennaName && rtcm3->doWeHaveHeader == 0 ) rtcm3->doWeHaveHeader = 1;
 			if ( rtcm3->doWeHaveHeader >= 1 ) {
 				if ( options->RTCMmode == ProcessRTCM3 ) {
-					readRTCM3header(epoch, epochDGNSS, rtcm3, options);
+					readRTCM3header(epoch, epochDGNSS, rtcm3);
 					if(rtcm3->doWeHaveHeader == 1 ) out = 1;
 				} else if(rtcm3->doWeHaveHeader == 1 ) {
 					if ( options->RTCMmode == RTCMCheckVersion ) return 3;
@@ -1272,7 +1341,7 @@ int converterRTCM3 (FILE *fd, TRTCM3 *rtcm3, char *fileRINEXpointer, TEpoch *epo
 	
 	ret +=1; //This to avoid variable not used warning
 	if ( options->RTCMmode == ConvertRTCM3 ) fclose(frin);
-	else if ( feof(fd) != 0 ) return 2;
+	else if ( feof_function(fd) != 0 ) return 2;
 
 	return 1;
 }
@@ -1297,14 +1366,14 @@ TdataRead *readFile (FILE *fp, TdataRead *data, int *checkControl) {
 	fs = fseek(fp, data->offset, SEEK_SET);
 	if ( fs == 0 ) {
 		while ( l < READWORDSNO ) {
-			ch = fgetc(fp);
-			if ( feof(fp) ) {
+			ch = fgetc_function(fp);
+			if ( feof_function(fp) ) {
 				*checkControl = 1;
 				data->indicator_end = 1;
 				break;
 			}
 			i++;
-			if ( ferror(fp) != 0 ) {
+			if ( ferror_function(fp) != 0 ) {
 				*checkControl = -1;
 				break;
 			}
@@ -1333,13 +1402,15 @@ TdataRead *readFile (FILE *fp, TdataRead *data, int *checkControl) {
  * int n                           I   N/A  Number of bytes 
  *****************************************************************************/
 char decodeWords (char *out_arr, char *in_arr, int n) {
-	int i, j;
-	char indicator_word = '1';
+	int 	i, j;
+	char 	indicator_word = '1';
 	
 	for ( j = 0; j < n; j++ ) {
-		if ( (bitChar(in_arr[j], 6) == '1' ) && (bitChar(in_arr[j], 7) == '0') )
-			for ( i = 0; i < BYTEFORMATBIT; i++ ) out_arr[BYTEFORMATBIT*j+i] = bitChar(in_arr[j], i);
-		else indicator_word = '0';
+		if ( (bitChar(in_arr[j], 6) == '1' ) && (bitChar(in_arr[j], 7) == '0') ) {
+			for ( i = 0; i < BYTEFORMATBIT; i++ ) {
+				out_arr[BYTEFORMATBIT*j+i] = bitChar(in_arr[j], i);
+			}
+		} else indicator_word = '0';
 	}
 
 	return indicator_word;
@@ -1366,15 +1437,15 @@ char decodeWords (char *out_arr, char *in_arr, int n) {
  *                                         last2bits[1]: bit 29
  *****************************************************************************/
 char *parityCheck (char *msg, char *cw, int *last2bits) {
-	const int a = 2;
-	int i;
-	char check = '0';
-	int old_d29 = last2bits[1];
-	int old_d30 = last2bits[0];
-	char ch[31];
-	int aux[30];
-	char originalParity[PARITYBIT+1];
-	char computedParity[PARITYBIT+1];
+	const int 	a = 2;
+	int 		i;
+	char 		check = '0';
+	int 		old_d29 = last2bits[1];
+	int 		old_d30 = last2bits[0];
+	char 		ch[31];
+	int 		aux[30];
+	char 		originalParity[PARITYBIT+1];
+	char 		computedParity[PARITYBIT+1];
 
 	for ( i = 0; i < 24; i++ ) {
 		switch ( msg[i] ) {
@@ -1383,6 +1454,10 @@ char *parityCheck (char *msg, char *cw, int *last2bits) {
 				 break;
 			case '1':
 				 aux[i] = 1 - old_d30;
+				 break;
+			default:
+				 //This is for the case we are checking if file is RTCM v2.x, but ends up being RTCM v3.x
+				 aux[i] = 0;
 				 break;
 		}
 	}
@@ -1406,8 +1481,9 @@ char *parityCheck (char *msg, char *cw, int *last2bits) {
 	}
 
 	ch[30] = '\0';
-	getstr(computedParity,  ch, 24, PARITYBIT);
-	getstr(originalParity, msg, 24, PARITYBIT);
+
+	getstr(computedParity,  ch, (int)strlen(ch), 24, PARITYBIT);
+	getstr(originalParity, msg, (int)strlen(msg), 24, PARITYBIT);
 	if (strcmp( computedParity,originalParity) == 0 ) check = '1';
 	memcpy(cw, ch, 24);
 	cw[24] = check;
@@ -1455,25 +1531,28 @@ int *getLast2bits (char *msg, int *last2bits) {
  *                                         header of each message
  *****************************************************************************/
 TRTCM2header *decodeHeader (TRTCM2header *head, char *header_str) {
-	char type[MSGTYPEBIT+1];
-	char sid[STATIONIDBIT+1];
-	char zcount[ZCOUNTBIT+1];
-	char sequence[SEQUENCENOBIT+1];
-	char dataword[DATAWORDNOBIT+1];
-	char *endptr;
+	char 	type[MSGTYPEBIT+1];
+	char 	sid[STATIONIDBIT+1];
+	char 	zcount[ZCOUNTBIT+1];
+	char 	sequence[SEQUENCENOBIT+1];
+	char 	dataword[DATAWORDNOBIT+1];
+	char 	*endptr;
+	int		len;
 
-	getstr(type,header_str,8,MSGTYPEBIT);
+	len=(int)strlen(header_str);
+
+	getstr(type,header_str,len,8,MSGTYPEBIT);
 	head->message_type = strtol(type,&endptr,2);
 	if ( head->message_type == 0 ) head->message_type = 64;
-	getstr(sid,header_str,14,STATIONIDBIT);
+	getstr(sid,header_str,len,14,STATIONIDBIT);
 	head->station_id = strtol(sid,&endptr,2);
-	getstr(zcount,header_str,24,ZCOUNTBIT);
+	getstr(zcount,header_str,len,24,ZCOUNTBIT);
 	head->modi_zcount = 0.6 * strtol(zcount,&endptr,2);
-	getstr(sequence,header_str,37,SEQUENCENOBIT);
+	getstr(sequence,header_str,len,37,SEQUENCENOBIT);
 	head->sequence_no = strtol(sequence,&endptr,2);
-	getstr(dataword,header_str,40,DATAWORDNOBIT);
+	getstr(dataword,header_str,len,40,DATAWORDNOBIT);
 	head->dataword_no = strtol(dataword,&endptr,2);
-	getstr(head->station_health,header_str,45,STATIONHEALTHBIT);
+	getstr(head->station_health,header_str,len,45,STATIONHEALTHBIT);
 
 	return head;
 }
@@ -1489,24 +1568,26 @@ TRTCM2header *decodeHeader (TRTCM2header *head, char *header_str) {
  *                                only includes the words for body of each message
  *****************************************************************************/
 TMSG1 *readMSG1 (TMSG1 *sc, int ns, char *body_str) {
-	char scale;
-	char udre[3];
-	int  number_udre;
-	char sid[6];
-	char prc[17];
-	char rrc[9];
-	char iod[9];
-	char *endptr;
-	int i;
-	unsigned long long int a;
+	char 					scale;
+	char 					udre[3];
+	int  					number_udre;
+	char 					sid[6];
+	char 					prc[17];
+	char 					rrc[9];
+	char 					iod[9];
+	char 					*endptr;
+	int 					i,len;
+	unsigned long long int 	a;
+
+	len=(int)strlen(body_str);
 
 	for (i=0;i<ns;i++){
 		scale = body_str[0+SATELLITEBIT*i];
-		getstr(udre,body_str,1+SATELLITEBIT*i,2);
-		getstr(sid,body_str,3+SATELLITEBIT*i,5);
-		getstr(prc,body_str,8+SATELLITEBIT*i,16);
-		getstr(rrc,body_str,24+SATELLITEBIT*i,8);
-		getstr(iod,body_str,32+SATELLITEBIT*i,8);
+		getstr(udre,body_str,len,1+SATELLITEBIT*i,2);
+		getstr(sid,body_str,len,3+SATELLITEBIT*i,5);
+		getstr(prc,body_str,len,8+SATELLITEBIT*i,16);
+		getstr(rrc,body_str,len,24+SATELLITEBIT*i,8);
+		getstr(iod,body_str,len,32+SATELLITEBIT*i,8);
 		
 		if ( scale == '0' ) sc[i].scale_factor = 0.002;
 		else sc[i].scale_factor = 0.032;
@@ -1557,24 +1638,26 @@ TMSG1 *readMSG1 (TMSG1 *sc, int ns, char *body_str) {
  *                                only includes the words for body of each message
  *****************************************************************************/
 TMSG2 *readMSG2 (TMSG2 *sc, int ns, char *body_str) {
-	char scale;
-	char udre[3];
-	int  number_udre;
-	char sid[6];
-	char dprc[17];
-	char drrc[9];
-	char iod[9];
-	char *endptr;
-	int i;
-	unsigned long long int a;
+	char 					scale;
+	char 					udre[3];
+	int  					number_udre;
+	char 					sid[6];
+	char 					dprc[17];
+	char 					drrc[9];
+	char 					iod[9];
+	char 					*endptr;
+	int 					i,len;
+	unsigned long long int 	a;
+
+	len=(int)strlen(body_str);
 
 	for (i=0;i<ns;i++) {
 		scale = body_str[0+SATELLITEBIT*i];
-		getstr(udre,body_str,1+SATELLITEBIT*i,2);
-		getstr(sid,body_str,3+SATELLITEBIT*i,5);
-		getstr(dprc,body_str,8+SATELLITEBIT*i,16);
-		getstr(drrc,body_str,24+SATELLITEBIT*i,8);
-		getstr(iod,body_str,32+SATELLITEBIT*i,8);
+		getstr(udre,body_str,len,1+SATELLITEBIT*i,2);
+		getstr(sid,body_str,len,3+SATELLITEBIT*i,5);
+		getstr(dprc,body_str,len,8+SATELLITEBIT*i,16);
+		getstr(drrc,body_str,len,24+SATELLITEBIT*i,8);
+		getstr(iod,body_str,len,32+SATELLITEBIT*i,8);
 		
 		if ( scale == '0' ) sc[i].scale_factor = 0.002;
 		else sc[i].scale_factor = 0.032;
@@ -1624,15 +1707,18 @@ TMSG2 *readMSG2 (TMSG2 *sc, int ns, char *body_str) {
  *                                only includes the words for body of each message
  *****************************************************************************/
 TMSG3 *readMSG3 (TMSG3 *sc, char *body_str) {
-	char x[33];
-	char y[33];
-	char z[33];
-	char *endptr;
-	unsigned long long int a;
+	char 					x[33];
+	char 					y[33];
+	char 					z[33];
+	char 					*endptr;
+	int						len;
+	unsigned long long int 	a;
 
-	getstr(x,body_str,0,32);
-	getstr(y,body_str,32,32);
-	getstr(z,body_str,64,32);
+	len=(int)strlen(body_str);
+
+	getstr(x,body_str,len,0,32);
+	getstr(y,body_str,len,32,32);
+	getstr(z,body_str,len,64,32);
 	a = strtol(x,&endptr,2);
 	sc->x_coord = twoComplement(a,32) * 0.01;
 	a = strtol(y,&endptr,2);
@@ -1653,16 +1739,19 @@ TMSG3 *readMSG3 (TMSG3 *sc, char *body_str) {
  *                                only includes the words for body of each message
  *****************************************************************************/
 TMSG24 *readMSG24 (TMSG24 *sc, char *body_str) {
-	char x[39];
-	char y[39];
-	char z[39];
-	char ah[19];
-	char *endptr;
-	unsigned long long int a;
+	char 					x[39];
+	char 					y[39];
+	char 					z[39];
+	char 					ah[19];
+	char 					*endptr;
+	int						len;
+	unsigned long long int 	a;
 
-	getstr(x,body_str,0,38);
-	getstr(y,body_str,40,38);
-	getstr(z,body_str,80,38);
+	len=(int)strlen(body_str);
+
+	getstr(x,body_str,len,0,38);
+	getstr(y,body_str,len,40,38);
+	getstr(z,body_str,len,80,38);
 	a = strtol(x,&endptr,2);
 	sc->x_coord = twoComplement(a,38) * 0.0001;
 	a = strtol(y,&endptr,2);
@@ -1672,7 +1761,7 @@ TMSG24 *readMSG24 (TMSG24 *sc, char *body_str) {
 	sc->system_indicator = body_str[118];
 	sc->AH_indicator = body_str[119];
 	if ( sc->AH_indicator == '1' ) {
-		getstr(ah,body_str,120,18);
+		getstr(ah,body_str,len,120,18);
 		sc->antenna_height = strtol(ah,&endptr,2) * 0.0001;
 	}
 
@@ -1688,7 +1777,6 @@ TMSG24 *readMSG24 (TMSG24 *sc, char *body_str) {
  * TRTCM2 *rtcm2                   I  N/A  TRTCM2 structure
  * char *fileASCIIcorrections      O  N/A  Indicates the full path and filename where to save the corrections in ASCII
  * char *fileASCIIantenna          O  N/A  Indicates the full path and filename where to save the antenna in ASCII
- * TEpoch  *epoch                  O  N/A  Structure to save the data
  * TEpoch  *epochDGNSS             O  N/A  Structure to save the data
  * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Return the status of the corrections
@@ -1697,7 +1785,7 @@ TMSG24 *readMSG24 (TMSG24 *sc, char *body_str) {
  *                                         2 => RTCM version 2 detected succesfully
  *                                         3 => RTCM version 2 not detected
  *****************************************************************************/
-int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *fileASCIIantenna, TEpoch *epoch, TEpoch *epochDGNSS, TOptions *options) {
+int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *fileASCIIantenna, TEpoch *epochDGNSS, TOptions *options) {
 
 	int				i;
 	int 			ret, out = 0;
@@ -1713,7 +1801,7 @@ int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *f
 		filesize = (double)filestat.st_size;
 		fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",0.0,"",options->ProgressEndCharac);
 		//In Windows, cursor is not disabled
-		fflush(options->terminalStream);
+		fflush_function(options->terminalStream);
 	}
 
 	
@@ -1738,12 +1826,12 @@ int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *f
 					//Printing to a terminal
 					fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",CurrentPercentage,"",options->ProgressEndCharac);
 					//In Windows, cursor is not disabled
-					fflush(options->terminalStream);
+					fflush_function(options->terminalStream);
 				} else {
 					//Printing for the GUI. Only print if the integer of the percentage have changed (to avoid message spamming)
 					if ((int)CurrentPercentage!=(int)PreviousPercentage) {
 						fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",CurrentPercentage,"",options->ProgressEndCharac);
-						fflush(options->terminalStream);
+						fflush_function(options->terminalStream);
 					}
 				}
 				PreviousPercentage=CurrentPercentage;
@@ -1786,7 +1874,7 @@ int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *f
 								if(i==3) rtcm2->i = rtcm2->i + 1;
 							} else { 
 								rtcm2->correctedWord[24] = '\0';
-								getstr(rtcm2->preamble, rtcm2->correctedWord, 0, PREAMBLEBIT); 
+								getstr(rtcm2->preamble, rtcm2->correctedWord, (int)strlen(rtcm2->correctedWord), 0, PREAMBLEBIT); 
 								if ( strcmp(rtcm2->preamble, "01100110") == 0 ) {
 									rtcm2->my_state = HeaderReading;
 									rtcm2->i = rtcm2->i + 5;
@@ -1835,7 +1923,7 @@ int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *f
 			case EndOneMessage:
 				// Check binary RTCM version
 				if ( options->RTCMmode == RTCMCheckVersion ) return 2;
-				ret = writeRTCM2ascii(fout, fnew, rtcm2, epoch, epochDGNSS, options);
+				ret = writeRTCM2ascii(fout, fnew, rtcm2, epochDGNSS, options);
 				if ( options->RTCMmode == ProcessRTCM2 && ret == bdrCORRECTIONSmsg1 ) out = 1;
 				if ( ((unsigned int)rtcm2->i + LEFTLIMIT) > rtcm2->l ) rtcm2->my_state = EndOfString;
 				else rtcm2->my_state = Initial;
@@ -1843,7 +1931,7 @@ int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *f
 			case EndOfString:
 				if ( rtcm2->dataRead.indicator_end == 1 ) rtcm2->my_state = EndOfFile;
 				else {
-					getstr(rtcm2->leftwords_str, rtcm2->allwords_str, rtcm2->i, rtcm2->l - rtcm2->i);
+					getstr(rtcm2->leftwords_str, rtcm2->allwords_str, (int)strlen(rtcm2->allwords_str), rtcm2->i, rtcm2->l - rtcm2->i);
 					readFile(fd, &rtcm2->dataRead, &rtcm2->checkControl);
 					rtcm2->l1 = strlen(rtcm2->leftwords_str);
 					memcpy(rtcm2->allwords_str, rtcm2->leftwords_str, rtcm2->l1);
@@ -1865,7 +1953,7 @@ int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *f
 		fclose(fnew);
 	} else if ( options->RTCMmode == ProcessRTCM2 ) {
 		if ( rtcm2->i >= READWORDSNO + LEFTLIMIT || rtcm2->dataRead.indicator_end == 1 ) {
-			if(feof(fd)){
+			if(feof_function(fd)){
 				rtcm2->checkControl = 2;
 			} else {
 				rtcm2->checkControl = 1;
@@ -1879,94 +1967,183 @@ int converterRTCM2 (FILE *fd, TRTCM2 *rtcm2, char *fileASCIIcorrections, char *f
 /*****************************************************************************
  * Name        : getL
  * Description : Standard multipurpose input reader from files. Valid for 
- *               windows and linux files.
+ *               Windows, Linux and Mac files.
  * Parameters  :
  * Name                           |Da|Unit|Description
  * char  *lineptr                  O  N/A  Buffer to write to
- * int  *n                         O  N/A  Length of buffer
+ * int  *n                         O  N/A  Length of buffer (excluding '\n' and '\r')
  * FILE  *stream                   I  N/A  Input stream file
  * Returned value (int)            O  N/A  Return the number of characters read
  *                                         -1 on failure to read
  *****************************************************************************/
 int getL (char *lineptr, int *n, FILE *stream) {
-	int	rd;
 	
-	*n = 0;
-	while ((rd=fgetc(stream))!=EOF) {
-		if (rd==13 || rd=='\0' || rd=='\n') { // Character 13 is ^M (for Windows)
-			if(rd=='\r') {
-				lineptr[*n] = '\n';
-				(*n)++;
-				lineptr[*n]='\0';
-			} else {
-				lineptr[*n]=rd;
-				if (rd!='\0') {
+	#ifndef READNOLOCKENABLED
+		//If READNOLOCK is not enabled, use fgets to get similar performance as the fgetc loop
+		if(fgets(lineptr,MAX_INPUT_LINE,stream)==NULL) return -1;
+		*n=strcspn(lineptr,"\r\n");
+		if(*n>=(MAX_INPUT_LINE-3)) return -1; //Line too long, quit reading because line does not fit in buffer
+		lineptr[*n]='\0';
+		return (*n);
+	#else
+		//If fgetc_unlocked is enabled, use the fgetc loop instead of fgets as it outperforms the fgets
+		register int	rd; 	//The "register" keyword is to indicate the compiler to try to save this variable in a CPU
+								//register instead of in memory, so it has faster access times
+		*n = 0;
+		do {
+			rd=fgetc_function(stream);
+			switch(rd) {
+				case '\r':
+					lineptr[*n] = '\0';
+					fgetc_function(stream);
+					return (*n);
+					break;
+				case '\n':
+					lineptr[*n]='\0';
+					return (*n);
+					break;
+				case '\0':
+					lineptr[*n]=rd;
+					return (*n);
+					break;
+				case EOF:
+					if (*n==0) return -1;
+					else {
+						lineptr[*n]='\0';
+						return (*n);
+					}
+					break;
+				default:
+					lineptr[*n] = rd;
+					(*n)++;
+					if(*n>=MAX_INPUT_LINE-3) return -1; //Line too long, quit reading to avoid buffer overflow
+					break;
+			}
+		} while (1);
+
+		return -1;
+
+		/*while ((rd=fgetc_function(stream))!=EOF) {
+			if (rd=='\r' || rd=='\0' || rd=='\n') { // Character 13 is ^M (for Windows)
+				if(rd=='\r') {
+					lineptr[*n] = '\n';
 					(*n)++;
 					lineptr[*n]='\0';
+					fgetc_function(stream);
+				} else {
+					lineptr[*n]=rd;
+					if (rd!='\0') {
+						(*n)++;
+						lineptr[*n]='\0';
+					}
 				}
+				break;
+			} else {
+				lineptr[*n] = rd;
+				(*n)++;
+				if(*n>=MAX_INPUT_LINE-3) return -1; //Line too long, quit reading to avoid buffer overflow
 			}
-			break;
-		} else {
-			lineptr[*n] = rd;
-			(*n)++;
-			if(*n>=MAX_INPUT_LINE-3) return -1; //Line too long, quit reading to avoid buffer overflow
 		}
-	}
-	
-	if (rd==13) fgetc(stream);
-	if (rd==EOF && (*n)==0) return -1;
-	else return (*n); 
+		
+		if (rd==EOF && (*n)==0) return -1;
+		else return (*n);*/
+	#endif
 }
 
 /*****************************************************************************
  * Name        : getLNoComments
  * Description : Standard multipurpose input reader from files. Valid for
- *               windows and linux files. When a hash ('#') is found in the line,
+ *               Windows, Linux and Mac files. When a hash ('#') is found in the line,
  *               from this character from the end of line the data read will be
- *               ommited in the data buffwr
+ *               ommited in the data buffer.
  * Parameters  :
  * Name                           |Da|Unit|Description
  * char  *lineptr                  O  N/A  Buffer to write to
- * int  *n                         O  N/A  Length of buffer
+ * int  *n                         O  N/A  Length of buffer (excluding '\n' and '\r')
  * FILE  *stream                   I  N/A  Input stream file
  * Returned value (int)            O  N/A  Return the number of characters read
  *                                         -1 on failure to read
  *****************************************************************************/
 int getLNoComments (char *lineptr, int *n, FILE *stream) {
-    int rd,HashFound=0;
 
-    *n = 0;
-    while ((rd=fgetc(stream))!=EOF) {
-        if (rd==13 || rd=='\0' || rd=='\n') { // Character 13 is ^M (for Windows)
-            if(rd=='\r') {
-                lineptr[*n] = '\n';
-                (*n)++;
-                lineptr[*n]='\0';
-            } else {
-                lineptr[*n]=rd;
-                if (rd!='\0') {
-                    (*n)++;
-                    lineptr[*n]='\0';
-                }
-            }
-            break;
-		} else if (HashFound==0) {
-			if (rd=='#') {
-				HashFound=1;
-                lineptr[*n] = '\n';
-                (*n)++;
-                lineptr[*n]='\0';
-			} else {
-            	lineptr[*n] = rd;
-	            (*n)++;
-    	        if(*n>=MAX_INPUT_LINE-3) return -1; //Line too long, quit reading to avoid buffer overflow
+	#ifndef READNOLOCKENABLED
+		//If READNOLOCK is not enabled, use fgets to get similar performance as the fgetc loop
+		if(fgets(lineptr,MAX_INPUT_LINE,stream)==NULL) return -1;
+		*n=strcspn(lineptr,"#\r\n");
+		if(*n>=(MAX_INPUT_LINE-3)) return -1; //Line too long, quit reading because line does not fit in buffer
+		lineptr[*n]='\0';
+		return (*n);
+	#else
+		//If fgetc_unlocked is enabled, use the fgetc loop instead of fgets as it outperforms the fgets
+		int rd,HashFound=0;
+		*n = 0;
+		do {
+			rd=fgetc_function(stream);
+			switch(rd) {
+				case '\r':
+					lineptr[*n] = '\n';
+					lineptr[(*n)+1]='\0';
+					fgetc_function(stream);
+					return (*n);
+					break;
+				case '\n':
+					lineptr[*n]=rd;
+					lineptr[(*n)+1]='\0';
+					return (*n);
+					break;
+				case '\0':
+					lineptr[*n]=rd;
+					return (*n);
+					break;
+				case EOF:
+					if ((*n)==0) return -1;
+					else return (*n);
+					break;
+				default:
+					if (HashFound==0) {
+						if (rd=='#') {
+							HashFound=1;
+							lineptr[*n] = '\n';
+							lineptr[(*n)+1]='\0';
+						} else {
+							lineptr[*n] = rd;
+							(*n)++;
+							if(*n>=MAX_INPUT_LINE-3) return -1; //Line too long, quit reading to avoid buffer overflow
+						}
+					}
+					break;
 			}
-        }
-    }
+		} while (1);
+		return -1;
+		/*while ((rd=fgetc_function(stream))!=EOF) {
+			if (rd=='\r' || rd=='\0' || rd=='\n') { // Character 13 is ^M (for Windows)
+				if(rd=='\r') {
+					lineptr[*n] = '\n';
+					lineptr[(*n)+1]='\0';
+					fgetc_function(stream);
+				} else {
+					lineptr[*n]=rd;
+					if (rd!='\0') {
+						lineptr[(*n)+1]='\0';
+					}
+				}
+				break;
+			} else if (HashFound==0) {
+				if (rd=='#') {
+					HashFound=1;
+					lineptr[*n] = '\n';
+					lineptr[(*n)+1]='\0';
+				} else {
+					lineptr[*n] = rd;
+					(*n)++;
+					if(*n>=MAX_INPUT_LINE-3) return -1; //Line too long, quit reading to avoid buffer overflow
+				}
+			}
+		}
 
-    if (rd==13) fgetc(stream);
-    if (rd==EOF && (*n)==0) return -1;
-    else return (*n);
+		if (rd==EOF && (*n)==0) return -1;
+		else return (*n);*/
+	#endif
 }
 
 
@@ -1999,7 +2176,7 @@ int getLback (char *lineptr, int *n, FILE *stream) {
 	//res = fseek(stream,-seek,SEEK_CUR);
 	fseek(stream,pos-seek,SEEK_SET);
 	for (i=0;i<seek;i++) {
-		rd = fgetc(stream);
+		rd = fgetc_function(stream);
 		buffer[i] = rd;
 		if (rd=='\n') {
 			enter2 = enter1;
@@ -2033,10 +2210,11 @@ int getLback (char *lineptr, int *n, FILE *stream) {
  * Returned value (fileType)       O  N/A  Type of file
  *****************************************************************************/
 enum fileType whatFileTypeIs (char *filename) {
+	int				i;
 	FILE			*fd = NULL;
 	char			line[MAX_INPUT_LINE];
 	char			line2[MAX_INPUT_LINE];
-	int				len = 0;
+	int				len = 0,len2;
 	int				res;
 	char			aux[100];
 	char			aux2[100];
@@ -2048,19 +2226,25 @@ enum fileType whatFileTypeIs (char *filename) {
 	
 	if (fd==NULL) return ft;
 	
+	for(i=0;i<MAX_INPUT_LINE;i++) line[i]='\0';//To avoid comparing string with uninitialized values
+
 	res = getL(line,&len,fd); 
+
 	
 	if (res!=-1) {
-		getstr(aux,line,60,13);
-		getstr(aux2,line,60,12);
+		getstr(aux,line,len,60,13);
+		getstr(aux2,line,len,60,12);
 		// RINEX check
 		if (strcmp(aux,"RINEX VERSION")==0) {
-			getstr(aux,line,20,11);
+			getstr(aux,line,len,20,11);
 			if (strncmp(aux,"O",1)==0) ft = ftRINEXobservation;
 			else if (strncmp(aux,"N",1)==0) ft = ftRINEXbroadcast;
 			else if (strncmp(aux,"H",1)==0) ft = ftRINEXbroadcast; // Rinex v2 GEO nav data
 			else if (strncmp(aux,"G",1)==0) ft = ftRINEXbroadcast; // Rinex v2 GLONASS nav data
-			else if (strncmp(aux,"C",1)==0) ft = ftRINEXclocks;
+			else if (strncmp(aux,"E",1)==0) ft = ftRINEXbroadcast; // Rinex v2 Galileo nav data
+			else if (strncmp(aux,"J",1)==0) ft = ftRINEXbroadcast; // Rinex v2 QZSS nav data
+			else if (strncmp(aux,"C",1)==0 && strstr(line,"NAV")!=NULL)  ft = ftRINEXbroadcast; // Rinex v2 BeiDou nav data
+			else if (strncmp(aux,"C",1)==0) ft = ftRINEXclocks;    
 			else if (strncmp(aux,"B",1)==0) ft = ftRINEXB;
 			
 		// IONEX check
@@ -2090,15 +2274,42 @@ enum fileType whatFileTypeIs (char *filename) {
 		// SINEX check
 		} else if (strncmp(line,"%=SNX",5)==0) {
 			ft = ftSINEX;
+		// SINEX BIAS check
+		} else if (strncmp(line,"%=BIA",5)==0) {
+			//SINEX BIAS file. Read lines until the first line of data is read, so we can distinguish 
+			//it is has absolute biases or differential biases
+			res = getL(line,&len,fd);
+			while (res!=-1) {
+				if(strncmp(line,"+BIAS/SOLUTION",14)==0) {
+					//Read next header line. This will be the last line before data starts
+					res = getL(line,&len,fd);
+					if (res==-1) break;
+					//Read first line of data
+					res = getL(line,&len,fd);
+					if (res==-1) break;
+
+					if(strncmp(&line[1],"OSB",3)==0) {
+						//SINEX BIAS contains Observable specific biases
+						ft=ftSINEXBIASOSB;
+						break;
+					} else if (strncmp(&line[1],"DSB",3)==0 || strncmp(&line[1],"DCB",3)==0 || strncmp(&line[1],"ISB",3)==0 || strncmp(&line[1],"ICB",3)==0) {
+						//SINEX BIAS contains differential signal biases
+						ft=ftSINEXBIASDSB;
+						break;
+					}
+				}
+				res = getL(line,&len,fd);
+			}
 		} else {
 			strcpy(line2,line);	//This is to save the first line, it might be needed for checking EMS message
+			len2=len;
 			res = getL(line,&len,fd); 
 			if (res!=-1) {
 				if (strstr(line,"Navstar GPS Constellation Status")!=NULL) ft = ftConstellation;
 			}
 
 			// SBAS EMS message
-			if(strlen(line2)>85 && line2[0]!='#') ft = ftSBASEMSMESSAGE;
+			if(len2>50 && line2[0]!='#') ft = ftSBASEMSMESSAGE;
 		}
 		if ( fd != NULL ) fclose(fd);
 		return ft;
@@ -2123,66 +2334,83 @@ enum fileType whatFileTypeIs (char *filename) {
  *                                         0 => Error
  *****************************************************************************/
 int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options) {
-	char					line[MAX_INPUT_LINE];
-	char					aux[100];
-	char					*ca;
-	char					**headerlines=NULL;
 	int						numheaderlines=0;
-	int						prevSysObs = 0, actSysObs = 1;
+	int						actSysObs = 1;
 	int						len = 0;
-	double					rinexVersion;
 	int						properlyRead = 0;
 	int						error = 0;
 	int						readingHeader = 1;
 	int						numLinesTypesofObsr = 0;
-	int						obs,i,j,k;
-	int						auxN;
+	int						obs,i,j,k,n;
+	int						auxN,auxN2;
+	int						OffsetToSNR;
+	int						freq;
 	int						cleanedIndex=0;
 	int						ErrorReadingEpochs;
+	int						SNRMeasFound=0;
+	int						initMeas,endMeas,numSatellites,Epochflag;
+	int						yy=-1,mm=-1,dd=-1,hour=-1,minute=-1;
+	int						S1ind,S2ind,nextRead;
+	int						freqnumber;
 	int						epochflag;
-	enum MeasurementType	meas;
+	static int				firstProgressCheck=1,firstProgressCheckDGNSS=1;
+	enum MeasurementType	meas,measaux;
 	long					posEndHeader;
-	struct stat 			filestat;	//This is to get the file size
 	off_t					filesize;
 	struct tm   			tm;
+	struct stat 			filestat;	//This is to get the file size
 	TTime					firstEpoch;
 	TTime					secondEpoch;
 	TTime					lastEpoch;
 	double					seconds;
 	double					interval;
 	double					auxinterval;
-	int						yy=-1,mm=-1,dd=-1,hour=-1,min=-1;
-	static int				firstProgressCheck=1,firstProgressCheckDGNSS=1;
+	double					S1value,S2value,value;
+	char					line[MAX_INPUT_LINE];
+	char					aux[100];
+	char					*ca;
+	char					**headerlines=NULL;
 
-	while (getL(line,&len,fd)!=-1 && readingHeader) {
+	if (epoch->bufferHeaderLineLen>0) {
+		strcpy(line,epoch->bufferHeaderLine);
+		len=epoch->bufferHeaderLineLen;
+		epoch->bufferHeaderLineLen=0;
+		epoch->bufferHeaderLine[0]='\0';
+	} else {
+		if (getL(line,&len,fd)==-1) return 0;
+	}
+	epoch->numGNSSHeader=0;
+
+	do {
+		if (len<2) continue; //Skip blank lines
 		if (fdout!=NULL && epoch->DGNSSstruct==0) {
 			//Save header lines for creating an output RINEX files with user added error
 			headerlines=realloc(headerlines,sizeof(char *)*(numheaderlines+1));
 			headerlines[numheaderlines]=malloc(sizeof(char)*MAX_INPUT_LINE);
 			strcpy(headerlines[numheaderlines],line);
-			if(headerlines[numheaderlines][len-1]=='\r'||headerlines[numheaderlines][len-1]=='\n') {
-				headerlines[numheaderlines][len-1]='\0';
-			}
+			//if(headerlines[numheaderlines][len-1]=='\r'||headerlines[numheaderlines][len-1]=='\n') {
+			//	headerlines[numheaderlines][len-1]='\0';
+			//}
 			numheaderlines++;
 		}
 		if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
-			getstr(aux,line,0,9);
-			rinexVersion = atof(aux);
-			if ((int)(rinexVersion)==2) epoch->source = RINEX2;
-			else if ((int)(rinexVersion)==3) epoch->source = RINEX3;
+			getstr(aux,line,len,0,9);
+			epoch->RINEXobsVersion = atof(aux);
+			if ((int)(epoch->RINEXobsVersion)==2) epoch->source = RINEX2;
+			else if ((int)(epoch->RINEXobsVersion)==3) epoch->source = RINEX3;
 			else {
 				epoch->source = UNKNOWN_SOURCE;
-				sprintf(aux,"Rinex observation file version %1.2f not supported. Supported versions are 2 and 3",rinexVersion);
+				sprintf(aux,"Rinex observation file version %1.2f not supported. Supported versions are 2 and 3",epoch->RINEXobsVersion);
 				printError(aux,options);
 			}
 		} else if (strncmp(&line[60],"MARKER NAME",11)==0) {
-			getstr(aux,line,0,60);
+			getstr(aux,line,len,0,60);
 			//Do not copy empty marker name
 			if (aux[0]!='\0') {
 				strcpy(epoch->receiver.name,aux);
 			}
 		} else if (strncmp(&line[60],"ANT # / TYPE",12)==0) {
-			getstr(aux,line,20,20);
+			getstr(aux,line,len,20,20);
 			strcpy(epoch->receiver.antenna.type,aux);
 			// Separate the anntena.type into antenna and radome
 			strcpy(epoch->receiver.antenna.type_ant,epoch->receiver.antenna.type);
@@ -2190,39 +2418,82 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 			if (ca != NULL) {
 				*ca = '\0';
 				strcpy(epoch->receiver.antenna.type_radome,&ca[1]);
-				trim(epoch->receiver.antenna.type_radome);
+				trim(epoch->receiver.antenna.type_radome,(int)strlen(epoch->receiver.antenna.type_radome));
 			}
 		} else if (strncmp(&line[60],"REC # / TYPE / VERS",19)==0) {
-			getstr(aux,line,20,20);
+			getstr(aux,line,len,20,20);
 			strcpy(epoch->receiver.type,aux);
 		} else if (strncmp(&line[60],"ANTENNA: DELTA H/E/N",20)==0) {
 			if (options->ARPData == arpRINEX) {
-				getstr(aux,line,0,14);
+				getstr(aux,line,len,0,14);
 				epoch->receiver.ARP[2] = atof(aux);
-				getstr(aux,line,14,14);
+				getstr(aux,line,len,14,14);
 				epoch->receiver.ARP[1] = atof(aux);
-				getstr(aux,line,28,14);
+				getstr(aux,line,len,28,14);
 				epoch->receiver.ARP[0] = atof(aux);
 			}
 
 		} else if (strncmp(&line[60],"TIME OF FIRST OBS",17)==0) {
-			getstr(aux,line,22,2);
-			epoch->initialhour=atoi(aux);
+			getstr(aux,line,len,22,2);
+			//Read first epoch
+			getstr(aux,line,len,2,4);
+			tm.tm_year = atoi(aux)-1900;
+			getstr(aux,line,len,10,2);
+			tm.tm_mon  = atoi(aux)-1;
+			getstr(aux,line,len,16,2);
+			tm.tm_mday = atoi(aux);
+			getstr(aux,line,len,22,2);
+			tm.tm_hour = atoi(aux);
+			getstr(aux,line,len,28,2);
+			tm.tm_min  = atoi(aux);
+			getstr(aux,line,len,30,13);
+			tm.tm_sec  = atoi(aux);
+			seconds = atof(aux);
+			epoch->FirstEpochHeader.MJDN = MJDN(&tm);
+			epoch->FirstEpochHeader.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+			//Get observation file time system. If it is not
+			getstr(aux,line,len,48,3);
+			epoch->SystemTime=gnssstr2gnsstype(aux);
+			switch(epoch->SystemTime) {
+				case BDS:
+					epoch->ObsTimeToGPSTime=DIFFBDS2GPSTIME;
+					break;
+				case GLONASS:
+					//After reading the header, if leap seconds from RINEX navigation header is available, this value will be overwritten
+					epoch->ObsTimeToGPSTime=getLeapSeconds(&epoch->FirstEpochHeader,epoch->LeapSecondsTimeList,epoch->LeapSecondsNumList);
+					break;
+				default:
+					epoch->ObsTimeToGPSTime=0.;
+					break;
+			}
 		} else if (strncmp(&line[60],"# / TYPES OF OBSERV",19)==0) {  // Only for RINEX v2.11
 			//      5    L1    L2    P1    P2    C1                        # / TYPES OF OBSERV
 			numLinesTypesofObsr++;
-			getstr(aux,line,0,6);
+			getstr(aux,line,len,0,6);
 			if (numLinesTypesofObsr==1) { // if this is the first line of observations
 				auxN = atoi(aux);
 				epoch->measOrder[GPS].nDiffMeasurements = auxN;
+				epoch->measOrder[GPS].nDiffMeasurementsRINEXHeader = auxN;
 				epoch->measOrder[GPS].GNSS = GPS;
 				epoch->measOrder[Galileo].nDiffMeasurements = auxN;
+				epoch->measOrder[Galileo].nDiffMeasurementsRINEXHeader = auxN;
 				epoch->measOrder[Galileo].GNSS = Galileo;
 				epoch->measOrder[GEO].nDiffMeasurements = auxN;
+				epoch->measOrder[GEO].nDiffMeasurementsRINEXHeader = auxN;
 				epoch->measOrder[GEO].GNSS = GEO;
 				epoch->measOrder[GLONASS].nDiffMeasurements = auxN;
+				epoch->measOrder[GLONASS].nDiffMeasurementsRINEXHeader = auxN;
 				epoch->measOrder[GLONASS].GNSS = GLONASS;
-				epoch->numGNSS = 4;
+				epoch->measOrder[BDS].nDiffMeasurements = auxN;
+				epoch->measOrder[BDS].nDiffMeasurementsRINEXHeader = auxN;
+				epoch->measOrder[BDS].GNSS = BDS;
+				epoch->measOrder[QZSS].nDiffMeasurements = auxN;
+				epoch->measOrder[QZSS].nDiffMeasurementsRINEXHeader = auxN;
+				epoch->measOrder[QZSS].GNSS = QZSS;
+				epoch->measOrder[IRNSS].nDiffMeasurements = auxN;
+				epoch->measOrder[IRNSS].nDiffMeasurementsRINEXHeader = auxN;
+				epoch->measOrder[IRNSS].GNSS = IRNSS;
+				epoch->numGNSSHeader = 7;
 				obs = 0;
 			} 
 
@@ -2230,58 +2501,180 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 			if(cleanedIndex==0) {
 				cleanedIndex=1;
 				for (j=0;j<MAX_GNSS;j++) {
-					for (i=0;i<MAX_MEASUREMENTS;i++) {
+					for (i=0;i<MAX_MEASUREMENTS_NO_COMBINATIONS;i++) {
 						epoch->measOrder[j].meas2Ind[i] = -1;
-						epoch->measOrder[j].conversionFactor[i] = 0;
-						epoch->measOrder[j].usable[i] = 1;
+						epoch->measOrder[j].conversionFactor[i] = 1.;
 					}
 				}
 			}
 
 			obs = 0;
 			for (i=0,j=0;i<auxN;i++,j++) {
-				getstr(aux,line,10+j*6,2);
+				getstr(aux,line,len,10+j*6,2);
 				meas = measstr2meastype(aux);
+				measaux=meas;
 				if (meas != NA) {
 					// Carrier-phase are stored in cycles instead of metres, as
 					// they are on RINEX files.
 					//    aux[0]=='L'   => Measurement is carrier phase
-					for (k=0;k<epoch->numGNSS;k++) {
+					for (k=0;k<epoch->numGNSSHeader;k++) {
+						switch(k) {
+							case GPS:
+								//teqc converts the new L1C signal to frequency 7
+								if (strncmp("C7",aux,2)==0) meas=C1X;
+								else if (strncmp("L7",aux,2)==0) meas=L1X;
+								else if (strncmp("D7",aux,2)==0) meas=D1X;
+								else if (strncmp("S7",aux,2)==0) meas=S1X;
+								else meas=measaux;
+								break;
+							case GLONASS:
+								//teqc converts the G3 signal to frequency 7
+								if (strncmp("C7",aux,2)==0) meas=C3X;
+								else if (strncmp("L7",aux,2)==0) meas=L3X;
+								else if (strncmp("D7",aux,2)==0) meas=D3X;
+								else if (strncmp("S7",aux,2)==0) meas=S3X;
+								else meas=measaux;
+								break;
+							case Galileo:
+								if (strncmp("L1",aux,2)==0) meas=L1C; //L1P does not exist in Galileo
+								else if (strncmp("D1",aux,2)==0) meas=D1C; //D1P does not exist in Galileo
+								else if (strncmp("S1",aux,2)==0) meas=S1C; //S1P does not exist in Galileo
+								else meas=measaux;
+								break;
+							case GEO:
+								if (strncmp("L1",aux,2)==0) meas=L1C; //L1P does not exist in GEO
+								else if (strncmp("D1",aux,2)==0) meas=D1C; //D1P does not exist in GEO
+								else if (strncmp("S1",aux,2)==0) meas=S1C; //S1P does not exist in GEO
+								else meas=measaux;
+								break;
+							case BDS:
+								if (strncmp("C1",aux,2)==0) meas=C1X; //C1C does not exist in BDS
+								else if (strncmp("L1",aux,2)==0) meas=L1X; //Set all freq 1 meas to X attribute
+								else if (strncmp("D1",aux,2)==0) meas=D1X; //Set all freq 1 meas to X attribute
+								else if (strncmp("S1",aux,2)==0) meas=S1X; //Set all freq 1 meas to X attribute
+								else if (strncmp("C2",aux,2)==0) meas=C2X; //C2P does not exist in BDS
+								else if (strncmp("L2",aux,2)==0) meas=L2X; //L2P does not exist in BDS
+								else if (strncmp("D2",aux,2)==0) meas=D2X; //D2P does not exist in BDS
+								else if (strncmp("S2",aux,2)==0) meas=S2X; //S2P does not exist in BDS
+								else meas=measaux;
+								break;
+							case QZSS:
+								if (strncmp("L1",aux,2)==0) meas=L1C; //L1P does not exist in QZSS
+								else if (strncmp("D1",aux,2)==0) meas=D1C; //D1P does not exist in QZSS
+								else if (strncmp("S1",aux,2)==0) meas=S1C; //S1P does not exist in QZSS
+								else if (strncmp("C2",aux,2)==0) meas=C2X; //C2P does not exist in QZSS
+								else if (strncmp("L2",aux,2)==0) meas=L2X; //L2P does not exist in QZSS
+								else if (strncmp("D2",aux,2)==0) meas=D2X; //D2P does not exist in QZSS
+								else if (strncmp("S2",aux,2)==0) meas=S2X; //S2P does not exist in QZSS
+								//teqc converts the new L1C signal to frequency 7
+								else if (strncmp("C7",aux,2)==0) meas=C1X;
+								else if (strncmp("L7",aux,2)==0) meas=L1X;
+								else if (strncmp("D7",aux,2)==0) meas=D1X;
+								else if (strncmp("S7",aux,2)==0) meas=S1X;
+								//teqc converts the QZSS L1-SAIF signal to frequency 8
+								else if (strncmp("C8",aux,2)==0) meas=C1Z;
+								else if (strncmp("L8",aux,2)==0) meas=L1Z;
+								else if (strncmp("D8",aux,2)==0) meas=D1Z;
+								else if (strncmp("S8",aux,2)==0) meas=S1Z;
+								else meas=measaux;
+								break;
+							default:
+								meas=measaux;
+								break;
+						}
 						if (aux[0]=='L') {
-							if (epoch->measOrder[k].GNSS==GPS) {
-								if (aux[1]=='1') epoch->measOrder[k].conversionFactor[meas] = GPSl1;
-								else if (aux[1]=='2') epoch->measOrder[k].conversionFactor[meas] = GPSl2;
-								else if (aux[1]=='5') epoch->measOrder[k].conversionFactor[meas] = GPSl5;
-								else epoch->measOrder[k].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
-							} else if (epoch->measOrder[k].GNSS==Galileo) {
-								if (aux[1]=='1') epoch->measOrder[k].conversionFactor[meas] = GALl1;
-								else if (aux[1]=='5') epoch->measOrder[k].conversionFactor[meas] = GALl5a;
-								else if (aux[1]=='7') epoch->measOrder[k].conversionFactor[meas] = GALl5b;
-								else if (aux[1]=='8') epoch->measOrder[k].conversionFactor[meas] = GALl5;
-								else if (aux[1]=='6') epoch->measOrder[k].conversionFactor[meas] = GALl6;
-								else epoch->measOrder[k].conversionFactor[meas] = 1.0;
-							} else if (epoch->measOrder[k].GNSS==GEO) {
-								if (aux[1]=='1') epoch->measOrder[k].conversionFactor[meas] = SBASl1;
-								else if(aux[1]=='5') epoch->measOrder[k].conversionFactor[meas] = SBASl5;
-								else epoch->measOrder[k].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
-							} else if (epoch->measOrder[k].GNSS==GLONASS) {
-								//Conversion factor not implented for GLONASS
-								epoch->measOrder[k].conversionFactor[meas] = 1.0; 
+							switch(k) {
+								case GPS:
+									if (aux[1]=='1') {
+										epoch->measOrder[k].conversionFactor[L1C] = GPSl1;
+										epoch->measOrder[k].conversionFactor[L1P] = GPSl1;
+									}
+									else if (aux[1]=='2') {
+										epoch->measOrder[k].conversionFactor[L2C] = GPSl2;
+										epoch->measOrder[k].conversionFactor[L2P] = GPSl2;
+									}
+									else if (aux[1]=='5') epoch->measOrder[k].conversionFactor[meas] = GPSl5;
+									else if (aux[1]=='7') epoch->measOrder[k].conversionFactor[meas] = GPSl1; //teqc F7 is new L1C signal
+									else epoch->measOrder[k].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+									break;
+								case Galileo:
+									if (aux[1]=='1') epoch->measOrder[k].conversionFactor[meas] = GALl1;
+									else if (aux[1]=='5') epoch->measOrder[k].conversionFactor[meas] = GALl5a;
+									else if (aux[1]=='7') epoch->measOrder[k].conversionFactor[meas] = GALl5b;
+									else if (aux[1]=='8') epoch->measOrder[k].conversionFactor[meas] = GALl5;
+									else if (aux[1]=='6') epoch->measOrder[k].conversionFactor[meas] = GALl6;
+									else epoch->measOrder[k].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+									break;
+								case GEO:
+									if (aux[1]=='1') epoch->measOrder[k].conversionFactor[meas] = SBASl1;
+									else if (aux[1]=='5') epoch->measOrder[k].conversionFactor[meas] = SBASl5;
+									else epoch->measOrder[k].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+									break;
+							 	case GLONASS:
+									if (aux[1]=='1') {
+										epoch->measOrder[k].conversionFactor[L1C] = 1.; //Frequency offset to be applied according to PRN
+										epoch->measOrder[k].conversionFactor[L1P] = 1.; //Frequency offset to be applied according to PRN
+									} else if (aux[1]=='2') {
+										epoch->measOrder[k].conversionFactor[L2C] = 1.; //Frequency offset to be applied according to PRN
+										epoch->measOrder[k].conversionFactor[L2P] = 1.; //Frequency offset to be applied according to PRN
+									}
+									else if (aux[1]=='3') epoch->measOrder[k].conversionFactor[meas] = GLOl3;
+									else if (aux[1]=='4') epoch->measOrder[k].conversionFactor[meas] = GLOl1a;
+									else if (aux[1]=='6') epoch->measOrder[k].conversionFactor[meas] = GLOl2a;
+									else if (aux[1]=='7') epoch->measOrder[k].conversionFactor[meas] = GLOl3; //teqc f7 is G3
+									else epoch->measOrder[k].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+									break;
+								case BDS:
+									//NOTE: BDS is not officially in RINEX 2, but some rinex files do use RINEX 2 with BeiDou
+									if (aux[1]=='1') epoch->measOrder[k].conversionFactor[meas] = BDSl1;
+									else if (aux[1]=='2') epoch->measOrder[k].conversionFactor[meas] = BDSl1_2;
+									else if (aux[1]=='5') epoch->measOrder[k].conversionFactor[meas] = BDSl2a;
+									else if (aux[1]=='6') epoch->measOrder[k].conversionFactor[meas] = BDSl3;
+									else if (aux[1]=='7') epoch->measOrder[k].conversionFactor[meas] = BDSl2b;
+									else if (aux[1]=='8') epoch->measOrder[k].conversionFactor[meas] = BDSl2;
+									else epoch->measOrder[k].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+									break;
+								case QZSS:
+									//NOTE: QZSS is not officially in RINEX 2, but some japanese rinex files do use RINEX 2 with QZSS
+									if (aux[1]=='1') epoch->measOrder[k].conversionFactor[meas] = QZSl1;
+									else if (aux[1]=='2') epoch->measOrder[k].conversionFactor[meas] = QZSl2;
+									else if (aux[1]=='5') epoch->measOrder[k].conversionFactor[meas] = QZSl5;
+									else if (aux[1]=='6') epoch->measOrder[k].conversionFactor[meas] = QZSl6;
+									else if (aux[1]=='7') epoch->measOrder[k].conversionFactor[meas] = QZSl1; //teqc new L1C signal
+									else if (aux[1]=='8') epoch->measOrder[k].conversionFactor[meas] = QZSl1; //teqc QZSS L1-SAIF signal
+									else epoch->measOrder[k].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+									break;
+								case IRNSS:
+									//NOTE: IRNSS is not officially in RINEX 2, but some rinex files do use RINEX 2 with IRNSS
+									if (aux[1]=='5') epoch->measOrder[k].conversionFactor[meas] = IRNl5; 
+									else if(aux[1]=='9') epoch->measOrder[k].conversionFactor[meas] = IRNl9; 
+									else epoch->measOrder[k].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+									break;
+								default:
+									epoch->measOrder[k].conversionFactor[meas] = 1.0;
+									break;
 							}
 						} else { // If measurement is not carrier-phase, conversionFactor is 1
 							epoch->measOrder[k].conversionFactor[meas] = 1.0;
+							if(aux[0]=='S') {
+								//SNR measurement in file
+								SNRMeasFound=1;
+							}
 						}
-						// Update dictionaries (if usableFreq is disabled for a specific frequency, the dictionary meas2Ind is avoided)
-						if (options->usableFreq[k][getFrequencyInt(meas)]) {
-							epoch->measOrder[k].usable[meas] = 1;
-						} else {
-							epoch->measOrder[k].usable[meas] = 0;
-						}
-						epoch->measOrder[k].meas2Ind[meas] = obs;
+						// Update dictionaries 
+						//For GPS and GLONASS, we set L1C and L1P in the same position, as in RINEX 2 only L1 phase is provided
+					   	//but C1 and P1 codes are given. The same occurs for L2. These need to be copied as they need
+						//their own slot for the model value. SNR measurements (S1,S2,...) don't need to be copied as they
+						//are not modelled, they are only read
+						//For the case of the Doppler, it can be shared, as Doppler it is the derivative of the phase, the
+						//difference between D1C and D1P is none, as the difference between phases was the P1-C1 bias
+						freq=getFrequencyInt(meas);
 						epoch->measOrder[k].ind2Meas[obs] = meas;
+						epoch->measOrder[k].availFreq[freq]=1;
+						epoch->measOrder[k].meas2Ind[meas] = obs;
 					}
 				} else {
-					sprintf(messagestr,"Reading RINEX %4.2f file: Unrecognized measurement type: '%s'",rinexVersion,aux);
+					sprintf(messagestr,"Reading RINEX %4.2f file: Unrecognized measurement type: '%s'",epoch->RINEXobsVersion,aux);
 					printError(messagestr,options);
 					error = 1;
 				}				
@@ -2306,25 +2699,12 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 			// E   36 C1B L1B D1B S1B C1C L1C D1C S1C C5I L5I D5I S5I C5Q  SYS / # / OBS TYPES
 			//        L5Q D5Q S5Q C7I L7I D7I S7I C7Q L7Q D7Q S7Q C6A L6A  SYS / # / OBS TYPES
 			//        D6A S6A C6B L6B D6B S6B C6C L6C D6C S6C              SYS / # / OBS TYPES
-			prevSysObs = actSysObs;
 			actSysObs = gnsschar2gnsstype(line[0]); 
-			getstr(aux,line,1,5);
-			if ( actSysObs==BDS || actSysObs==QZSS || actSysObs==IRNSS || ((prevSysObs==BDS || prevSysObs==QZSS || prevSysObs==IRNSS ) && aux[0]=='\0') ) {continue;} //BeiDou, QZSS, IRNSS are not supported
-			//numLinesTypesofObsr++;
-			//if (aux[0]!='\0') { // if this is the first line of a SYS
-			//if (numLinesTypesofObsr==1 || actSysObs!=prevSysObs) { // if this is the first line of a SYS
-			//if (numLinesTypesofObsr==1  ) { // if this is the first line of a SYS
-				//epoch->measOrder[epoch->numGNSS].nDiffMeasurements = atoi(aux);
-				//epoch->measOrder[actSysObs].nDiffMeasurements = atoi(aux);
-				//epoch->measOrder[epoch->numGNSS].GNSS = gnsschar2gnsstype(line[0]);
-				//epoch->measOrder[epoch->numGNSS].GNSS = actSysObs;
-				//epoch->measOrder[actSysObs].GNSS = actSysObs;
-				//epoch->numGNSS++;
-				//obs = 0;
-			//}}}
+			getstr(aux,line,len,1,5);
 			epoch->measOrder[actSysObs].nDiffMeasurements = atoi(aux);
+			epoch->measOrder[actSysObs].nDiffMeasurementsRINEXHeader = atoi(aux);
 			epoch->measOrder[actSysObs].GNSS = actSysObs;
-			//epoch->numGNSS++;
+			epoch->numGNSSHeader++;
 			obs = 0;
 
 		
@@ -2332,59 +2712,104 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 			if(cleanedIndex==0) {
 				cleanedIndex=1;
 				for (j=0;j<MAX_GNSS;j++) {
-					for (i=0;i<MAX_MEASUREMENTS;i++) {
+					for (i=0;i<MAX_MEASUREMENTS_NO_COMBINATIONS;i++) {
 						epoch->measOrder[j].meas2Ind[i] = -1;
-						epoch->measOrder[j].conversionFactor[i] = 0;
-						epoch->measOrder[j].usable[i] = 1;
+						epoch->measOrder[j].conversionFactor[i] = 1.;
 					}
 				}
 			}
 
-			for (i=0,j=0;i<epoch->measOrder[actSysObs].nDiffMeasurements;j++,i++) {
-				getstr(aux,line,7+4*j,3);
+			for (i=0,j=0;i<epoch->measOrder[actSysObs].nDiffMeasurementsRINEXHeader;j++,i++) {
+				getstr(aux,line,len,7+4*j,3);
 				meas = measstr2meastype(aux);
 				if (meas != NA) {
 					// Carrier-phase are stored in cycles instead of metres, as
 					// they are on RINEX files.
-					//    aux[0]=='L'   => Measurement is carrier phase
-					if (aux[0]=='L') {
-						if (epoch->measOrder[actSysObs].GNSS==GPS) {
-							if (aux[1]=='1') epoch->measOrder[actSysObs].conversionFactor[meas] = GPSl1;
-							else if (aux[1]=='2') epoch->measOrder[actSysObs].conversionFactor[meas] = GPSl2;
-							else if (aux[1]=='5') epoch->measOrder[actSysObs].conversionFactor[meas] = GPSl5;
-							else epoch->measOrder[k].conversionFactor[meas] = 1.0;
-						} else if (epoch->measOrder[actSysObs].GNSS==Galileo) {
-							if (aux[1]=='1') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl1;
-							else if (aux[1]=='5') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl5a;
-							else if (aux[1]=='7') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl5b;
-							else if (aux[1]=='8') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl5;
-							else if (aux[1]=='6') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl6;
-							else epoch->measOrder[k].conversionFactor[meas] = 1.0;
-						} else if (epoch->measOrder[actSysObs].GNSS==GEO) {
-							if (aux[1]=='1') epoch->measOrder[actSysObs].conversionFactor[meas] = SBASl1;
-							else if(aux[1]=='5') epoch->measOrder[actSysObs].conversionFactor[meas] = SBASl5;
-							else epoch->measOrder[k].conversionFactor[meas] = 1.0;
-						} else {
-							//Other constellations (GLONASS, BeiDou).
-							//To be done. Now we apply conversion factor of 1
-							epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0;
+					//    aux[0]=='L'||aux[0]=='I'   => Measurement is carrier phase or Ionosphere measurement (both in carrier-phase cycles)
+					if (aux[0]=='L'||aux[0]=='I') {
+						switch (actSysObs) {
+							case GPS:
+								if (aux[1]=='1') epoch->measOrder[actSysObs].conversionFactor[meas] = GPSl1;
+								else if (aux[1]=='2') epoch->measOrder[actSysObs].conversionFactor[meas] = GPSl2;
+								else if (aux[1]=='5') epoch->measOrder[actSysObs].conversionFactor[meas] = GPSl5;
+								else epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0;
+								break;
+							case Galileo:
+								if (aux[1]=='1') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl1;
+								else if (aux[1]=='5') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl5a;
+								else if (aux[1]=='7') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl5b;
+								else if (aux[1]=='8') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl5;
+								else if (aux[1]=='6') epoch->measOrder[actSysObs].conversionFactor[meas] = GALl6;
+								else epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0;
+								break;
+							case GLONASS:
+								if (aux[1]=='1') epoch->measOrder[actSysObs].conversionFactor[meas] = 1.; //Frequency offset to be applied according to PRN
+								else if(aux[1]=='2') epoch->measOrder[actSysObs].conversionFactor[meas] = 1.; //Frequency offset to be applied according to PRN
+								else if(aux[1]=='3') epoch->measOrder[actSysObs].conversionFactor[meas] = GLOl3;
+								else if(aux[1]=='4') epoch->measOrder[actSysObs].conversionFactor[meas] = GLOl1a;
+								else if(aux[1]=='6') epoch->measOrder[actSysObs].conversionFactor[meas] = GLOl2a;
+								else epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+								break;
+							case GEO:
+								if (aux[1]=='1') epoch->measOrder[actSysObs].conversionFactor[meas] = SBASl1;
+								else if(aux[1]=='5') epoch->measOrder[actSysObs].conversionFactor[meas] = SBASl5;
+								else epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0;
+								break;
+							case BDS:
+								if (aux[1]=='1' && epoch->RINEXobsVersion<=3.02) {
+									aux[1]='2'; //To convert X1X to X2X (Rinex v3.02 was with freq 1, RINEX >=3.03 with freq 2)
+									meas = measstr2meastype(aux);
+								}
+								if (aux[1]=='1') epoch->measOrder[actSysObs].conversionFactor[meas] = BDSl1;
+								else if (aux[1]=='2') epoch->measOrder[actSysObs].conversionFactor[meas] = BDSl1_2;
+								else if(aux[1]=='5') epoch->measOrder[actSysObs].conversionFactor[meas] = BDSl2a;
+								else if(aux[1]=='6') epoch->measOrder[actSysObs].conversionFactor[meas] = BDSl3;
+								else if(aux[1]=='7') epoch->measOrder[actSysObs].conversionFactor[meas] = BDSl2b;
+								else if(aux[1]=='8') epoch->measOrder[actSysObs].conversionFactor[meas] = BDSl2;
+								else epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+								break;
+							case QZSS:
+								if (aux[1]=='1') epoch->measOrder[actSysObs].conversionFactor[meas] = QZSl1;
+								else if (aux[1]=='2') epoch->measOrder[actSysObs].conversionFactor[meas] = QZSl2;
+								else if (aux[1]=='5') epoch->measOrder[actSysObs].conversionFactor[meas] = QZSl5;
+								else if (aux[1]=='6') epoch->measOrder[actSysObs].conversionFactor[meas] = QZSl6;
+								else epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+								break;
+							case IRNSS:
+								if (aux[1]=='5') epoch->measOrder[actSysObs].conversionFactor[meas] = IRNl5; 
+								else if(aux[1]=='9') epoch->measOrder[actSysObs].conversionFactor[meas] = IRNl9; 
+								else epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0; //For the case of frequencies that are not in this constellation
+								break;
+							default:
+								//Other constellations not known
+								epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0;
+								break;
 						}
-					} else { // If measurement in not carrier-phase, conversionFactor is 1
+					} else { // If measurement is not carrier-phase or ionosphere measurement, conversionFactor is 1
+						if(epoch->measOrder[actSysObs].GNSS==BDS) {
+							if (aux[1]=='1' && epoch->RINEXobsVersion<=3.02) {
+								aux[1]='2'; //To convert X1X to X2X (Rinex v3.02 was with freq 1, RINEX v>=3.03 with freq 2)
+								meas = measstr2meastype(aux);
+							}
+						}
 						epoch->measOrder[actSysObs].conversionFactor[meas] = 1.0;
+						if(aux[0]=='S') {
+							//SNR measurement in file
+							SNRMeasFound=1;
+						}
 					}
-					// Update dictionaries (if usableFreq is disabled for a specific frequency, the dictionary meas2Ind is avoided)
-					if (options->usableFreq[actSysObs][getFrequencyInt(meas)]) {
-					//if (epoch->measOrder[actSysObs].usableFreq[getFrequencyInt(epoch->measOrder[actSysObs].GNSS,meas)]) {
-						epoch->measOrder[actSysObs].meas2Ind[meas] = obs;
-					}
+					// Update dictionaries 
+					freq=getFrequencyInt(meas);
+					epoch->measOrder[actSysObs].availFreq[freq]=1;
+					epoch->measOrder[actSysObs].meas2Ind[meas] = obs;
 					epoch->measOrder[actSysObs].ind2Meas[obs] = meas;
 				} else {
-					sprintf(messagestr,"Reading RINEX %4.2f file: Unrecognized measurement type: '%s'",rinexVersion,aux);
+					sprintf(messagestr,"Reading RINEX %4.2f file: Unrecognized measurement type: '%s'",epoch->RINEXobsVersion,aux);
 					printError(messagestr,options);
 					error = 1;
 				}				
 				obs++;
-				if ((j+1)%13==0 && epoch->measOrder[actSysObs].nDiffMeasurements>(j+1)) { // Following observables are in the next lines (max 13 per line)
+				if ((j+1)%13==0 && epoch->measOrder[actSysObs].nDiffMeasurementsRINEXHeader>(j+1)) { // Following observables are in the next lines (max 13 per line)
 					j=-1; // j will be increased in the for loop
 					if(getL(line,&len,fd)==-1) return 0; //If line fails to read exit function
 					if (fdout!=NULL && epoch->DGNSSstruct==0) {
@@ -2399,9 +2824,9 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 					}
 				}
 			}
+			
 		} else if (strncmp(&line[60],"INTERVAL",8)==0) {
-			getstr(aux,line,0,10);
-			trim(aux);
+			getstr(aux,line,len,0,10);
 			if(atof(aux)>0.) { //In case Interval is 0, ignore the value
 				epoch->receiver.interval = atof(aux); 
 				//Get the number of decimals
@@ -2421,11 +2846,11 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 			}
 		} else if (strncmp(&line[60],"APPROX POSITION XYZ",19)==0) {
 			if (options->receiverPositionSource==rpRINEX || ( ( (options->receiverPositionSource == rpCALCULATERINEX) || (options->receiverPositionSource == rpCALCULATERINEXREF)  ) && epoch->numAproxPosRead==0)) {
-				getstr(aux,line,1,14);
+				getstr(aux,line,len,1,14);
 				epoch->receiver.aproxPosition[0] = atof(aux);
-				getstr(aux,line,14,14);
+				getstr(aux,line,len,14,14);
 				epoch->receiver.aproxPosition[1] = atof(aux);
-				getstr(aux,line,28,14);
+				getstr(aux,line,len,28,14);
 				epoch->receiver.aproxPosition[2] = atof(aux);
 				if (options->receiverPositionSource==rpRINEX) {
 					epoch->receiver.aproxPositionError = 1e4; // 10 Km
@@ -2434,21 +2859,21 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 				}
 				epoch->numAproxPosRead++;
 			} else if ( options->receiverPositionSource >= rpRTCMbaseline && options->receiverPositionSource <= rpRTCMRoverUSERREF  ) {
-				getstr(aux,line,1,14);
+				getstr(aux,line,len,1,14);
 				epoch->receiver.aproxPosition[0] = atof(aux);
-				getstr(aux,line,14,14);
+				getstr(aux,line,len,14,14);
 				epoch->receiver.aproxPosition[1] = atof(aux);
-				getstr(aux,line,28,14);
+				getstr(aux,line,len,28,14);
 				epoch->receiver.aproxPosition[2] = atof(aux);
 				epoch->receiver.aproxPositionError = 0.1; // 10 cm
 				epoch->numAproxPosRead++;
 			}
 			if ( ( options->receiverPositionSource == rpRTCMRINEXROVER || options->receiverPositionSource == rpRTCMUserRINEXROVER ) && epoch->DGNSSstruct==0 ) {
-				getstr(aux,line,1,14);
+				getstr(aux,line,len,1,14);
 				epoch->receiver.aproxPositionRover[0] = atof(aux);
-				getstr(aux,line,14,14);
+				getstr(aux,line,len,14,14);
 				epoch->receiver.aproxPositionRover[1] = atof(aux);
-				getstr(aux,line,28,14);
+				getstr(aux,line,len,28,14);
 				epoch->receiver.aproxPositionRover[2] = atof(aux);
 			}
 			if(epoch->DGNSSstruct==1) { //This is to avoid reading the rover approx position as reference position
@@ -2471,6 +2896,45 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 					}
 				}
 			}
+		} else if ( strncmp(&line[60], "GLONASS SLOT / FRQ #", 20) == 0 ) {
+			if (epoch->DGNSSstruct==0) { //Only read if it is rover, the data will then be copied to the DGNSS if necessary
+				//K factor for frequency offset in GLONASS
+				getstr(aux,line,len,0,3);
+				auxN=atoi(aux);
+				if (auxN==0) continue; //No data provided
+				epoch->measOrder[GLONASS].hasGlonassSlotsFreq=1;
+				epoch->measOrder[GLONASS].numFreqOffsetRead=auxN;
+				//Read new values
+				for (j=0,i=0;j<auxN && i<auxN;j++,i++) {
+					getstr(aux,line,len,5+7*j,2); //get PRN
+					auxN2=atoi(aux);
+					getstr(aux,line,len,8+7*j,2); //get K
+					freqnumber=atoi(aux);
+					epoch->measOrder[GLONASS].freqMeas[1][auxN2]=GLOf1+(double)(freqnumber)*1e6*9./16.;
+					epoch->measOrder[GLONASS].freqMeas[2][auxN2]=GLOf2+(double)(freqnumber)*1e6*7./16.;
+					epoch->measOrder[GLONASS].lambdaMeas[1][auxN2]=c0/(GLOf1+(double)(freqnumber)*1e6*9./16.);
+					epoch->measOrder[GLONASS].lambdaMeas[2][auxN2]=c0/(GLOf2+(double)(freqnumber)*1e6*7./16.);
+					epoch->measOrder[GLONASS].mfreqMeas[1][auxN2]=epoch->measOrder[GLONASS].freqMeas[1][auxN2]/f0;
+					epoch->measOrder[GLONASS].mfreqMeas[2][auxN2]=epoch->measOrder[GLONASS].freqMeas[2][auxN2]/f0;
+					epoch->measOrder[GLONASS].TECU2metres[1][auxN2]=40.3*1E16/(epoch->measOrder[GLONASS].freqMeas[1][auxN2]*epoch->measOrder[GLONASS].freqMeas[1][auxN2]);
+					epoch->measOrder[GLONASS].TECU2metres[2][auxN2]=40.3*1E16/(epoch->measOrder[GLONASS].freqMeas[2][auxN2]*epoch->measOrder[GLONASS].freqMeas[2][auxN2]);
+					epoch->GLOfreqnumber[auxN2]=freqnumber;
+					if ((j+1)%8==0 && auxN>(i+1)) { // Following k are in the next lines (max 8 per line)
+						j=-1; // j will be increased in the for loop
+						if(getL(line,&len,fd)==-1) return 0; //If line fails to read exit function
+						if (fdout!=NULL && epoch->DGNSSstruct==0) {
+							//Save header lines for creating an output RINEX files with user added error
+							headerlines=realloc(headerlines,sizeof(char *)*(numheaderlines+1));
+							headerlines[numheaderlines]=malloc(sizeof(char)*MAX_INPUT_LINE);
+							strcpy(headerlines[numheaderlines],line);
+							if(headerlines[numheaderlines][len-1]=='\r'||headerlines[numheaderlines][len-1]=='\n') {
+								headerlines[numheaderlines][len-1]='\0';
+							}
+							numheaderlines++;
+						}
+					}
+				}
+			}
 		} else if ( strncmp(&line[60], "END OF HEADER", 13) == 0 ) {
 			readingHeader = 0;
 			properlyRead = 1;
@@ -2484,8 +2948,8 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 			}
 			break;
 		}
-	}
-	
+	} while (getL(line,&len,fd)!=-1 && readingHeader);
+
 	//Write header lines for RINEX observation file with user added error
 	if (fdout!=NULL && epoch->DGNSSstruct==0) {
 		writeRinexObsHeaderUserAddedError(fdout,headerlines,numheaderlines);
@@ -2495,42 +2959,211 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 		free(headerlines);
 	}
 
-	//Check for non quantizied SNR measurements
-	if (options->solutionMode==PPPMode) {
-		//Get SNR for both frequencies
-		i=epoch->measOrder[GPS].meas2Ind[S1P];
-		if (i==-1) {
-			i=epoch->measOrder[GPS].meas2Ind[S1C];
+	//Some rare RINEX files in the RINEX header they state that SNR measurements
+	//are provided, but later in the file the measurements are all zero. Therefore, before creating the
+	//index, we need to read an epoch of the file to check if SNR measurements are really provided
+	if (SNRMeasFound==1) {
+		//SNR measurements provided. Read an epoch and check if measurements exist
+		//Save current position in file
+		posEndHeader = ftell(fd);
+		//Read lines until first line with measurements is found
+		if (getL(line,&len,fd)==-1) return 0;
+		if (epoch->source == RINEX2) {
+			//Check if epoch is an event epoch
+			getstr(aux,line,len,27,2);
+			Epochflag=atoi(aux);
+			if (Epochflag>1) { //Event epoch. Skip it
+				getstr(aux,line,len,30,2);
+				n = atoi(aux);
+				for (i=0;i<=n;i++) {
+					if (getL(line,&len,fd)==-1) return 0;
+				}
+			}
+			getstr(aux,line,len,30,2);
+			numSatellites = atoi(aux);
+			//Skip lines for satellites PRN list until first measurement is found
+			for (i=0;i<=(int)(numSatellites/12);i++) {
+				if (getL(line,&len,fd)==-1) return 0;
+			}
+			S1ind=epoch->measOrder[GPS].meas2Ind[S1P];
+			S2ind=epoch->measOrder[GPS].meas2Ind[S2P];
+			nextRead=0;
+			for (j=0,k=0;j<epoch->measOrder[GPS].nDiffMeasurementsRINEXHeader;j++,k++) {
+				if (nextRead) {
+					if (getL(line,&len,fd)==-1) return 0;
+					nextRead = 0;
+				}
+				getstr(aux,line,len,16*k,14);
+				value = atof(aux);
+				if (value==0) value = -1.;
+				if (j==S1ind) S1value=value;
+				else if (j==S2ind) S2value=value;
+				if ((k+1)%5==0) { // Following observables are in the next lines (max 5 per line)
+					nextRead = 1;
+					k=-1; // k will be increased in the for loop
+				}
+			}
+			if (S1ind!=-1 && S2ind !=-1) {
+				if (S1value==-1. && S2value==-1.) {
+					//No SNR meas provided. Use flag instead
+					SNRMeasFound=0;
+				} else if (S1ind!=-1 && S2ind ==-1) {
+					if (S1value==-1.) {
+						//No SNR meas provided. Use flag instead
+						SNRMeasFound=0;
+					}
+				} else {
+					if (S2value==-1.) {
+						//No SNR meas provided. Use flag instead
+						SNRMeasFound=0;
+					}
+				}
+			}
+		} else { //RINEX3
+			//Check if epoch is an event epoch
+			getstr(aux,line,len,30,2);
+			Epochflag=atoi(aux);
+			if (Epochflag>1) { //Event epoch. Skip it
+				getstr(aux,line,len,33,2);
+				n = atoi(aux);
+				for (i=0;i<=n;i++) {
+					if (getL(line,&len,fd)==-1) return 0;
+				}
+			}
+			getstr(aux,line,len,33,2);
+			numSatellites = atoi(aux);
+			//Skip epoch line 
+			if (getL(line,&len,fd)==-1) return 0;
+			actSysObs = gnsschar2gnsstype(line[0]);
+			value=-1.;
+			for (j=0;j<epoch->measOrder[actSysObs].nDiffMeasurementsRINEXHeader;j++) {
+				//Loop until a SNR measurement is found
+				if (epoch->measOrder[actSysObs].ind2Meas[j]%4!=0) continue;
+				getstr(aux,line,len,3+16*j,14);
+				value = atof(aux);
+				if (value==0) value = -1.;
+				else break;
+			}
+			if (value==-1.) {
+				//No SNR meas provided. Use flag instead
+				SNRMeasFound=0;
+			}
 		}
-		if (i==-1) {
-			i=epoch->measOrder[GPS].meas2Ind[S1W];
-		}
-		j=epoch->measOrder[GPS].meas2Ind[S2P];
-		if (j==-1) {
-			j=epoch->measOrder[GPS].meas2Ind[S2C];
-		} 
-		if (j==-1) {
-			j=epoch->measOrder[GPS].meas2Ind[S2W];
-		}
-		if (i!=-1 && j!=-1) {
-			//GPS has non quantizied SNR measurements for both frequencies. Save positions
-			epoch->measOrder[GPS].hasSNRmeas=1;
-			epoch->measOrder[GPS].SNRmeaspos[1]=i;
-			epoch->measOrder[GPS].SNRmeaspos[2]=j;
+		//Set the file position back to the first epoch
+		fseek(fd,posEndHeader,SEEK_SET);
+	}
+	//Create a look up table for SNR measurements.
+	//If SNR as a measurement is given, both code, phase and Doppler will point to its SNR measurements.
+	//In RINEX 2, C1/P1/L1/D1 and other frequencies share the same SNR measurement
+	//If SNR is given only as a flag, code, phase and Doppler will point to the phase measurement, which
+	//will have the SNR value. For the case where a measurement is not paired (e.g C1W), it will pint to
+	//a phase measurement of the same frequency
+	if (SNRMeasFound==1) {
+		//SNR as as measurement available. Use it as it more precise than the quantized value
+		for(n=0;n<MEASTYPELISTS;n++) {
+			OffsetToSNR=3-n;
+			for (meas=1+n;meas<I1;meas+=4) {
+				for(i=0;i<MAX_GNSS;i++) {
+					if (epoch->measOrder[i].meas2Ind[meas]==-1) {
+						if (meas==C1P && epoch->source==RINEX2) {
+							//For RINEX 2 without C1P, add also the SNR index as it will be used by S1P (due to the conversion of S1 to S1P)
+						} else {
+							epoch->measOrder[i].meas2SNRInd[meas]=-1; //If in new header a measurement dissapears, remove its pointer
+							continue;
+						}
+					}
+					epoch->measOrder[i].meas2SNRInd[meas]=epoch->measOrder[i].meas2Ind[meas+OffsetToSNR];
+					if (epoch->measOrder[i].meas2SNRInd[meas]==-1) {
+						//Measurement not paired (e.g C1W in RINEX3)
+						//Loop through all phase measurements in the same frequency and select the first one found
+						freq=getFrequencyInt(meas);
+						if (freq==0) {
+							initMeas=S1N*9+1+n;
+							endMeas=S0N;
+						} else {
+							initMeas=S1N*(freq-1)+1+n;
+							endMeas=S1N*freq;
+						}
+						if (i==GPS && (meas==C1C||meas==C1P||meas==C1W||meas==C2W||meas==C2P)) {
+							//For the case of GPS, if S1C is not available and if S1X is available 
+							//(according to teqc extension, S7 is S1X in RINEX2), it will find first S1X instead of S1P or S1W
+							//Idem for L2
+							for(k=initMeas;k<endMeas;k+=4) {
+								if ((k+OffsetToSNR)==S1S||(k+OffsetToSNR)==S1L||(k+OffsetToSNR)==S1X) continue;
+								else if ((k+OffsetToSNR)==S2S||(k+OffsetToSNR)==S2L||(k+OffsetToSNR)==S2X) continue;
+								epoch->measOrder[i].meas2SNRInd[meas]=epoch->measOrder[i].meas2Ind[k+OffsetToSNR];
+								if (epoch->measOrder[i].meas2SNRInd[meas]!=-1) break;
+							}
+							//If no measurement found, use any measurement found without excluding anyone
+							if (epoch->measOrder[i].meas2SNRInd[meas]==-1) {
+								for(k=initMeas;k<endMeas;k+=4) {
+									epoch->measOrder[i].meas2SNRInd[meas]=epoch->measOrder[i].meas2Ind[k+OffsetToSNR];
+									if (epoch->measOrder[i].meas2SNRInd[meas]!=-1) break;
+								}
+							}
+						} else {
+							for(k=initMeas;k<endMeas;k+=4) {
+								epoch->measOrder[i].meas2SNRInd[meas]=epoch->measOrder[i].meas2Ind[k+OffsetToSNR];
+								if (epoch->measOrder[i].meas2SNRInd[meas]!=-1) break;
+							}
+						}
+					}
+				}
+			}
 		}
 	} else {
-		//Get SNR for frequencies one
-		i=epoch->measOrder[GPS].meas2Ind[S1C];
-		if (i==-1) {
-			i=epoch->measOrder[GPS].meas2Ind[S1P];
-		}
-		if (i==-1) {
-			i=epoch->measOrder[GPS].meas2Ind[S1W];
-		}
-		if (i!=-1) {
-			//GPS has non quantizied SNR measurements for both frequencies. Save positions
-			epoch->measOrder[GPS].hasSNRmeas=1;
-			epoch->measOrder[GPS].SNRmeaspos[1]=i;
+		//SNR only as a flag available. Point to phase measurement
+		OffsetToSNR=2;
+		for(n=0;n<MEASTYPELISTS;n++) {
+			OffsetToSNR--;
+			for (meas=1+n;meas<I1;meas+=4) {
+				for(i=0;i<MAX_GNSS;i++) {
+					if (epoch->measOrder[i].meas2Ind[meas]==-1) {
+						if (meas==C1P && epoch->source==RINEX2) {
+							//For RINEX 2 without C1P, add also the SNR index as it will be used by S1P (due to the conversion of S1 to S1P)
+						} else {
+							epoch->measOrder[i].meas2SNRInd[meas]=-1; //If in new header a measurement dissapears, remove its pointer
+							continue;
+						}
+					}
+					epoch->measOrder[i].meas2SNRInd[meas]=epoch->measOrder[i].meas2Ind[meas+OffsetToSNR];
+					if (epoch->measOrder[i].meas2SNRInd[meas]==-1) {
+						//Measurement not paired (e.g C1W in RINEX3)
+						//Loop through all phase measurements in the same frequency and select the first one found
+						freq=getFrequencyInt(meas);
+						if (freq==0) {
+							initMeas=S1N*9+1+n;
+							endMeas=S0N;
+						} else {
+							initMeas=S1N*(freq-1)+1+n;
+							endMeas=S1N*freq;
+						}
+						if (i==GPS && (meas==C1C||meas==C1P||meas==C1W||meas==C2W||meas==C2P)) {
+							//For the case of GPS, if L1C is not available and if L1X is available 
+							//(according to teqc extension, L7 is L1X in RINEX2), it will find first L1X instead of L1P or L1W
+							//Idem for L2
+							for(k=initMeas;k<endMeas;k+=4) {
+								if ((k+OffsetToSNR)==L1S||(k+OffsetToSNR)==L1L||(k+OffsetToSNR)==L1X) continue;
+								else if ((k+OffsetToSNR)==L2S||(k+OffsetToSNR)==L2L||(k+OffsetToSNR)==L2X) continue;
+								epoch->measOrder[i].meas2SNRInd[meas]=epoch->measOrder[i].meas2Ind[k+OffsetToSNR];
+								if (epoch->measOrder[i].meas2SNRInd[meas]!=-1) break;
+							}
+							//If no measurement found, use any measurement found without excluding anyone
+							if (epoch->measOrder[i].meas2SNRInd[meas]==-1) {
+								for(k=initMeas;k<endMeas;k+=4) {
+									epoch->measOrder[i].meas2SNRInd[meas]=epoch->measOrder[i].meas2Ind[k+OffsetToSNR];
+									if (epoch->measOrder[i].meas2SNRInd[meas]!=-1) break;
+								}
+							}
+						} else {
+							for(k=initMeas;k<endMeas;k+=4) {
+								epoch->measOrder[i].meas2SNRInd[meas]=epoch->measOrder[i].meas2Ind[k+OffsetToSNR];
+								if (epoch->measOrder[i].meas2SNRInd[meas]!=-1) break;
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -2550,7 +3183,7 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 							continue;
 						} else {
 							//Interval is not in the header, read first and second epoch and compute the interval
-							//Maybe some observation files have a data gap for all satellite in second, but that is extemely rare
+							//Maybe some observation files have a data gap for all satellite in second, but that is extremely rare
 						}
 					} else if (i==2) {
 						//We need to go to the end of the file.
@@ -2576,63 +3209,64 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 						}
 						//Read epoch time
 						if (epoch->source == RINEX2) {
-							getstr(aux,line,0,4);
+							getstr(aux,line,len,0,4);
 							yy = tm.tm_year = atoi(aux);
 							if (tm.tm_year <= 70) tm.tm_year += 100;
-							getstr(aux,line,3,4);
+							getstr(aux,line,len,3,4);
 							mm = atoi(aux);
 							tm.tm_mon  = mm - 1;
-							getstr(aux,line,6,4);
+							getstr(aux,line,len,6,4);
 							dd = tm.tm_mday = atoi(aux);
-							getstr(aux,line,9,4);
+							getstr(aux,line,len,9,4);
 							if(aux[1]=='.'||aux[2]=='.') {
 								hour= tm.tm_hour = -1;
 							} else {
 								hour = tm.tm_hour = atoi(aux);
 							}
-							getstr(aux,line,12,4);
-							min = tm.tm_min  = atoi(aux);
-							getstr(aux,line,16,10);
+							getstr(aux,line,len,12,4);
+							minute = tm.tm_min  = atoi(aux);
+							getstr(aux,line,len,16,10);
 							tm.tm_sec  = atoi(aux);
 							seconds = atof(aux);
 						} else {
 							//RINEX v3
 							if (line[0]=='>' && len<60) {
 								//Line with valid epoch
-								getstr(aux,line,2,4);
+								getstr(aux,line,len,2,4);
 								yy =  atoi(aux);
 								if (yy>=2000) yy-=2000;
 								else yy-=1900;
 								tm.tm_year = atoi(aux)-1900;
-								getstr(aux,line,7,2);
+								getstr(aux,line,len,7,2);
 								mm = atoi(aux);
 								tm.tm_mon = mm-1;
-								getstr(aux,line,10,2);
+								getstr(aux,line,len,10,2);
 								dd = tm.tm_mday = atoi(aux);
-								getstr(aux,line,13,2);
+								getstr(aux,line,len,13,2);
 								hour = tm.tm_hour = atoi(aux);
-								getstr(aux,line,16,2);
-								min = tm.tm_min  = atoi(aux);
-								getstr(aux,line,19,10);
+								getstr(aux,line,len,16,2);
+								minute = tm.tm_min  = atoi(aux);
+								getstr(aux,line,len,19,10);
 								tm.tm_sec  = atoi(aux);
 								seconds = atof(aux);
 							} else {
 								hour=-1;
 							}
 						}
-						if (yy>=0 && yy<=99 && mm>=1 && mm<=12 && dd>=1 && dd<=31 && hour>=0 && hour<=23 && min>=0 &&min<=59) {
+						if (yy>=0 && yy<=99 && mm>=1 && mm<=12 && dd>=1 && dd<=31 && hour>=0 && hour<=23 && minute>=0 &&minute<=59) {
 							//Epoch timestamp found
 							break;
-                        } else if (i==2 && epoch->source == RINEX3) {
-                            //Check if last epoch is an event epoch without date
-                            getstr(aux,line,30,2);
-                            epochflag=atoi(aux);
-                            if (line[0]=='>' && len<60 && epochflag>1 ) {
-                                //Event epoch is the last epoch in file and it does not have the date in the epoch recod,
-                                //so we need to go another epoch back to get an epoch with data and full date
-                                getLback(line,&len,fd);
-                                rewindEpochRinexObs(fd, epoch->source);
-                            }
+						} else if (i==2 && epoch->source == RINEX3) {
+							//Check if last epoch is an event epoch without date
+							getstr(aux,line,len,30,2);
+							epochflag=atoi(aux);
+							if (line[0]=='>' && len<60 && epochflag>1 ) {
+								//Event epoch is the last epoch in file and it does not have the date in the epoch recod, 
+								//so we need to go another epoch back to get an epoch with data and full date
+								getLback(line,&len,fd);
+								rewindEpochRinexObs(fd, epoch->source);
+							}
+
 						}
 					}
 					if (ErrorReadingEpochs==1) {
@@ -2650,11 +3284,15 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 					if (i==0) {
 						firstEpoch.MJDN = MJDN(&tm);
 						firstEpoch.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+						if (epoch->FirstEpochHeader.MJDN==-1) {
+							//If TIME OF FIRST OBS header is not in file, use first epoch in file instead
+							memcpy(&epoch->FirstEpochHeader,&firstEpoch,sizeof(TTime));
+						}
 					} else if (i==1) {
 						secondEpoch.MJDN = MJDN(&tm);
 						secondEpoch.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
 						interval=tdiff(&secondEpoch,&firstEpoch);
-						if (interval<1E-4) {
+						if (interval<DIFFEQTHRESHOLD) {
 							//Epoch repeated due to an event epoch just in the first epoch
 							//Keep reading epochs until the epoch changes
 							i=0;
@@ -2694,13 +3332,13 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 							//User selected and ending epoch. Check if last epoch of file is before or after user selected epoch
 							if (tdiff(&lastEpoch,&options->EndEpoch)<0) {
 								//Last epoch of file is before user last epoch. Use file last epoch to compute number of epochs
-								epoch->numEpochsfile=tdiff(&lastEpoch,&firstEpoch)/interval;
+								epoch->numEpochsfile=(tdiff(&lastEpoch,&firstEpoch))/interval+1.;
 							} else {
 								//Last epoch of file is after user last epoch. Use user last epoch to compute number of epochs
-								epoch->numEpochsfile=tdiff(&options->EndEpoch,&firstEpoch)/interval;
+								epoch->numEpochsfile=(tdiff(&options->EndEpoch,&firstEpoch))/interval+1.;
 							}
 						} else {
-							epoch->numEpochsfile=tdiff(&lastEpoch,&firstEpoch)/interval;
+							epoch->numEpochsfile=(tdiff(&lastEpoch,&firstEpoch))/interval+1.;
 						}
 					}
 				}
@@ -2708,7 +3346,13 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 				fseek(fd,posEndHeader,SEEK_SET);
 				//If backward filtering is enabled, double the number of epochs in file
 				if (options->filterIterations==2) {
-					epoch->numEpochsfile*=2;
+					if (options->StartEpoch.MJDN!=-1) {
+						//Backwards filtering. It will process from the start of the file (or the first epoch set by user) to the end
+						//and then reprocess the whole file backwards
+						epoch->numEpochsfile+=(tdiff(&lastEpoch,&epoch->FirstEpochHeader))/interval+1.;
+					} else {
+						epoch->numEpochsfile*=2;
+					}
 				}
 			} else {
 				//If error reading header, disable printing progress for precaution
@@ -2736,51 +3380,51 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 					}
 					//Read epoch time
 					if (epoch->source == RINEX2) {
-						getstr(aux,line,0,4);
+						getstr(aux,line,len,0,4);
 						yy = tm.tm_year = atoi(aux);
 						if (tm.tm_year <= 70) tm.tm_year += 100;
-						getstr(aux,line,3,4);
+						getstr(aux,line,len,3,4);
 						mm = atoi(aux);
 						tm.tm_mon  = mm - 1;
-						getstr(aux,line,6,4);
+						getstr(aux,line,len,6,4);
 						dd = tm.tm_mday = atoi(aux);
-						getstr(aux,line,9,4);
+						getstr(aux,line,len,9,4);
 						if(aux[1]=='.'||aux[2]=='.') {
 							hour= tm.tm_hour = -1;
 						} else {
 							hour = tm.tm_hour = atoi(aux);
 						}
-						getstr(aux,line,12,4);
-						min = tm.tm_min  = atoi(aux);
-						getstr(aux,line,16,10);
+						getstr(aux,line,len,12,4);
+						minute = tm.tm_min  = atoi(aux);
+						getstr(aux,line,len,16,10);
 						tm.tm_sec  = atoi(aux);
 						seconds = atof(aux);
 					} else {
 						//RINEX v3
 						if (line[0]=='>' && len<60) {
 							//Line with valid epoch
-							getstr(aux,line,2,4);
+							getstr(aux,line,len,2,4);
 							yy =  atoi(aux);
 							if (yy>=2000) yy-=2000;
 							else yy-=1900;
 							tm.tm_year = atoi(aux)-1900;
-							getstr(aux,line,7,2);
+							getstr(aux,line,len,7,2);
 							mm = atoi(aux);
 							tm.tm_mon = mm-1;
-							getstr(aux,line,10,2);
+							getstr(aux,line,len,10,2);
 							dd = tm.tm_mday = atoi(aux);
-							getstr(aux,line,13,2);
+							getstr(aux,line,len,13,2);
 							hour = tm.tm_hour = atoi(aux);
-							getstr(aux,line,16,2);
-							min = tm.tm_min  = atoi(aux);
-							getstr(aux,line,19,10);
+							getstr(aux,line,len,16,2);
+							minute = tm.tm_min  = atoi(aux);
+							getstr(aux,line,len,19,10);
 							tm.tm_sec  = atoi(aux);
 							seconds = atof(aux);
 						} else {
 							hour=-1;
 						}
 					}
-					if (yy>=0 && yy<=99 && mm>=1 && mm<=12 && dd>=1 && dd<=31 && hour>=0 && hour<=23 && min>=0 &&min<=59) {
+					if (yy>=0 && yy<=99 && mm>=1 && mm<=12 && dd>=1 && dd<=31 && hour>=0 && hour<=23 && minute>=0 &&minute<=59) {
 						//Epoch timestamp found
 						break;
 					}
@@ -2792,7 +3436,7 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
 					secondEpoch.MJDN = MJDN(&tm);
 					secondEpoch.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
 					interval=tdiff(&secondEpoch,&firstEpoch);
-					if (interval<1E-4) {
+					if (interval<DIFFEQTHRESHOLD) {
 						//Epoch repeated due to an event epoch just in the first epoch
 						//Keep reading epochs until the epoch changes
 						i=0;
@@ -2816,179 +3460,257 @@ int readRinexObsHeader (FILE *fd, FILE *fdout, TEpoch *epoch, TOptions *options)
  * Name                           |Da|Unit|Description
  * FILE  *fd                       I  N/A  File descriptor
  * TEpoch  *epoch                  O  N/A  Structure to save the data
- * TConstellation  *constellation  I  N/A  TConstellation structure
- * enum ProcessingDirection        I  N/A  Direction of the read
- *                                         pFORWARD  => Forward
- *                                         pBACKWARD => Backward
+ * char *Epochstr                  O  N/A  String to save the current epoch processed
+ *                                         which whill be shown in the progress bar
  * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1 => Properly read
  *                                         2 => Another file concatenated
  *                                         0 => Error or EOF (no more epochs)
  *****************************************************************************/
-int readRinexObsEpoch (FILE *fd, TEpoch *epoch, TConstellation *constellation, enum ProcessingDirection direction, char *Epochstr, TOptions *options) {
-	char		line[MAX_INPUT_LINE];
-	char		aux[100];
-	char		cons;
-	int			len = 0;
-	int			properlyRead = 0;
-	int			error = 0;
-	int			i, j, k;
-	int			n;
-	int			notSupportedSatellites = 0;
-	int			numEpochsMissing;
-	struct tm	tm;
-	double		seconds;
-	double		value;
-	int			nextRead;
-	int			ret;
+int readRinexObsEpoch (FILE *fd, TEpoch *epoch, char *Epochstr, TOptions *options) {
+	char					line[MAX_INPUT_LINE];
+	char					aux[100];
+	char					cons;
+	int						len = 0;
+	int						properlyRead = 0;
+	int						error = 0;
+	int						i, j, k;
+	int						n;
+	int						numEpochsMissing;
+	int						invalidDate=0;
+	struct tm				tm;
+	double					seconds;
+	double					value;
+	int						nextRead;
+	//int						ret;
+	int						posMeasSrc,posMeasDest;
+	enum MeasurementType	meas;
+	enum GNSSystem			GNSS;
 
-	// For converting from SNR flag in RINEX to dBHz. 60 means don't care (0 in RINEX) or very high (9 in RINEX)
+	// For converting from SNR flag in RINEX to dBHz. The don't care value (0 in RINEX) is set to 53 so the max SNR
+	// filter (with the default value) does not filter measurements without SNR.
 	// There is no fixed value for very high SNR (9 in RINEX). A value is 60 is set in order to give a higher enough
-	// value when computing the satellite weight using the SNR
-	static int	SNRtable[10] = { 60, 11, 17, 23, 29, 35, 41, 47, 53, 60 };
+	// value when computing the satellite weight using the SNR (but they will be filtered by the maximum SNR filter
+	// with the default value)
 
 	static int	twoepochs=1;	//Variable to read only the first two epochs to compute data rate file
-	static int	lastCSindex[2]={0,0};	//Variable holding the first free index of all satellites viewed
+	static int	lastCSindex[NUM_OBSRINEX]={0,0};	//Variable holding the first free index of all satellites viewed
+
+	for(i=0;i<MAX_INPUT_LINE;i++) line[i]='\0'; //To avoid using uninitialized values when comparing substrings in "line" 
 
 	// Rewind for backward processing
-	if ( direction == pBACKWARD ) {
-		ret = rewindEpochRinexObs(fd,epoch->source);
-		if ( ret == 0 ) return 0;
-		ret = rewindEpochRinexObs(fd,epoch->source);
-		if ( ret == 0 ) return 0;
+	if ( epoch->direction == pBACKWARD ) {
+		//ret = rewindEpochRinexObs(fd,epoch->source);
+		//if ( ret == 0 ) return 0;
+		//ret = rewindEpochRinexObs(fd,epoch->source);
+		//if ( ret == 0 ) return 0;
+		if (epoch->numEpochReadFilePos<0) return 0;
+		fseek(fd,epoch->epochReadFilePos[epoch->numEpochReadFilePos],SEEK_SET);
+		epoch->numEpochReadFilePos--;
 	}
 
 	//Remove index values from previous epoch
 	for (i=0;i<epoch->numSatellites;i++) {
 		epoch->satIndex[epoch->sat[i].GNSS][epoch->sat[i].PRN]=-1;
+		epoch->sat2Printpos[i]=-1;
 	}
+	//Set number of satellites per GNSS to 0 and GNSS print position to -1
+	for (i=0;i<MAX_GNSS;i++) {
+		epoch->numSatellitesGNSS[i]=0;
+		epoch->GNSS2PrintPos[i]=-1;
+		epoch->GNSSinEpoch[i]=0;
+	}
+	//Set number of constellations to 0
+	epoch->numPrintGNSS=0;
+	epoch->numGNSSinEpoch=0;
 
 	
 	if (getL(line,&len,fd)!=-1) {
 		properlyRead = 1;
 		// Block to detect new RINEX header, it only affects when large RINEX are used
-		if (getLback(line,&len,fd)!=-1) {
-			getL(line,&len,fd);
-			getstr(aux,line,60,80);
-			if (strncmp(aux,"RINEX VERSION / TYPE",20)==0) {
-				getLback(line,&len,fd);
-				return 2;
-			}
+		if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
+			strcpy(epoch->bufferHeaderLine,line);
+			epoch->bufferHeaderLineLen=len;
+			return 2;
 		}
 		if (epoch->source == RINEX2) {
-			// RINEX 2.11				
-			getstr(aux,line,27,2);
+
+			//////////////////////////////////
+			////RINEX 2 observation file
+
+			getstr(aux,line,len,27,2);
 			epoch->flag = atoi(aux);
 			
 			if (epoch->flag>1) { // Unusable epoch
-				if ( direction == pBACKWARD ) {
-					//Save previous epoch
-					memcpy(&epoch->PreviousEpoch,&epoch->t,sizeof(TTime));
-					//When going backwards, skip epoch events and look for previous epoch in RINEX observation file
-					//If next valid epoch was read, it would make an infinite loop as we want back one epoch, but read two,
-					//and the next time we enter this function, we would go back two epochs, which results in always reading 
-					//the same epoch
-					ret = rewindEpochRinexObs(fd,epoch->source);
-					if ( ret == 0 ) return 0;
-				} else {
-					getstr(aux,line,1,2);
-					tm.tm_year = atoi(aux);
-					if (tm.tm_year <= 70) tm.tm_year += 100;
-					getstr(aux,line,4,2);
-					tm.tm_mon  = atoi(aux)-1;
-					getstr(aux,line,7,2);
-					tm.tm_mday = atoi(aux);
-					getstr(aux,line,10,2);
-					tm.tm_hour = atoi(aux);
-					getstr(aux,line,13,2);
-					tm.tm_min  = atoi(aux);
-					getstr(aux,line,16,10);
-					tm.tm_sec  = atoi(aux);
-					seconds = atof(aux);
-					getstr(aux,line,30,2);
-					n = atoi(aux);
-					for (i=0;i<=n;i++) {
-						if (getL(line,&len,fd)==-1) {
-							return 0;
+				while(epoch->flag>1) { //There can be multiple event epochs
+					if ( epoch->direction == pBACKWARD ) {
+						//Save previous epoch
+						memcpy(&epoch->PreviousEpoch,&epoch->t,sizeof(TTime));
+						//When going backwards, skip epoch events and look for previous epoch in RINEX observation file
+						//If next valid epoch was read, it would make an infinite loop as we want back one epoch, but read two,
+						//and the next time we enter this function, we would go back two epochs, which results in always reading 
+						//the same epoch
+						/*ret = rewindEpochRinexObs(fd,epoch->source);
+						if ( ret == 0 ) return 0;
+						ret = rewindEpochRinexObs(fd,epoch->source);
+						if ( ret == 0 ) return 0;
+						if (getL(line,&len,fd)==-1) return 0;*/
+					} else {
+						invalidDate=0;
+						getstr(aux,line,len,1,2);
+						tm.tm_year = atoi(aux);
+						if (tm.tm_year<=0) invalidDate=1;
+						else if (tm.tm_year <= 70) tm.tm_year += 100;
+						getstr(aux,line,len,4,2);
+						tm.tm_mon  = atoi(aux);
+						if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+						tm.tm_mon  -= 1;
+						getstr(aux,line,len,7,2);
+						tm.tm_mday = atoi(aux);
+						if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+						getstr(aux,line,len,10,2);
+						tm.tm_hour = atoi(aux);
+						if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+						getstr(aux,line,len,13,2);
+						tm.tm_min  = atoi(aux);
+						if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+						getstr(aux,line,len,16,10);
+						tm.tm_sec  = atoi(aux);
+						if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1;	//Seconds can have value 60 when a leap second is inserted
+						if (!options->integerRINEXObsSeconds) {
+							seconds = atof(aux);
+						} else {
+							seconds=(double)tm.tm_sec;
 						}
-						if (strncmp(&line[60],"APPROX POSITION XYZ",19)==0) {
-							if (options->receiverPositionSource==rpRINEX || ( ( (options->receiverPositionSource == rpCALCULATERINEX) || (options->receiverPositionSource == rpCALCULATERINEXREF)  ) && epoch->numAproxPosRead==0)) {
-								getstr(aux,line,1,14);
-								epoch->receiver.aproxPosition[0] = atof(aux);
-								getstr(aux,line,14,14);
-								epoch->receiver.aproxPosition[1] = atof(aux);
-								getstr(aux,line,28,14);
-								epoch->receiver.aproxPosition[2] = atof(aux);
-								epoch->receiver.aproxPositionError = 1e4; // 10 Km
-								epoch->numAproxPosRead++;
-							} else if ( options->receiverPositionSource >= rpRTCMbaseline && options->receiverPositionSource <= rpRTCMRoverUSERREF  ) {
-								getstr(aux,line,1,14);
-								epoch->receiver.aproxPosition[0] = atof(aux);
-								getstr(aux,line,14,14);
-								epoch->receiver.aproxPosition[1] = atof(aux);
-								getstr(aux,line,28,14);
-								epoch->receiver.aproxPosition[2] = atof(aux);
-								epoch->receiver.aproxPositionError = 0.1; // 10 cm
-								epoch->numAproxPosRead++;
-							} 
-							if ( ( options->receiverPositionSource == rpRTCMRINEXROVER || options->receiverPositionSource == rpRTCMUserRINEXROVER ) && epoch->DGNSSstruct==0 ) {
-								getstr(aux,line,1,14);
-								epoch->receiver.aproxPositionRover[0] = atof(aux);
-								getstr(aux,line,14,14);
-								epoch->receiver.aproxPositionRover[1] = atof(aux);
-								getstr(aux,line,28,14);
-								epoch->receiver.aproxPositionRover[2] = atof(aux);
+						if (invalidDate==1) {
+							sprintf(messagestr,"Invalid date in line '%.80s' in %s observation file",line,epoch->DGNSSstruct==0?"rover":"DGNSS");
+							printError(messagestr,options);
+						}
+						getstr(aux,line,len,30,2);
+						n = atoi(aux);
+						for (i=0;i<=n;i++) {
+							if (i==n) {
+								//Update position of epoch start to remove event epoch
+								epoch->epochReadFilePos[epoch->numEpochReadFilePos-1]=ftell(fd);
 							}
-							if(epoch->DGNSSstruct==1) {
-								if(epoch->receiver.numRecStation==0) {
-									epoch->receiver.RecStationCoord=malloc(sizeof(double*));
-									epoch->receiver.RecStationCoord[0]=malloc(sizeof(double)*3);
-									memcpy(epoch->receiver.RecStationCoord[0],epoch->receiver.aproxPosition,sizeof(double)*3);
-									epoch->receiver.numRecStation++;
-								} else {
-									if(epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][0]!=epoch->receiver.aproxPosition[0] 
-											|| epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][1]!=epoch->receiver.aproxPosition[1]
-											|| epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][2]!=epoch->receiver.aproxPosition[2]) {
-										//Station coordinates are differents from the previous read
-										epoch->receiver.RecStationCoord=realloc(epoch->receiver.RecStationCoord,sizeof(double*)*(epoch->receiver.numRecStation+1));
-										epoch->receiver.RecStationCoord[epoch->receiver.numRecStation]=malloc(sizeof(double)*3);
-										memcpy(epoch->receiver.RecStationCoord[epoch->receiver.numRecStation],epoch->receiver.aproxPosition,sizeof(double)*3);
-										epoch->receiver.ChangedStaEpoch=realloc(epoch->receiver.ChangedStaEpoch,sizeof(TTime)*epoch->receiver.numRecStation);
-										memcpy(&epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1],&epoch->t,sizeof(TTime));
-										epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1].MJDN=MJDN(&tm);
-										epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1].SoD=(double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+							if (getL(line,&len,fd)==-1) {
+								return 0;
+							}
+							if (strncmp(&line[60],"APPROX POSITION XYZ",19)==0) {
+								if (options->receiverPositionSource==rpRINEX || ( ( (options->receiverPositionSource == rpCALCULATERINEX) || (options->receiverPositionSource == rpCALCULATERINEXREF)  ) && epoch->numAproxPosRead==0)) {
+									getstr(aux,line,len,1,14);
+									epoch->receiver.aproxPosition[0] = atof(aux);
+									getstr(aux,line,len,14,14);
+									epoch->receiver.aproxPosition[1] = atof(aux);
+									getstr(aux,line,len,28,14);
+									epoch->receiver.aproxPosition[2] = atof(aux);
+									epoch->receiver.aproxPositionError = 1e4; // 10 Km
+									epoch->numAproxPosRead++;
+								} else if ( options->receiverPositionSource >= rpRTCMbaseline && options->receiverPositionSource <= rpRTCMRoverUSERREF  ) {
+									getstr(aux,line,len,1,14);
+									epoch->receiver.aproxPosition[0] = atof(aux);
+									getstr(aux,line,len,14,14);
+									epoch->receiver.aproxPosition[1] = atof(aux);
+									getstr(aux,line,len,28,14);
+									epoch->receiver.aproxPosition[2] = atof(aux);
+									epoch->receiver.aproxPositionError = 0.1; // 10 cm
+									epoch->numAproxPosRead++;
+								} 
+								if ( ( options->receiverPositionSource == rpRTCMRINEXROVER || options->receiverPositionSource == rpRTCMUserRINEXROVER ) && epoch->DGNSSstruct==0 ) {
+									getstr(aux,line,len,1,14);
+									epoch->receiver.aproxPositionRover[0] = atof(aux);
+									getstr(aux,line,len,14,14);
+									epoch->receiver.aproxPositionRover[1] = atof(aux);
+									getstr(aux,line,len,28,14);
+									epoch->receiver.aproxPositionRover[2] = atof(aux);
+								}
+								if(epoch->DGNSSstruct==1) {
+									if(epoch->receiver.numRecStation==0) {
+										epoch->receiver.RecStationCoord=malloc(sizeof(double*));
+										epoch->receiver.RecStationCoord[0]=malloc(sizeof(double)*3);
+										memcpy(epoch->receiver.RecStationCoord[0],epoch->receiver.aproxPosition,sizeof(double)*3);
 										epoch->receiver.numRecStation++;
+									} else {
+										if(epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][0]!=epoch->receiver.aproxPosition[0] 
+												|| epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][1]!=epoch->receiver.aproxPosition[1]
+												|| epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][2]!=epoch->receiver.aproxPosition[2]) {
+											//Station coordinates are differents from the previous read
+											epoch->receiver.RecStationCoord=realloc(epoch->receiver.RecStationCoord,sizeof(double*)*(epoch->receiver.numRecStation+1));
+											epoch->receiver.RecStationCoord[epoch->receiver.numRecStation]=malloc(sizeof(double)*3);
+											memcpy(epoch->receiver.RecStationCoord[epoch->receiver.numRecStation],epoch->receiver.aproxPosition,sizeof(double)*3);
+											epoch->receiver.ChangedStaEpoch=realloc(epoch->receiver.ChangedStaEpoch,sizeof(TTime)*epoch->receiver.numRecStation);
+											memcpy(&epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1],&epoch->t,sizeof(TTime));
+											epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1].MJDN=MJDN(&tm);
+											epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1].SoD=(double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+											epoch->receiver.numRecStation++;
+										}
 									}
 								}
 							}
 						}
 					}
+					//Check for more event epochs
+					getstr(aux,line,len,27,2);
+					epoch->flag = atoi(aux);
+				}
+				// Check again for RINEX header, as it can occur after an event epoch
+				if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
+					strcpy(epoch->bufferHeaderLine,line);
+					epoch->bufferHeaderLineLen=len;
+					return 2;
 				}
 			}
 			
 			//Save previous epoch
 			memcpy(&epoch->PreviousEpoch,&epoch->t,sizeof(TTime));
 
-			getstr(aux,line,1,2);
+			invalidDate=0;
+			getstr(aux,line,len,1,2);
 			tm.tm_year = atoi(aux);
+			if (tm.tm_year<=0) invalidDate=1;
 			if (tm.tm_year <= 70) tm.tm_year += 100;
-			getstr(aux,line,4,2);
-			tm.tm_mon  = atoi(aux)-1;
-			getstr(aux,line,7,2);
+			getstr(aux,line,len,4,2);
+			tm.tm_mon  = atoi(aux);
+			if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+			tm.tm_mon  -= 1;
+			getstr(aux,line,len,7,2);
 			tm.tm_mday = atoi(aux);
-			getstr(aux,line,10,2);
+			if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+			getstr(aux,line,len,10,2);
 			tm.tm_hour = atoi(aux);
-			getstr(aux,line,13,2);
+			if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+			getstr(aux,line,len,13,2);
 			tm.tm_min  = atoi(aux);
-			getstr(aux,line,16,10);
+			if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+			getstr(aux,line,len,16,10);
 			tm.tm_sec  = atoi(aux);
-			seconds = atof(aux);
+			if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1;	//Seconds can have value 60 when a leap second is inserted
+            if (!options->integerRINEXObsSeconds) {
+				seconds = atof(aux);
+            } else {
+                seconds=(double)tm.tm_sec;
+			}
 			epoch->t.MJDN = MJDN(&tm);
 			epoch->t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+			if (epoch->t.MJDN<FIRSTMJDNGPS || invalidDate==1) {
+				sprintf(messagestr,"Invalid date in line '%.80s' in %s observation file",line,epoch->DGNSSstruct==0?"rover":"DGNSS");
+				printError(messagestr,options);
+			}
+			//To convert observation time to GPS time
+			epoch->t=tdadd(&epoch->t,epoch->ObsTimeToGPSTime);
+			//Fill current epoch string for printing
+			strcpy(epoch->tStr,t2doystr(&epoch->t));
+			sprintf(epoch->tSoDHourStr,"%s %02d:%02d:%05.2f",epoch->tStr,tm.tm_hour,tm.tm_min,seconds);
+			// Calculate GPS Week and Seconds of Week
+			ttime2gpswsnoroll(&epoch->t, &epoch->GPSweek, &epoch->SoW);
 
 			//Look for data gaps
-			numEpochsMissing=abs((int)(tdiff(&epoch->t,&epoch->PreviousEpoch)/epoch->receiver.interval))-1;
+			if (epoch->PreviousEpoch.MJDN!=-1) {
+				numEpochsMissing=abs((int)(tdiff(&epoch->t,&epoch->PreviousEpoch)/epoch->receiver.interval))-1;
+			} else {
+				numEpochsMissing=0;
+			}
 			if (numEpochsMissing>0) {
 				if (epoch->PreviousEpoch.MJDN!=-1) {
 					epoch->CurrentDataGapSize=numEpochsMissing;
@@ -3009,15 +3731,18 @@ int readRinexObsEpoch (FILE *fd, TEpoch *epoch, TConstellation *constellation, e
 							epoch->numEpochsprocessed++;
 							epoch->CurrentPercentage=100*epoch->numEpochsprocessed/epoch->numEpochsfile;
 							if ((epoch->CurrentPercentage-epoch->PreviousPercentage)>=0.1) {
-								sprintf(Epochstr,"Current epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f (%5.1f%%)        ",t2doystr(&epoch->t),tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->CurrentPercentage);
+								sprintf(Epochstr,"Current epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f (%5.1f%%)        ",epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->CurrentPercentage);
 								epoch->NewPercentage=1;
 							}
+						} else {
+							sprintf(Epochstr,"Skipping epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f                  ",epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds);
+							epoch->NewPercentage=1;
 						}
 					} else {
 						epoch->numEpochsprocessed++;
 						epoch->CurrentPercentage=100*epoch->numEpochsprocessed/epoch->numEpochsfile;
 						if ((epoch->CurrentPercentage-epoch->PreviousPercentage)>=0.1) {
-							sprintf(Epochstr,"Current epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f (%5.1f%%)        ",t2doystr(&epoch->t),tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->CurrentPercentage);
+							sprintf(Epochstr,"Current epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f (%5.1f%%)        ",epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->CurrentPercentage);
 							epoch->NewPercentage=1;
 						}
 					}
@@ -3026,19 +3751,19 @@ int readRinexObsEpoch (FILE *fd, TEpoch *epoch, TConstellation *constellation, e
 
 
 			if (twoepochs) {
-				if(epoch->firstepoch.SoD==-1.) {
-					memcpy(&epoch->firstepoch,&epoch->t,sizeof(TTime));
+				if(epoch->firstEpochFile.SoD==-1.) {
+					memcpy(&epoch->firstEpochFile,&epoch->t,sizeof(TTime));
 				} else {
-					if (tdiff(&epoch->t,&epoch->firstepoch)>1E-4) {
+					if (tdiff(&epoch->t,&epoch->firstEpochFile)>DIFFEQTHRESHOLD) {
 						//This is for the case we read the first epoch two times.
 						//This occurs if we need to read the first epoch in order to look for Glonass k factors in the navigation file
 						twoepochs=0;
-						memcpy(&epoch->secondepoch,&epoch->t,sizeof(TTime));
+						memcpy(&epoch->secondEpochFile,&epoch->t,sizeof(TTime));
 					}
 				}
 			}
 				
-			getstr(aux,line,30,2);
+			getstr(aux,line,len,30,2);
 			epoch->numSatellites = atoi(aux);
 			for (i=0,j=0;i<epoch->numSatellites;i++,j++) { // Get satellite PRNs
 				if ((i%12)==0 && i!=0) {
@@ -3046,163 +3771,304 @@ int readRinexObsEpoch (FILE *fd, TEpoch *epoch, TConstellation *constellation, e
 					j = 0;
 				}
 				cons = line[32+3*j];
-				getstr(aux,line,33+3*j,2);
+				getstr(aux,line,len,33+3*j,2);
 				epoch->sat[i].PRN = atoi(aux);
-				if (cons=='G' || cons==' ')
-					epoch->sat[i].GNSS = GPS;
-				else if (cons=='S')
-					epoch->sat[i].GNSS = GEO;
-				else if (cons=='R')
-					epoch->sat[i].GNSS = GLONASS;
-				else if (cons=='E')
-					epoch->sat[i].GNSS = Galileo;
+				epoch->sat[i].GNSS=gnsschar2gnsstype(cons);
+				epoch->sat2Printpos[i]=epoch->numSatellitesGNSS[epoch->sat[i].GNSS];
+				epoch->numSatellitesGNSS[epoch->sat[i].GNSS]++;
+				if (cons=='S') {
+					if(epoch->sat[i].PRN>QZSSSBASPRNOFFSET) {
+						//In RINEX <=3.03,SBAS QZSS signal was mapped to PRN S83-S87.
+						//To avoid having a matrix of size 87 for the maximum number PRN,
+						//these satellites are mapped to S01-S05
+						epoch->sat[i].PRN-=QZSSSBASPRNOFFSET;
+					} else if (epoch->sat[i].PRN<=0 || epoch->sat[i].PRN>=MAX_SATELLITES_PER_GNSS) {
+						sprintf(messagestr,"Invalid PRN number '%s' in epoch %17s / %4d %02d %02d %02d:%02d:%04.1f in %s observation file",aux,epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->DGNSSstruct==0?"rover":"DGNSS");
+						printError(messagestr,options);
+					}
+				} else if (epoch->sat[i].PRN<=0 || epoch->sat[i].PRN>=MAX_SATELLITES_PER_GNSS) {
+					sprintf(messagestr,"Invalid PRN number '%s' in epoch %17s / %4d %02d %02d %02d:%02d:%04.1f in %s observation file",aux,epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->DGNSSstruct==0?"rover":"DGNSS");
+					printError(messagestr,options);
+				}
+				if (epoch->GNSS2PrintPos[epoch->sat[i].GNSS]==-1) {
+					epoch->GNSS2PrintPos[epoch->sat[i].GNSS]=epoch->numPrintGNSS;
+					epoch->numPrintGNSS++;
+					epoch->GNSSinEpoch[epoch->sat[i].GNSS]=1;
+					epoch->numGNSSinEpoch++;
+				}
 			}
 			for (i=0;i<epoch->numSatellites;i++) { // Get satellite measurements
 				if (getL(line,&len,fd)==-1) error = 1;
 				nextRead = 0;
-				for (j=0,k=0;j<epoch->measOrder[epoch->sat[i].GNSS].nDiffMeasurements;j++,k++) {
-					if (nextRead) {
+				//If satellite is unselected, don't parse its measurements, as it will not be used, even for printing
+				if (options->includeSatellite[epoch->sat[i].GNSS][epoch->sat[i].PRN]==1) { 
+					for (j=0,k=0;j<epoch->measOrder[epoch->sat[i].GNSS].nDiffMeasurementsRINEXHeader;j++,k++) {
+						if (nextRead) {
+							if (getL(line,&len,fd)==-1) error = 1;
+							nextRead = 0;
+						}
+						getstr(aux,line,len,16*k,14);
+						value = atof(aux);
+						if (value==0) value = -1.;
+						epoch->sat[i].meas[j].value = value;
+						epoch->sat[i].meas[j].rawvalue = value;
+						if (len<(15+16*k) || line[14+16*k]==' ') {
+							epoch->sat[i].meas[j].LLI = -2; //Negative but multiple of 2 so no LLI is detected
+						} else {
+							getstr(aux,line,len,14+16*k,1);
+							epoch->sat[i].meas[j].LLI = atoi(aux);
+						}
+						if (len<(16+16*k) || line[15+16*k]==' ') {
+							epoch->sat[i].meas[j].hasSNRflag=0;
+							epoch->sat[i].meas[j].SNRflag = -1;
+							epoch->sat[i].meas[j].SNRflagdBHz = SNRtable[0];
+							if (epoch->measOrder[epoch->sat[i].GNSS].ind2Meas[j]%4==0) {
+								//It is a SNR measurement
+								epoch->sat[i].meas[j].SNRvalue=value;
+							} else {
+								epoch->sat[i].meas[j].SNRvalue = SNRtable[0];
+							}
+						} else {
+							getstr(aux,line,len,15+16*k,1);
+							epoch->sat[i].meas[j].hasSNRflag=1;
+							epoch->sat[i].meas[j].SNRflag = atoi(aux);
+							epoch->sat[i].meas[j].SNRflagdBHz = SNRtable[epoch->sat[i].meas[j].SNRflag];
+							if (epoch->measOrder[epoch->sat[i].GNSS].ind2Meas[j]%4==0) {
+								//It is a SNR measurement
+								epoch->sat[i].meas[j].SNRvalue=value;
+							} else {
+								epoch->sat[i].meas[j].SNRvalue = epoch->sat[i].meas[j].SNRflagdBHz;
+							}
+						}
+						epoch->sat[i].meas[j].dataFlag = 0;
+						if ((k+1)%5==0) { // Following observables are in the next lines (max 5 per line)
+							nextRead = 1;
+							k=-1; // k will be increased in the for loop
+						}
+					}
+				} else {
+					//If satellite is skipped, skip the next data lines from the satellite
+					j=(int)((double)epoch->measOrder[epoch->sat[i].GNSS].nDiffMeasurementsRINEXHeader)/5.;
+					if((epoch->measOrder[epoch->sat[i].GNSS].nDiffMeasurementsRINEXHeader%5)==0) {
+						j--;
+					}
+					for(k=0;k<j;k++) {
 						if (getL(line,&len,fd)==-1) error = 1;
-						nextRead = 0;
-					}
-					getstr(aux,line,16*k,14);
-					value = atof(aux);
-					if (value==0) value = -1;
-					epoch->sat[i].meas[j].value = value;
-					epoch->sat[i].meas[j].rawvalue = value;
-					getstr(aux,line,14+16*k,1);
-					epoch->sat[i].meas[j].LLI = atoi(aux);
-					getstr(aux,line,15+16*k,1);
-					if (line[15+16*k]==' ') {
-						epoch->sat[i].meas[j].hasSNRflag=0;
-					} else {
-						epoch->sat[i].meas[j].hasSNRflag=1;
-					}
-					epoch->sat[i].meas[j].SNR = atoi(aux);
-					epoch->sat[i].meas[j].SNRdBHz = SNRtable[epoch->sat[i].meas[j].SNR];
-					epoch->sat[i].meas[j].dataFlag = 0;
-					if ((k+1)%5==0) { // Following observables are in the next lines (max 5 per line)
-						nextRead = 1;
-						k=-1; // k will be increased in the for loop
 					}
 				}
-				if (epoch->sat[i].GNSS==GPS) epoch->lastSBASindex=i; //When gLAB is multiconstellation and SBAS monitors also other constellations, this has to include other constellations
+
+				for(j=options->noMixedGEOdata;j<=epoch->numSBASsatellites;j++) {
+					if (options->SBASConstUsed[j][options->SBASmodePos][epoch->sat[i].GNSS]==1 && options->includeSatellite[epoch->sat[i].GNSS][epoch->sat[i].PRN]==1) {
+						epoch->lastSBASindex[j]=i; 
+					}
+				}
+					
 				epoch->satIndex[epoch->sat[i].GNSS][epoch->sat[i].PRN]=i;
 
 				if (epoch->satCSIndex[epoch->sat[i].GNSS][epoch->sat[i].PRN]==-1) {
+					//Satellite not seen before
+					if (lastCSindex[epoch->DGNSSstruct]==MAX_SATELLITES_VIEWED) {
+						sprintf(messagestr,"Maximum different satellites viewed (of all constellations) is %d (MAX_SATELLITES_VIEWED constant), but RINEX observation file has more than this maximum",MAX_SATELLITES_VIEWED);
+						printError(messagestr,options);
+					}
 					epoch->satCSIndex[epoch->sat[i].GNSS][epoch->sat[i].PRN]=lastCSindex[epoch->DGNSSstruct];
 					lastCSindex[epoch->DGNSSstruct]++;
+					//Fill measurements
+					FillMeasurements(epoch->sat[i].GNSS,epoch->sat[i].PRN,i,epoch,options);
+				} else if (options->MeasSelected[epoch->DGNSSstruct][epoch->sat[i].GNSS][epoch->sat[i].PRN]==MEASUNSELECTED) {
+					//Fill pending measurements
+					FillMeasurements(epoch->sat[i].GNSS,epoch->sat[i].PRN,i,epoch,options);
 				}
 			}
 		} else if (epoch->source==RINEX3) {
-			// RINEX 3.00
-			getstr(aux,line,30,2);
+			
+			//////////////////////////////////
+			////RINEX 3 observation file
+
+			getstr(aux,line,len,30,2);
 			epoch->flag = atoi(aux);
 			
 			if (epoch->flag>1) { // Unusable epoch
-				if ( direction == pBACKWARD ) {
-					//Save previous epoch
-					memcpy(&epoch->PreviousEpoch,&epoch->t,sizeof(TTime));
-					//When going backwards, skip epoch events and look for previous epoch in RINEX observation file
-					//If next valid epoch was read, it would make an infinite loop as we want back one epoch, but read two,
-					//and the next time we enter this function, we would go back two epochs, which results in always reading 
-					//the same epoch
-					ret = rewindEpochRinexObs(fd,epoch->source);
-					if ( ret == 0 ) return 0;
-				} else {
-					getstr(aux,line,2,4);
-					tm.tm_year = atoi(aux)-1900;
-					getstr(aux,line,7,2);
-					tm.tm_mon  = atoi(aux)-1;
-					getstr(aux,line,10,2);
-					tm.tm_mday = atoi(aux);
-					getstr(aux,line,13,2);
-					tm.tm_hour = atoi(aux);
-					getstr(aux,line,16,2);
-					tm.tm_min  = atoi(aux);
-					getstr(aux,line,19,10);
-					tm.tm_sec  = atoi(aux);
-					seconds = atof(aux);
-
-					getstr(aux,line,33,2);
-					n = atoi(aux);
-					for (i=0;i<=n;i++) {
-						if (getL(line,&len,fd)==-1) {
-							return 0;
+				while(epoch->flag>1) { //There can be multiple event epochs
+					if ( epoch->direction == pBACKWARD ) {
+						//Save previous epoch
+						memcpy(&epoch->PreviousEpoch,&epoch->t,sizeof(TTime));
+						//When going backwards, skip epoch events and look for previous epoch in RINEX observation file
+						//If next valid epoch was read, it would make an infinite loop as we want back one epoch, but read two,
+						//and the next time we enter this function, we would go back two epochs, which results in always reading 
+						//the same epoch
+						/*ret = rewindEpochRinexObs(fd,epoch->source);
+						if ( ret == 0 ) return 0;
+						ret = rewindEpochRinexObs(fd,epoch->source);
+						if ( ret == 0 ) return 0;
+						if (getL(line,&len,fd)==-1) return 0;*/
+					} else {
+						invalidDate=0;
+						getstr(aux,line,len,2,4);
+						tm.tm_year = atoi(aux);
+						if (tm.tm_year<1900) invalidDate=1;
+						tm.tm_year -= 1900;
+						getstr(aux,line,len,7,2);
+						tm.tm_mon  = atoi(aux);
+						if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+						tm.tm_mon  -= 1;
+						getstr(aux,line,len,10,2);
+						tm.tm_mday = atoi(aux);
+						if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+						getstr(aux,line,len,13,2);
+						tm.tm_hour = atoi(aux);
+						if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+						getstr(aux,line,len,16,2);
+						tm.tm_min  = atoi(aux);
+						if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+						getstr(aux,line,len,19,10);
+						tm.tm_sec  = atoi(aux);
+						if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1;	//Seconds can have value 60 when a leap second is inserted
+						if (!options->integerRINEXObsSeconds) {
+							seconds = atof(aux);
+						} else {
+							seconds=(double)tm.tm_sec;
 						}
-						if (strncmp(&line[60],"APPROX POSITION XYZ",19)==0) {
-							if (options->receiverPositionSource==rpRINEX || ( ( (options->receiverPositionSource == rpCALCULATERINEX) || (options->receiverPositionSource == rpCALCULATERINEXREF)  ) && epoch->numAproxPosRead==0)) {
-								getstr(aux,line,1,14);
-								epoch->receiver.aproxPosition[0] = atof(aux);
-								getstr(aux,line,14,14);
-								epoch->receiver.aproxPosition[1] = atof(aux);
-								getstr(aux,line,28,14);
-								epoch->receiver.aproxPosition[2] = atof(aux);
-								epoch->receiver.aproxPositionError = 1e4; // 10 Km
-								epoch->numAproxPosRead++;
-							} else if ( options->receiverPositionSource >= rpRTCMbaseline && options->receiverPositionSource <= rpRTCMRoverUSERREF  ) {
-								getstr(aux,line,1,14);
-								epoch->receiver.aproxPosition[0] = atof(aux);
-								getstr(aux,line,14,14);
-								epoch->receiver.aproxPosition[1] = atof(aux);
-								getstr(aux,line,28,14);
-								epoch->receiver.aproxPosition[2] = atof(aux);
-								epoch->receiver.aproxPositionError = 0.1; // 10 cm
-								epoch->numAproxPosRead++;
+						if (invalidDate==1) {
+							sprintf(messagestr,"Invalid date in line '%.80s' in %s observation file",line,epoch->DGNSSstruct==0?"rover":"DGNSS");
+							printError(messagestr,options);
+						}
+
+						getstr(aux,line,len,33,2);
+						n = atoi(aux);
+						for (i=0;i<=n;i++) {
+							if (i==n) {
+								//Update position of epoch start to remove event epoch
+								epoch->epochReadFilePos[epoch->numEpochReadFilePos-1]=ftell(fd);
 							}
-							if ( ( options->receiverPositionSource == rpRTCMRINEXROVER || options->receiverPositionSource == rpRTCMUserRINEXROVER ) && epoch->DGNSSstruct==0 ) {
-								getstr(aux,line,1,14);
-								epoch->receiver.aproxPositionRover[0] = atof(aux);
-								getstr(aux,line,14,14);
-								epoch->receiver.aproxPositionRover[1] = atof(aux);
-								getstr(aux,line,28,14);
-								epoch->receiver.aproxPositionRover[2] = atof(aux);
+							if (getL(line,&len,fd)==-1) {
+								return 0;
 							}
-							if(epoch->DGNSSstruct==1) {
-								if(epoch->receiver.numRecStation==0) {
-									epoch->receiver.RecStationCoord=malloc(sizeof(double*));
-									epoch->receiver.RecStationCoord[0]=malloc(sizeof(double)*3);
-									memcpy(epoch->receiver.RecStationCoord[0],epoch->receiver.aproxPosition,sizeof(double)*3);
-									epoch->receiver.numRecStation++;
-								} else {
-									if(epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][0]!=epoch->receiver.aproxPosition[0] 
-											|| epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][1]!=epoch->receiver.aproxPosition[1]
-											|| epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][2]!=epoch->receiver.aproxPosition[2]) {
-										//Station coordinates are differents from the previous read
-										epoch->receiver.RecStationCoord=realloc(epoch->receiver.RecStationCoord,sizeof(double*)*(epoch->receiver.numRecStation+1));
-										epoch->receiver.RecStationCoord[epoch->receiver.numRecStation]=malloc(sizeof(double)*3);
-										memcpy(epoch->receiver.RecStationCoord[epoch->receiver.numRecStation],epoch->receiver.aproxPosition,sizeof(double)*3);
-										epoch->receiver.ChangedStaEpoch=realloc(epoch->receiver.ChangedStaEpoch,sizeof(TTime)*epoch->receiver.numRecStation);
-										epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1].MJDN=MJDN(&tm);
-										epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1].SoD=(double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+							if (strncmp(&line[60],"APPROX POSITION XYZ",19)==0) {
+								if (options->receiverPositionSource==rpRINEX || ( ( (options->receiverPositionSource == rpCALCULATERINEX) || (options->receiverPositionSource == rpCALCULATERINEXREF)  ) && epoch->numAproxPosRead==0)) {
+									getstr(aux,line,len,1,14);
+									epoch->receiver.aproxPosition[0] = atof(aux);
+									getstr(aux,line,len,14,14);
+									epoch->receiver.aproxPosition[1] = atof(aux);
+									getstr(aux,line,len,28,14);
+									epoch->receiver.aproxPosition[2] = atof(aux);
+									epoch->receiver.aproxPositionError = 1e4; // 10 Km
+									epoch->numAproxPosRead++;
+								} else if ( options->receiverPositionSource >= rpRTCMbaseline && options->receiverPositionSource <= rpRTCMRoverUSERREF  ) {
+									getstr(aux,line,len,1,14);
+									epoch->receiver.aproxPosition[0] = atof(aux);
+									getstr(aux,line,len,14,14);
+									epoch->receiver.aproxPosition[1] = atof(aux);
+									getstr(aux,line,len,28,14);
+									epoch->receiver.aproxPosition[2] = atof(aux);
+									epoch->receiver.aproxPositionError = 0.1; // 10 cm
+									epoch->numAproxPosRead++;
+								}
+								if ( ( options->receiverPositionSource == rpRTCMRINEXROVER || options->receiverPositionSource == rpRTCMUserRINEXROVER ) && epoch->DGNSSstruct==0 ) {
+									getstr(aux,line,len,1,14);
+									epoch->receiver.aproxPositionRover[0] = atof(aux);
+									getstr(aux,line,len,14,14);
+									epoch->receiver.aproxPositionRover[1] = atof(aux);
+									getstr(aux,line,len,28,14);
+									epoch->receiver.aproxPositionRover[2] = atof(aux);
+								}
+								if(epoch->DGNSSstruct==1) {
+									if(epoch->receiver.numRecStation==0) {
+										epoch->receiver.RecStationCoord=malloc(sizeof(double*));
+										epoch->receiver.RecStationCoord[0]=malloc(sizeof(double)*3);
+										memcpy(epoch->receiver.RecStationCoord[0],epoch->receiver.aproxPosition,sizeof(double)*3);
 										epoch->receiver.numRecStation++;
+									} else {
+										if(epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][0]!=epoch->receiver.aproxPosition[0] 
+												|| epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][1]!=epoch->receiver.aproxPosition[1]
+												|| epoch->receiver.RecStationCoord[epoch->receiver.numRecStation-1][2]!=epoch->receiver.aproxPosition[2]) {
+											//Station coordinates are differents from the previous read
+											epoch->receiver.RecStationCoord=realloc(epoch->receiver.RecStationCoord,sizeof(double*)*(epoch->receiver.numRecStation+1));
+											epoch->receiver.RecStationCoord[epoch->receiver.numRecStation]=malloc(sizeof(double)*3);
+											memcpy(epoch->receiver.RecStationCoord[epoch->receiver.numRecStation],epoch->receiver.aproxPosition,sizeof(double)*3);
+											epoch->receiver.ChangedStaEpoch=realloc(epoch->receiver.ChangedStaEpoch,sizeof(TTime)*epoch->receiver.numRecStation);
+											epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1].MJDN=MJDN(&tm);
+											epoch->receiver.ChangedStaEpoch[epoch->receiver.numRecStation-1].SoD=(double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+											epoch->receiver.numRecStation++;
+										}
 									}
 								}
 							}
 						}
 					}
+					//Check for more event epochs
+					getstr(aux,line,len,30,2);
+					epoch->flag = atoi(aux);
+				}
+				// Check again for RINEX header, as it can occur after an event epoch
+				if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
+					strcpy(epoch->bufferHeaderLine,line);
+					epoch->bufferHeaderLineLen=len;
+					return 2;
 				}
 			}
 			
 			// Save previous epoch
 			memcpy(&epoch->PreviousEpoch,&epoch->t,sizeof(TTime));
 
-			getstr(aux,line,2,4);
-			tm.tm_year = atoi(aux)-1900;
-			getstr(aux,line,7,2);
-			tm.tm_mon  = atoi(aux)-1;
-			getstr(aux,line,10,2);
+			invalidDate=0;
+			getstr(aux,line,len,2,4);
+			tm.tm_year = atoi(aux);
+			if (tm.tm_year<=1900) invalidDate=1;
+			tm.tm_year -= 1900;
+			getstr(aux,line,len,7,2);
+			tm.tm_mon  = atoi(aux);
+			if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+			tm.tm_mon  -= 1;
+			getstr(aux,line,len,10,2);
 			tm.tm_mday = atoi(aux);
-			getstr(aux,line,13,2);
+			if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+			getstr(aux,line,len,13,2);
 			tm.tm_hour = atoi(aux);
-			getstr(aux,line,16,2);
+			if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+			getstr(aux,line,len,16,2);
 			tm.tm_min  = atoi(aux);
-			getstr(aux,line,19,10);
+			if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+			getstr(aux,line,len,19,10);
 			tm.tm_sec  = atoi(aux);
-			seconds = atof(aux);
+			if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1;	//Seconds can have value 60 when a leap second is inserted
+            if (!options->integerRINEXObsSeconds) {
+				seconds = atof(aux);
+            } else {
+                seconds=(double)tm.tm_sec;
+			}
 			epoch->t.MJDN = MJDN(&tm);
 			epoch->t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+			if (epoch->t.MJDN<FIRSTMJDNGPS || invalidDate==1) {
+				sprintf(messagestr,"Invalid date in line '%.80s' in %s observation file",line,epoch->DGNSSstruct==0?"rover":"DGNSS");
+				printError(messagestr,options);
+			}
+			//To convert observation time to GPS time
+			epoch->t=tdadd(&epoch->t,epoch->ObsTimeToGPSTime);
+			//Fill current epoch string for printing
+			strcpy(epoch->tStr,t2doystr(&epoch->t));
+			sprintf(epoch->tSoDHourStr,"%s %02d:%02d:%05.2f",epoch->tStr,tm.tm_hour,tm.tm_min,seconds);
+			// Calculate GPS Week and Seconds of Week
+			ttime2gpswsnoroll(&epoch->t, &epoch->GPSweek, &epoch->SoW);
 			
+			//Look for data gaps
+			if (epoch->PreviousEpoch.MJDN!=-1) {
+				numEpochsMissing=abs((int)(tdiff(&epoch->t,&epoch->PreviousEpoch)/epoch->receiver.interval))-1;
+			} else {
+				numEpochsMissing=0;
+			}
+			if (numEpochsMissing>0) {
+				if (epoch->PreviousEpoch.MJDN!=-1) {
+					epoch->CurrentDataGapSize=numEpochsMissing;
+					sprintf(messagestr,"Data gap of %d epoch%s in %s at %17s / %4d %02d %02d %02d:%02d:%04.1f",numEpochsMissing,numEpochsMissing==1?"":"s",epoch->DGNSSstruct==0?"rover observation file":"reference station RINEX observation file",t2doystr(&epoch->t),tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds);
+					printInfo(messagestr,options);
+				} else {
+					epoch->CurrentDataGapSize=0;
+				}
+			} else {
+				epoch->CurrentDataGapSize=0;
+			}
+
 			if (printProgress==1) {
 				//Only save current epoch if it we are reading Rover file, not reference file
 				if (epoch->DGNSSstruct==0) {
@@ -3211,15 +4077,18 @@ int readRinexObsEpoch (FILE *fd, TEpoch *epoch, TConstellation *constellation, e
 							epoch->numEpochsprocessed++;
 							epoch->CurrentPercentage=100*epoch->numEpochsprocessed/epoch->numEpochsfile;
 							if ((epoch->CurrentPercentage-epoch->PreviousPercentage)>=0.1) {
-								sprintf(Epochstr,"Current epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f (%5.1f%%)        ",t2doystr(&epoch->t),tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->CurrentPercentage);
+								sprintf(Epochstr,"Current epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f (%5.1f%%)        ",epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->CurrentPercentage);
 								epoch->NewPercentage=1;
 							}
+						} else {
+							sprintf(Epochstr,"Skipping epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f                  ",epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds);
+							epoch->NewPercentage=1;
 						}
 					} else {
 						epoch->numEpochsprocessed++;
 						epoch->CurrentPercentage=100*epoch->numEpochsprocessed/epoch->numEpochsfile;
 						if ((epoch->CurrentPercentage-epoch->PreviousPercentage)>=0.1) {
-							sprintf(Epochstr,"Current epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f (%5.1f%%)        ",t2doystr(&epoch->t),tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->CurrentPercentage);
+							sprintf(Epochstr,"Current epoch: %17s / %4d %02d %02d %02d:%02d:%04.1f (%5.1f%%)        ",epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->CurrentPercentage);
 							epoch->NewPercentage=1;
 						}
 					}
@@ -3227,54 +4096,143 @@ int readRinexObsEpoch (FILE *fd, TEpoch *epoch, TConstellation *constellation, e
 			}
 
 			if (twoepochs) {
-				if(epoch->firstepoch.SoD==-1.) {
-					memcpy(&epoch->firstepoch,&epoch->t,sizeof(TTime));
+				if(epoch->firstEpochFile.SoD==-1.) {
+					memcpy(&epoch->firstEpochFile,&epoch->t,sizeof(TTime));
 				} else {
 					twoepochs=0;
-					memcpy(&epoch->secondepoch,&epoch->t,sizeof(TTime));
+					memcpy(&epoch->secondEpochFile,&epoch->t,sizeof(TTime));
 				}
 			}
 				
-			getstr(aux,line,33,2);
+			getstr(aux,line,len,33,2);
 			epoch->numSatellites = atoi(aux);
 			for (i=0;i<epoch->numSatellites;i++) { // Get satellite measurements and PRNs
 				if (getL(line,&len,fd)==-1) error = 1;
-				epoch->sat[i-notSupportedSatellites].GNSS = gnsschar2gnsstype(line[0]);
-				if ( epoch->sat[i-notSupportedSatellites].GNSS==BDS || epoch->sat[i-notSupportedSatellites].GNSS==QZSS || epoch->sat[i-notSupportedSatellites].GNSS==IRNSS ) { //BeiDou, QZSS, IRNSS are not supported
-					notSupportedSatellites++;
-					continue; 
-				}	
-				getstr(aux,line,1,2);
-				epoch->sat[i-notSupportedSatellites].PRN = atoi(aux);
-				for (j=0;j<epoch->measOrder[epoch->sat[i-notSupportedSatellites].GNSS].nDiffMeasurements;j++) {
-					getstr(aux,line,3+16*j,14);
-					value = atof(aux);
-					if (value==0) value = -1;
-					epoch->sat[i-notSupportedSatellites].meas[j].value = value;
-					epoch->sat[i-notSupportedSatellites].meas[j].rawvalue = value;
-					getstr(aux,line,17+16*j,1);
-					epoch->sat[i-notSupportedSatellites].meas[j].LLI = atoi(aux);
-					getstr(aux,line,18+16*j,1);
-					if (line[18+16*j]==' ') {
-						epoch->sat[i-notSupportedSatellites].meas[j].hasSNRflag=0;
-					} else {
-						epoch->sat[i-notSupportedSatellites].meas[j].hasSNRflag=1;
+				epoch->sat[i].GNSS = gnsschar2gnsstype(line[0]);
+				getstr(aux,line,len,1,2);
+				epoch->sat[i].PRN = atoi(aux);
+				epoch->sat2Printpos[i]=epoch->numSatellitesGNSS[epoch->sat[i].GNSS];
+				epoch->numSatellitesGNSS[epoch->sat[i].GNSS]++;
+				if (line[0]=='S') {
+					if(epoch->sat[i].PRN>QZSSSBASPRNOFFSET) {
+						//In RINEX <=3.03,SBAS QZSS signal was mapped to PRN S83-S87.
+						//To avoid having a matrix of size 87 for the maximum number PRN,
+						//these satellites are mapped to S01-S05
+						epoch->sat[i].PRN-=QZSSSBASPRNOFFSET;
+					} else if (epoch->sat[i].PRN<=0 || epoch->sat[i].PRN>=MAX_SATELLITES_PER_GNSS) {
+						sprintf(messagestr,"Invalid PRN number '%s' in epoch %17s / %4d %02d %02d %02d:%02d:%04.1f in %s observation file",aux,epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->DGNSSstruct==0?"rover":"DGNSS");
+						printError(messagestr,options);
 					}
-					epoch->sat[i-notSupportedSatellites].meas[j].SNR = atoi(aux);
-					epoch->sat[i-notSupportedSatellites].meas[j].SNRdBHz = SNRtable[epoch->sat[i-notSupportedSatellites].meas[j].SNR];
-					epoch->sat[i-notSupportedSatellites].meas[j].dataFlag = 0;
+				} else if (epoch->sat[i].PRN<=0 || epoch->sat[i].PRN>=MAX_SATELLITES_PER_GNSS) {
+					sprintf(messagestr,"Invalid PRN number '%s' in epoch %17s / %4d %02d %02d %02d:%02d:%04.1f in %s observation file",aux,epoch->tStr,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds,epoch->DGNSSstruct==0?"rover":"DGNSS");
+					printError(messagestr,options);
 				}
-				if(epoch->sat[i-notSupportedSatellites].GNSS==GPS) epoch->lastSBASindex=i-notSupportedSatellites; //When gLAB is multiconstellation and SBAS monitors also other constellations, this has to include other constellations
-				epoch->satIndex[epoch->sat[i-notSupportedSatellites].GNSS][epoch->sat[i-notSupportedSatellites].PRN]=i-notSupportedSatellites;
+				if (epoch->GNSS2PrintPos[epoch->sat[i].GNSS]==-1) {
+					epoch->GNSS2PrintPos[epoch->sat[i].GNSS]=epoch->numPrintGNSS;
+					epoch->numPrintGNSS++;
+					epoch->GNSSinEpoch[epoch->sat[i].GNSS]=1;
+					epoch->numGNSSinEpoch++;
+				}
+				//If satellite is unselected, don't parse its measurements, as it will not be used, even for printing
+				if (options->includeSatellite[epoch->sat[i].GNSS][epoch->sat[i].PRN]==1) { 
+					for (j=0;j<epoch->measOrder[epoch->sat[i].GNSS].nDiffMeasurementsRINEXHeader;j++) {
+						getstr(aux,line,len,3+16*j,14);
+						value = atof(aux);
+						if (value==0) value = -1.;
+						epoch->sat[i].meas[j].value = value;
+						epoch->sat[i].meas[j].rawvalue = value;
+						if (len<(18+16*j) || line[17+16*j]==' ') {
+							epoch->sat[i].meas[j].LLI = -2; //Negative but multiple of 2 so no LLI is detected
+						} else {
+							getstr(aux,line,len,17+16*j,1);
+							epoch->sat[i].meas[j].LLI = atoi(aux);
+						}
+						if (len<(19+16*j) || line[18+16*j]==' ') {
+							epoch->sat[i].meas[j].hasSNRflag=0;
+							epoch->sat[i].meas[j].SNRflag = -1;
+							epoch->sat[i].meas[j].SNRflagdBHz = SNRtable[0];
+							if (epoch->measOrder[epoch->sat[i].GNSS].ind2Meas[j]%4==0) {
+								//It is a SNR measurement
+								epoch->sat[i].meas[j].SNRvalue=value;
+							} else {
+								epoch->sat[i].meas[j].SNRvalue = SNRtable[0];
+							}
+						} else {
+							getstr(aux,line,len,18+16*j,1);
+							epoch->sat[i].meas[j].hasSNRflag=1;
+							epoch->sat[i].meas[j].SNRflag = atoi(aux);
+							epoch->sat[i].meas[j].SNRflagdBHz = SNRtable[epoch->sat[i].meas[j].SNRflag];
+							if (epoch->measOrder[epoch->sat[i].GNSS].ind2Meas[j]%4==0) {
+								//It is a SNR measurement
+								epoch->sat[i].meas[j].SNRvalue=value;
+							} else {
+								epoch->sat[i].meas[j].SNRvalue = epoch->sat[i].meas[j].SNRflagdBHz;
+							}
+						}
+						epoch->sat[i].meas[j].dataFlag = 0;
+					}
+				}
 
-				if (epoch->satCSIndex[epoch->sat[i-notSupportedSatellites].GNSS][epoch->sat[i-notSupportedSatellites].PRN]==-1) {
-					epoch->satCSIndex[epoch->sat[i-notSupportedSatellites].GNSS][epoch->sat[i-notSupportedSatellites].PRN]=lastCSindex[epoch->DGNSSstruct];
+				for(j=options->noMixedGEOdata;j<=epoch->numSBASsatellites;j++) {
+					if (options->SBASConstUsed[j][options->SBASmodePos][epoch->sat[i].GNSS]==1 && options->includeSatellite[epoch->sat[i].GNSS][epoch->sat[i].PRN]==1) {
+						epoch->lastSBASindex[j]=i; 
+					}
+				}
+
+				epoch->satIndex[epoch->sat[i].GNSS][epoch->sat[i].PRN]=i;
+
+				if (epoch->satCSIndex[epoch->sat[i].GNSS][epoch->sat[i].PRN]==-1) {
+					//Satellite not seen before
+					if (lastCSindex[epoch->DGNSSstruct]==MAX_SATELLITES_VIEWED) {
+						sprintf(messagestr,"Maximum different satellites viewed (of all constellations) is %d, but RINEX observation file has more than this maximum",MAX_SATELLITES_VIEWED);
+						printError(messagestr,options);
+					}
+					epoch->satCSIndex[epoch->sat[i].GNSS][epoch->sat[i].PRN]=lastCSindex[epoch->DGNSSstruct];
 					lastCSindex[epoch->DGNSSstruct]++;
+					//Fill measurements
+					FillMeasurements(epoch->sat[i].GNSS,epoch->sat[i].PRN,i,epoch,options);
+				} else if (options->MeasSelected[epoch->DGNSSstruct][epoch->sat[i].GNSS][epoch->sat[i].PRN]==MEASUNSELECTED) {
+					//Fill pending measurements
+					FillMeasurements(epoch->sat[i].GNSS,epoch->sat[i].PRN,i,epoch,options);
 				}
 			}
-			epoch->numSatellites-=notSupportedSatellites;
 		} // (epoch->source==RINEX3)
+	}
 
+	//Sort GNSS print list position so it is always in order GPS,GAL,GLO,GEO,BDS,QZS,IRN instead of the order of the satellites read in the current RINEX observation file
+	j=0;
+	for(i=0;i<MAX_GNSS;i++) {
+		if (epoch->GNSS2PrintPos[i]!=-1) {
+			epoch->GNSS2PrintPos[i]=j;
+			epoch->PrintPos2GNSS[j]=i;
+			j++;
+		}
+	}
+	//Create list with order of printing for satellites
+	k=0;
+	for(i=0;i<epoch->numPrintGNSS;i++) {
+		for(j=0;j<epoch->numSatellites;j++) {
+			if (epoch->GNSS2PrintPos[epoch->sat[j].GNSS]==i) {
+				epoch->printIndex2satIndex[k]=j;
+				k++;
+			}
+		}
+	}
+
+	//Duplicate measurements if needed (e.g. C1C to C1P, or whatever measurement not in file but is creaing with DCBs)
+	if (epoch->MeasToBeDuplicated==1) {
+		for(i=0;i<epoch->numSatellites;i++) {
+			GNSS=epoch->sat[i].GNSS;
+			for(j=0;j<epoch->measOrder[GNSS].numMeasToCopy;j++) {
+				meas=epoch->measOrder[GNSS].measListToCopy[j];
+				posMeasDest=epoch->measOrder[GNSS].meas2Ind[meas];
+				posMeasSrc=epoch->measOrder[GNSS].meas2SourceInd[meas];
+				epoch->sat[i].meas[posMeasDest].value=epoch->sat[i].meas[posMeasSrc].value;
+				epoch->sat[i].meas[posMeasDest].rawvalue=epoch->sat[i].meas[posMeasSrc].rawvalue;
+				epoch->sat[i].meas[posMeasDest].SNRvalue=epoch->sat[i].meas[posMeasSrc].SNRvalue;
+				epoch->sat[i].meas[posMeasDest].LLI=epoch->sat[i].meas[posMeasSrc].LLI;
+			}
+		}
 	}
 
 	return (properlyRead && !error); // properly read AND no error	
@@ -3293,7 +4251,7 @@ int readRinexObsEpoch (FILE *fd, TEpoch *epoch, TConstellation *constellation, e
  *****************************************************************************/
 int rewindEpochRinexObs (FILE *fd, enum Source src) {
 	int			ret;
-	int			yy=-1,mm=-1,dd=-1,hour=-1,min=-1;
+	int			yy=-1,mm=-1,dd=-1,hour=-1,minute=-1;
 	char 		line[MAX_INPUT_LINE];
 	char    	aux[100];
 	int 		len = 0;
@@ -3314,13 +4272,13 @@ int rewindEpochRinexObs (FILE *fd, enum Source src) {
 			// Check if date is within margins to detect init of epoch
 			// RINEX 2.11
 			if (src==RINEX2) {
-				getstr(aux,line,0,4);
+				getstr(aux,line,len,0,4);
 				yy = atoi(aux);
-				getstr(aux,line,3,4);
+				getstr(aux,line,len,3,4);
 				mm = atoi(aux);
-				getstr(aux,line,6,4);
+				getstr(aux,line,len,6,4);
 				dd = atoi(aux);
-				getstr(aux,line,9,4);
+				getstr(aux,line,len,9,4);
 				//The '.' detection is to avoid some measurements with many 0's to produce a valid date
 				//With the check of the dot, the date string will never have a '.' 
 				//For example, the following line in a RINEX 2:
@@ -3331,9 +4289,9 @@ int rewindEpochRinexObs (FILE *fd, enum Source src) {
 				} else {
 					hour = atoi(aux);
 				}
-				getstr(aux,line,12,4);
-				min = atoi(aux);
-				if (yy>=0 && yy<=99 && mm>=1 && mm<=12 && dd>=1 && dd<=31 && hour>=0 && hour<=23 && min>=0 &&min<=59) {
+				getstr(aux,line,len,12,4);
+				minute = atoi(aux);
+				if (yy>=0 && yy<=99 && mm>=1 && mm<=12 && dd>=1 && dd<=31 && hour>=0 && hour<=23 && minute>=0 &&minute<=59) {
 					return 1;
 				}
 			// RINEX 3.00
@@ -3363,72 +4321,99 @@ int rewindEpochRinexObs (FILE *fd, enum Source src) {
  *                                         0 => No start of epoch found
  *****************************************************************************/
 int getEpochFromObsFile (FILE *fd, enum Source src, TTime *t) {
+	int			i,n;
 	int			ret;
-	int			yy=-1,mm=-1,dd=-1,hour=-1,min=-1;
+	int			yy=-1,mm=-1,dd=-1,hour=-1,minute=-1;
 	int 		len = 0;
+	int			epochflag=0;
+	off_t		posFile;
 	char 		line[MAX_INPUT_LINE];
 	char    	aux[100];
 	double		seconds;
 	struct tm   tm;
 
+	posFile = ftell(fd);
+
 	ret = getL(line,&len,fd);
 
+	//Check line is not an event epoch
 	if (ret==-1) {
-		getLback(line,&len,fd);
+		fseek(fd,posFile,SEEK_SET);
 		return 0;
 	} else if (src == RINEX2) {
-		getstr(aux,line,0,4);
+		getstr(aux,line,len,27,2);
+		epochflag = atoi(aux);
+		getstr(aux,line,len,30,2);
+		n = atoi(aux);
+	} else {
+		getstr(aux,line,len,30,2);
+		epochflag = atoi(aux);
+		getstr(aux,line,len,33,2);
+		n = atoi(aux);
+	}
+
+	if (epochflag>1) {
+		for (i=0;i<=n;i++) {
+			if (getL(line,&len,fd)==-1) {
+				fseek(fd,posFile,SEEK_SET);
+				return 0;
+			}
+		}
+	}
+	
+	if (src == RINEX2) {
+		getstr(aux,line,len,0,4);
 		yy = tm.tm_year = atoi(aux);
 		if (tm.tm_year <= 70) tm.tm_year += 100;
-		getstr(aux,line,3,4);
+		getstr(aux,line,len,3,4);
 		mm = atoi(aux);
 		tm.tm_mon  = mm - 1;
-		getstr(aux,line,6,4);
+		getstr(aux,line,len,6,4);
 		dd = tm.tm_mday = atoi(aux);
-		getstr(aux,line,9,4);
+		getstr(aux,line,len,9,4);
 		if(aux[1]=='.'||aux[2]=='.') {
 			hour= tm.tm_hour = -1;
 		} else {
 			hour = tm.tm_hour = atoi(aux);
 		}
-		getstr(aux,line,12,4);
-		min = tm.tm_min  = atoi(aux);
-		getstr(aux,line,16,10);
+		getstr(aux,line,len,12,4);
+		minute = tm.tm_min  = atoi(aux);
+		getstr(aux,line,len,16,10);
 		tm.tm_sec  = atoi(aux);
 		seconds = atof(aux);
 	} else {
 		//RINEX v3
 		if (line[0]=='>' && len<60) {
 			//Line with valid epoch
-			getstr(aux,line,2,4);
+			getstr(aux,line,len,2,4);
 			yy =  atoi(aux);
 			if (yy>=2000) yy-=2000;
 			else yy-=1900;
 			tm.tm_year = atoi(aux)-1900;
-			getstr(aux,line,7,2);
+			getstr(aux,line,len,7,2);
 			mm = atoi(aux);
 			tm.tm_mon = mm-1;
-			getstr(aux,line,10,2);
+			getstr(aux,line,len,10,2);
 			dd = tm.tm_mday = atoi(aux);
-			getstr(aux,line,13,2);
+			getstr(aux,line,len,13,2);
 			hour = tm.tm_hour = atoi(aux);
-			getstr(aux,line,16,2);
-			min = tm.tm_min  = atoi(aux);
-			getstr(aux,line,19,10);
+			getstr(aux,line,len,16,2);
+			minute = tm.tm_min  = atoi(aux);
+			getstr(aux,line,len,19,10);
 			tm.tm_sec  = atoi(aux);
 			seconds = atof(aux);
 		} else {
 			hour=-1;
 		}
 	}
-	if (yy>=0 && yy<=99 && mm>=1 && mm<=12 && dd>=1 && dd<=31 && hour>=0 && hour<=23 && min>=0 &&min<=59) {
+	if (yy>=0 && yy<=99 && mm>=1 && mm<=12 && dd>=1 && dd<=31 && hour>=0 && hour<=23 && minute>=0 &&minute<=59) {
 		//Epoch timestamp found
 		t->MJDN = MJDN(&tm);
 		t->SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
-		getLback(line,&len,fd);
+		fseek(fd,posFile,SEEK_SET);
 		return 1;
 	}
-	getLback(line,&len,fd);
+	fseek(fd,posFile,SEEK_SET);
 	return 0;
 }
 
@@ -3438,86 +4423,145 @@ int getEpochFromObsFile (FILE *fd, enum Source src, TTime *t) {
  * Parameters  :
  * Name                           |Da|Unit|Description
  * FILE  *fd                       I  N/A  File descriptor
+ * char *filename                  I  N/A  Navigation filename
  * TGNSSproducts  *products        O  N/A  Structure to save the data
  * double *rinexNavVersion         O  N/A  Rinex Navigation version number
+ * int newDay                      I  N/A  Flag to indicate if it is a new day
+ *                                          day read or it is another file for
+ *                                          the same day (this flag is necessary
+ *                                          for not freeing memory)
+ *                                          NEWDAYNAV  -> Reading new day. Free memory
+ *                                          SAMEDAYNAV -> Reading same day. 
+ *                                                        Do not free memory
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1 => Properly read
  *                                         2 => Another file concatenated
  *                                         0 => Error
  *****************************************************************************/
-int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
-	char						line[MAX_INPUT_LINE];
-	char						aux[100], a0[100], a1[100], a2[100], a3[100];
-	char						ConstellationType[2];
-	int 						len = 0;
-	int							properlyRead = 0;
+int readRinexNav (FILE *fd, char *filename, TGNSSproducts *products, double *rinexNavVersion, int newDay, TOptions  *options) {
+	int 						len = 0, ret, msgtype,IODE;
+	int							returnValue = 0;
 	int							readingHeader = 1;
-	int							i,j;
+	int							i,j,l;
+	int							GPSweek;
+	int							DoW;	//Day of Week
+	int							row;
+	int							indSat, indBlock,indBlockIOD;
+	int							offsetRinex2=0; //QZSS RINEX2 have in the first line the constellation character (not official)
+	int							leapSecond;
+	int							invalidDate=0;
+	//int							DataTypeRead[MAX_GNSS*MAX_SATELLITES_PER_GNSS][MAX_BRDC_TYPES];
 	unsigned int				k;  //to avoid warning: comparison between signed and unsigned integer expressions
 	TBRDCblock					block;
 	struct tm					tm;
 	double						seconds;
-	int							row;
-	int							indSat, indBlock;
+	double						SoW;
+	double						frameTimeGLO=0.;
 	enum TimeSystemCorrection	timecorr;	
 	enum GNSSystem				satSystem;
-	int							GPSweek;
-	double						SoW;
-	int							DoW;	//Day of Week
+	char						line[MAX_INPUT_LINE];
+	char						aux[100], aux2[100], a0[100], a1[100], a2[100], a3[100];
+	char						ConstellationType[2];
+	static int					numline=0;
+	static int					bufferHeaderLineLen=0;
+	static char					bufferHeaderLine[MAX_INPUT_LINE];
 
 	products->type = BRDC;
 	// If to avoid overwritten products structure when RINEX navigation are concatennated
 	if ( products->BRDC == NULL ) {
 		products->BRDC = malloc(sizeof(TBRDCproducts));
-		initBRDCproducts(products->BRDC);
+		initBRDCproducts(products->BRDC,options->GLOintStep);
 	} else {
-		if ( products->BRDC->numblocksPast!=NULL) {
-			//This is the third or more day we are reading. We need to free memory
-			for(i=0;i<products->BRDC->numsatsPast;i++) {
-				free(products->BRDC->blockPast[i]);
-			}
-			free(products->BRDC->numblocksPast);
-			free(products->BRDC->blockPast);
-			products->BRDC->numblocksPast=NULL;
-			products->BRDC->blockPast=NULL;
-		}
-		memcpy(&products->BRDC->indexPast,&products->BRDC->index,sizeof(int)*MAX_GNSS*MAX_SATELLITES_PER_GNSS);
-		products->BRDC->blockPast=products->BRDC->block;
-		products->BRDC->numblocksPast=products->BRDC->numblocks;
-		products->BRDC->numsatsPast=products->BRDC->numsatsPast;
-		products->BRDC->numsats = 0;
-		products->BRDC->block = NULL;
-		products->BRDC->numblocks = NULL;
-		for (i=0;i<MAX_GNSS;i++) {
-			for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
-				products->BRDC->index[i][j] = -1;
+		if ( products->BRDC->numblocks!=NULL && newDay==NEWDAYNAV) {
+			//This is the second or more day we are reading. We need to free memory
+			freeBRDCproducts(FREEPREVNAV,products);
+		
+			memcpy(&products->BRDC->indexPast,&products->BRDC->index,sizeof(int)*MAX_GNSS*MAX_SATELLITES_PER_GNSS);
+			memcpy(&products->BRDC->AvailBRDCTypePast,&products->BRDC->AvailBRDCType,sizeof(int)*MAX_GNSS*MAX_BRDC_TYPES);
+
+			products->BRDC->blockPast=products->BRDC->block;
+			products->BRDC->blockPastPointer=products->BRDC->blockPointer;
+			products->BRDC->blockPastIOD=products->BRDC->blockIOD;
+			products->BRDC->numblocksPast=products->BRDC->numblocks;
+			products->BRDC->numblocksPastIOD=products->BRDC->numblocksIOD;
+
+			products->BRDC->numsatsPast=products->BRDC->numsats;
+			products->BRDC->AT_LSpast=products->BRDC->AT_LS;
+			products->BRDC->AT_LSFpast=products->BRDC->AT_LSF;
+			products->BRDC->WN_LSFpast=products->BRDC->WN_LSF;
+			products->BRDC->leapSecondsPast=products->BRDC->leapSeconds;
+			products->BRDC->LeapSecondsAvailPast=products->BRDC->LeapSecondsAvail;
+			products->BRDC->LeapSecondsAvail=0;
+			products->BRDC->numsats = 0;
+			products->BRDC->block = NULL;
+			products->BRDC->blockPointer = NULL;
+			products->BRDC->blockIOD = NULL;
+			products->BRDC->numblocks = NULL;
+			products->BRDC->numblocksIOD = NULL;
+			for (i=0;i<MAX_GNSS;i++) {
+				for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+					products->BRDC->index[i][j] = -1;
+				}
+				for (j=0;j<MAX_BRDC_TYPES;j++) {
+					products->BRDC->AvailBRDCType[i][j]=0;
+				}
 			}
 		}
 	}
 
-
-	initBRDCblock(&block);
 	ConstellationType[0] = '\0';
-	
-	while(getL(line,&len,fd)!=-1) {
+	/*for(i=0;i<MAX_GNSS*MAX_SATELLITES_PER_GNSS;i++) {
+		for(j=0;j<MAX_BRDC_TYPES;j++) {
+			DataTypeRead[i][j]=0;
+		}
+	}*/
+
+	if (bufferHeaderLineLen>0) {
+		strcpy(line,bufferHeaderLine);
+		len=bufferHeaderLineLen;
+		bufferHeaderLineLen=0;
+		bufferHeaderLine[0]='\0';
+	} else {
+		if (getL(line,&len,fd)==-1) return 0;
+	}
+
+	do {
+		numline++;
+		if (len<2) continue; //Skip blank lines
 		if (strncmp(&line[60],"COMMENT",7)==0) continue; //Comment can also be in the middle of the file
 		if (readingHeader) {
 			if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
-				getstr(aux,line,0,9);
+				getstr(aux,line,len,0,9);
 				*rinexNavVersion = atof(aux);
-				if ((int)(*rinexNavVersion)>3) {return 0;} //Version check
+				if ((int)(*rinexNavVersion)>5) {return 0;} //Version check (version 4 is allowed for non-official CNAV/LNAV RINEX)
 				if((int)*(rinexNavVersion)==2 && line[20]=='G') {
 					// GLONASS Rinex v2 navigation file
 					satSystem=GLONASS;
 				} else if ((int)(*rinexNavVersion)==2 && line[20]=='H') {
 					// GEO Rinex v2 navigation file
 					satSystem=GEO;
+				} else if ((int)(*rinexNavVersion)==2 && (line[20]=='E'|| line[40]=='E')) {
+					// Galileo Rinex v2 unofficial navigation file
+					satSystem=Galileo;
+				} else if ((int)(*rinexNavVersion)==2 && (line[20]=='J' || line[40]=='J') ) {
+					// QZSS Rinex v2 unofficial navigation file
+					satSystem=QZSS;
+					offsetRinex2=1;
+				} else if ((int)(*rinexNavVersion)==2 && (line[20]=='C' || line[40]=='C') ) {
+					// BDS Rinex v2 unofficial navigation file
+					satSystem=BDS;
+					offsetRinex2=1;
+				} else if ((int)(*rinexNavVersion)==2 && (line[20]=='I' || line[40]=='I') ) {
+					// IRNSS Rinex v2 unofficial navigation file
+					satSystem=IRNSS;
+					offsetRinex2=1;
 				} else if ((int)(*rinexNavVersion)==2) {
 					satSystem=GPS;
 				}
 			} else if (strncmp(&line[60],"ION ALPHA",9)==0) {  // Rinex v2
 				for (i=0;i<4;i++) {
-					getstr(aux,line,2+12*i,12);
+					getstr(aux,line,len,2+12*i,12);
 					for (k=0;k<strlen(aux);k++) {
 						if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 					}
@@ -3525,7 +4569,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 				}
 			} else if (strncmp(&line[60],"ION BETA",8)==0) {  // Rinex v2
 				for (i=0;i<4;i++) {
-					getstr(aux,line,2+12*i,12);
+					getstr(aux,line,len,2+12*i,12);
 					for (k=0;k<strlen(aux);k++) {
 						if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 					}
@@ -3534,7 +4578,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 			} else if (strncmp(&line[60],"IONOSPHERIC CORR",16)==0) {  // Rinex v3
 				if (strncmp(&line[0],"GPSA",4)==0) {
 					for (i=0;i<4;i++) {
-						getstr(aux,line,5+12*i,12);
+						getstr(aux,line,len,5+12*i,12);
 						for (k=0;k<strlen(aux);k++) {
 							if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 						}
@@ -3542,7 +4586,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 					}
 				} else if (strncmp(&line[0],"GPSB",4)==0) {
 					for (i=0;i<4;i++) {
-						getstr(aux,line,5+12*i,12);
+						getstr(aux,line,len,5+12*i,12);
 						for (k=0;k<strlen(aux);k++) {
 							if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 						}
@@ -3550,7 +4594,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 					}
 				} else if (strncmp(&line[0],"GAL",3)==0) {
 					for (i=0;i<4;i++) {
-						getstr(aux,line,5+12*i,12);
+						getstr(aux,line,len,5+12*i,12);
 						for (k=0;k<strlen(aux);k++) {
 							if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 						}
@@ -3558,7 +4602,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 					}
 				} else if (strncmp(&line[0],"BDSA",4)==0) {
 					for (i=0;i<4;i++) {
-						getstr(aux,line,5+12*i,12);
+						getstr(aux,line,len,5+12*i,12);
 						for (k=0;k<strlen(aux);k++) {
 							if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 						}
@@ -3566,7 +4610,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 					}
 				} else if (strncmp(&line[0],"BDSB",4)==0) {
 					for (i=0;i<4;i++) {
-						getstr(aux,line,5+12*i,12);
+						getstr(aux,line,len,5+12*i,12);
 						for (k=0;k<strlen(aux);k++) {
 							if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 						}
@@ -3574,7 +4618,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 					}
 				} else if (strncmp(&line[0],"QZSA",4)==0) {
 					for (i=0;i<4;i++) {
-						getstr(aux,line,5+12*i,12);
+						getstr(aux,line,len,5+12*i,12);
 						for (k=0;k<strlen(aux);k++) {
 							if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 						}
@@ -3582,7 +4626,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 					}
 				} else if (strncmp(&line[0],"QZSB",4)==0) {
 					for (i=0;i<4;i++) {
-						getstr(aux,line,5+12*i,12);
+						getstr(aux,line,len,5+12*i,12);
 						for (k=0;k<strlen(aux);k++) {
 							if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 						}
@@ -3590,7 +4634,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 					}
 				} else if (strncmp(&line[0],"IRNA",4)==0) {
 					for (i=0;i<4;i++) {
-						getstr(aux,line,5+12*i,12);
+						getstr(aux,line,len,5+12*i,12);
 						for (k=0;k<strlen(aux);k++) {
 							if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 						}
@@ -3598,7 +4642,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 					}
 				} else if (strncmp(&line[0],"IRNB",4)==0) {
 					for (i=0;i<4;i++) {
-						getstr(aux,line,5+12*i,12);
+						getstr(aux,line,len,5+12*i,12);
 						for (k=0;k<strlen(aux);k++) {
 							if (aux[k]=='D' || aux[k]=='e') aux[k]='E';
 						}
@@ -3606,182 +4650,436 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 					}
 				}
 			} else if (strncmp(&line[60],"TIME SYSTEM CORR",16)==0) {  //Rinex v3
-				getstr(aux,line,0,4);
+				getstr(aux,line,len,0,4);
 				timecorr = timecorrstr2timecorrtype(aux); 
 				if ( timecorr != UNKNOWN_TIME_CORR){
-					getstr(aux,line,5,17);
+					getstr(aux,line,len,5,17);
 					products->BRDC->timeSysCorr[timecorr].acoff[0] = atof(aux);
-					getstr(aux,line,22,16);
+					getstr(aux,line,len,22,16);
 					products->BRDC->timeSysCorr[timecorr].acoff[1] = atof(aux);
-					getstr(aux,line,38,7);
+					getstr(aux,line,len,38,7);
 					products->BRDC->timeSysCorr[timecorr].timeref = atoi(aux);
-					getstr(aux,line,45,5);
+					getstr(aux,line,len,45,5);
 					products->BRDC->timeSysCorr[timecorr].weekref = atoi(aux);
 				}
 			} else if (strncmp(&line[60],"LEAP SECONDS",12)==0) {  
-				getstr(aux,line,0,6);
-				products->BRDC->AT_LS = atoi(aux);
-				getstr(aux,line,6,6);
-				if(aux[0] != '\0') { // No number given
-					products->BRDC->AT_LSF = atoi(aux);
-					if(products->BRDC->AT_LSF>0) {
+				getstr(aux,line,len,0,6);
+				if(aux[0] != '\0') { // Check if no number given
+					products->BRDC->AT_LS = atoi(aux);
+					products->BRDC->leapSeconds=products->BRDC->AT_LS;
+					if(products->BRDC->AT_LS>0) {
 						products->BRDC->LeapSecondsAvail=1;
 					}
 				}
-				getstr(aux,line,12,6);
-				if(aux[0] != '\0') { // No number given
+				getstr(aux,line,len,6,6);
+				if(aux[0] != '\0') { // Check if no number given
+					products->BRDC->AT_LSF = atoi(aux);
+				}
+				getstr(aux,line,len,12,6);
+				if(aux[0] != '\0') { // Check if no number given
 					products->BRDC->WN_LSF = atoi(aux);
 				}
-				getstr(aux,line,18,6);
-				if(aux[0] != '\0') { // No number given
+				getstr(aux,line,len,18,6);
+				if(aux[0] != '\0') { // Check if no number given
 					products->BRDC->DN = atoi(aux);
 				}
 			} else if (strncmp(&line[60],"END OF HEADER",13)==0) {
 				readingHeader = 0;
 				row = 0;
-				properlyRead = 1;
+				returnValue = 1;
 			}
 		} else {  // Reading body
 			// Block to detect new RINEX header, it only affects when large RINEX are used
 			if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
-				getLback(line,&len,fd);
-				//properlyRead = 1;
-				//break;
-				return 2;
+				strcpy(bufferHeaderLine,line);
+				bufferHeaderLineLen=len;
+				numline--;
+				returnValue=2;
+				break;
 			}
 			if ((int)(*rinexNavVersion)==2) {
 				if ( row == 0 ) {
-					getstr(aux,line,0,2);
+					initBRDCblock(&block);
+					block.GNSS=satSystem;
+					getstr(aux,line,len,0+offsetRinex2,2);
 					block.PRN = atoi(aux);
-					getstr(aux,line,3,2);
+					if (block.PRN<=0 || block.PRN>=MAX_SATELLITES_PER_GNSS) {
+						sprintf(messagestr,"Invalid PRN '%s' in line %d in navigation file [%s]",aux,numline,filename);
+						printError(messagestr,options);
+					}
+					invalidDate=0;
+					getstr(aux,line,len,3+offsetRinex2,2);
 					tm.tm_year = atoi(aux);
-					if (tm.tm_year <= 70) tm.tm_year += 100;
-					getstr(aux,line,6,2);
-					tm.tm_mon  = atoi(aux)-1;
-					getstr(aux,line,9,2);
+					if (tm.tm_year<=0) invalidDate=1;
+					else if (tm.tm_year <= 70) tm.tm_year += 100;
+					getstr(aux,line,len,6+offsetRinex2,2);
+					tm.tm_mon  = atoi(aux);
+					if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+					tm.tm_mon  -= 1;
+					getstr(aux,line,len,9+offsetRinex2,2);
 					tm.tm_mday = atoi(aux);
-					getstr(aux,line,12,2);
+					if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+					getstr(aux,line,len,12+offsetRinex2,2);
 					tm.tm_hour = atoi(aux);
-					getstr(aux,line,15,2);
+					if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+					getstr(aux,line,len,15+offsetRinex2,2);
 					tm.tm_min  = atoi(aux);
-					getstr(aux,line,18,4);
+					if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+					getstr(aux,line,len,18+offsetRinex2,4);
 					tm.tm_sec  = atoi(aux);
+					if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1; //Seconds can have value 60 when a leap second is inserted
 					seconds = atof(aux);
-					block.Ttoc.MJDN = MJDN(&tm);
-					block.Ttoc.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+					if (satSystem==GLONASS) {
+						block.TtocUTC.MJDN = MJDN(&tm);
+						block.TtocUTC.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+					} else {
+						block.Ttoc.MJDN = MJDN(&tm);
+						block.Ttoc.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+					}
+					if (invalidDate==1) {
+						sprintf(messagestr,"Invalid date '%.22s' in line %d in navigation file [%s]",line,numline,filename);
+						printError(messagestr,options);
+					}
 				}
-				getstr(a0,line,3,19);
+				getstr(a0,line,len,3+offsetRinex2,19);
 				if (a0[13]=='D' || a0[13]=='e') a0[13]='E';
 				if (a0[14]=='D' || a0[14]=='e') a0[14]='E';
 				if (a0[15]=='D' || a0[15]=='e') a0[15]='E';      // '-' sign can appear or not
-				getstr(a1,line,22,19);
+				getstr(a1,line,len,22+offsetRinex2,19);
 				if (a1[13]=='D' || a1[13]=='e') a1[13]='E';
 				if (a1[14]=='D' || a1[14]=='e') a1[14]='E';
 				if (a1[15]=='D' || a1[15]=='e') a1[15]='E';      // '-' sign can appear or not
-				getstr(a2,line,41,19);
+				getstr(a2,line,len,41+offsetRinex2,19);
 				if (a2[13]=='D' || a2[13]=='e') a2[13]='E';
 				if (a2[14]=='D' || a2[14]=='e') a2[14]='E';
 				if (a2[15]=='D' || a2[15]=='e') a2[15]='E';      // '-' sign can appear or not
-				getstr(a3,line,60,19);
+				getstr(a3,line,len,60+offsetRinex2,19);
 				if (a3[13]=='D' || a3[13]=='e') a3[13]='E';
 				if (a3[14]=='D' || a3[14]=='e') a3[14]='E';
 				if (a3[15]=='D' || a3[15]=='e') a3[15]='E';      // '-' sign can appear or not
 
-
+				//Galileo is not officially in RINEX 2 navigation files, but some ftp servers do give Galileo navigation data in RINEX v2
+				//QZSS is not officially in RINEX 2 navigation files, but some ftp servers do give QZSS navigation data in RINEX v2
 				switch (satSystem) {
-					case GPS:
+					case GPS: case Galileo: case BDS: case QZSS: case IRNSS:
 						switch (row) {
 							case 0:		
-								block.clockbias			= atof(a1);
-								block.clockdrift		= atof(a2);
-								block.clockdriftrate	= atof(a3);
+								block.clockbias					= atof(a1);
+								block.clockdrift				= atof(a2);
+								block.clockdriftrate			= atof(a3);
 								break;
 							case 1:
-								block.IODE				= (int)atof(a0);
-								block.crs				= atof(a1);
-								block.deltan			= atof(a2);
-								block.M0				= atof(a3);
+								switch (satSystem) {
+									case GPS: case QZSS:
+										block.IODE              = (int)atof(a0);
+										break;
+									case BDS:
+										block.IODE		        = -1; //No IODE provided
+										block.AODE				= (int)atof(a0);
+										break;
+									default:
+										block.IODE				= (int)atof(a0);
+										break;
+								}
+								block.crs						= atof(a1);
+								block.deltan					= atof(a2);
+								block.M0						= atof(a3);
 								break;
 							case 2:
-								block.cuc				= atof(a0);
-								block.e					= atof(a1);
-								block.cus				= atof(a2);
-								block.sqrta				= atof(a3);
+								block.cuc						= atof(a0);
+								block.e							= atof(a1);
+								block.cus						= atof(a2);
+								block.sqrta						= atof(a3);
 								break;
 							case 3:
-								block.toe				= atof(a0);
-								block.cic				= atof(a1);
-								block.OMEGA				= atof(a2);
-								block.cis				= atof(a3);
+								block.toe						= atof(a0);
+								block.cic						= atof(a1);
+								block.OMEGA						= atof(a2);
+								block.cis						= atof(a3);
 								break;
 							case 4:
-								block.i0				= atof(a0);
-								block.crc				= atof(a1);
-								block.omega				= atof(a2);
-								block.OMEGADOT			= atof(a3);
+								block.i0						= atof(a0);
+								block.crc						= atof(a1);
+								block.omega						= atof(a2);
+								block.OMEGADOT					= atof(a3);
 								break;
 							case 5:
-								block.IDOT				= atof(a0);
-								block.codesOnL2			= (int)atof(a1);
-								block.GPSweek			= (int)atof(a2);
-								block.L2Pdataflag		= (int)atof(a3);
+								//GPS, Galileo, and QZSS all in GPS time
+								//BDS in BeiDou time
+								block.IDOT						= atof(a0);
+								switch(satSystem) {
+									case GPS: case QZSS:
+										block.codesOnL2			= (int)atof(a1);
+										block.GPSweek			= (int)atof(a2);
+										block.L2Pdataflag		= (int)atof(a3);
+										break;
+									case Galileo:
+										block.dataSources		= (int)atof(a1);
+										block.GALweek			= (int)atof(a2);
+										block.GPSweek			= block.GALweek;
+										break;
+									case BDS:
+										block.BDSweek			= (int)atof(a2);
+										block.GPSweek			= block.BDSweek+1356;
+										break;
+									case IRNSS:
+										block.GPSweek           = (int)atof(a2);
+										break;
+									default:
+										break;
+
+								}
 								break;
 							case 6:
-								block.SVaccuracy		= atof(a0);
-								block.SVhealth			= (int)atof(a1);
-								block.TGD				= atof(a2);
-								block.IODC				= (int)atof(a3);
+								switch(satSystem) {
+									case GPS: case QZSS:
+										block.SVaccuracy		= atof(a0);
+										block.SVhealth			= (int)atof(a1);
+										block.TGD				= atof(a2);
+										block.IODC				= (int)atof(a3);
+										break;
+									case Galileo:
+										block.SVaccuracy		= atof(a0);
+										block.SVhealth			= (int)atof(a1);
+										block.SISASignal		= block.SVaccuracy;
+										block.BGDE5a			= atof(a2);
+										block.BGDE5b			= atof(a3);
+										break;
+									case BDS:
+										block.SVaccuracy		= atof(a0);
+										block.SVhealth			= (int)atof(a1);
+										block.TGD26             = atof(a2);
+										block.TGD76            	= atof(a3);
+										block.TGD16            	= 0.;
+										block.TGD56            	= 0.;
+										block.ISCB1Cd			= 0.;
+										block.ISCB2ad			= 0.;
+										break;
+									case IRNSS:
+										block.IRNURA			= atof(a0);
+										block.SVaccuracy		= block.IRNURA;
+										block.SVhealth			= (int)atof(a1);
+										block.TGD				= atof(a2);
+										break;
+									default:
+										break;
+								}
 								break;
 							case 7:
-								block.transTime			= atof(a0);
-								block.fitInterval		= (int)atof(a1);
-								if ( block.fitInterval == 0 ) block.fitInterval = 4;
+								//GPS, Galileo, and QZSS all in GPS time
+								block.transTime					= atof(a0);
+								switch(satSystem) {
+									case GPS:
+										block.fitInterval		= atof(a1);
+										if ( block.fitInterval == 0 ) block.fitInterval = 4;
+										//Set broadcast message type
+										block.BRDCtype = GPSLNAV;
+										products->BRDC->AvailBRDCType[GPS][GPSLNAV]=1;
+										//Check if IODC%256 matches with IODE
+										if (block.IODC%256!=block.IODE) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid GPS message (IODC%%256 (%d) does not match IODE (%d)) in line %d in navigation file [%s]. Message discarded",block.IODC%256,block.IODE,numline,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										} else if (block.IODE<0 || block.IODE>255) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid GPS message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODE,numline-5,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										}
+										break;
+									case QZSS:
+										block.fitInterval		= atof(a1);
+										if ( block.fitInterval == 0 ) block.fitInterval = 2;
+										else block.fitInterval 	= 4;
+										//Set broadcast message type
+										block.BRDCtype = QZSLNAV;
+										products->BRDC->AvailBRDCType[QZSS][QZSLNAV]=1;
+										//Check if IODC%256 matches with IODE
+										if (block.IODC%256!=block.IODE) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid QZSS message (IODC%%256 (%d) does not match IODE (%d)) in line %d in navigation file [%s]. Message discarded",block.IODC%256,block.IODE,numline,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										} else if (block.IODE<0 || block.IODE>255) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid QZSS message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODE,numline-5,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										}
+										break;
+									case Galileo:
+										block.fitInterval		= 4;
+										//Set broadcast message type
+										switch (block.dataSources & GALILEOBRDCMSGMASK) {
+											case 258:
+												//FNAV E5a
+												block.BRDCtype = GalFNAV;
+												products->BRDC->AvailBRDCType[Galileo][GalFNAV]=1;
+												break;
+											case 513:
+												//INAV E1-B only
+												block.BRDCtype = GalINAVE1;
+												products->BRDC->AvailBRDCType[Galileo][GalINAVE1]=1;
+												break;
+											case 516:
+												//INAV E5b only
+												block.BRDCtype = GalINAVE5b;
+												products->BRDC->AvailBRDCType[Galileo][GalINAVE5b]=1;
+												break;
+											case 517:
+												//INAV E1-B+E5b
+												block.BRDCtype = GalINAVE1E5b;
+												products->BRDC->AvailBRDCType[Galileo][GalINAVE1E5b]=1;
+												break;
+											default:
+												//Invalid message type
+												sprintf(messagestr,"WARNING: Invalid Galileo message type (Data Sources has invalid value %d) in line %d in navigation file [%s]. Message discarded",block.dataSources,numline-2,filename);
+												printInfo(messagestr,options);
+												row = 0;
+												continue;
+												break;
+										} 
+										if (block.IODE<0 || block.IODE>1023) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid Galileo message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODE,numline-5,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										}
+										break;
+									case BDS:
+										block.transTime			= atof(a0);
+										block.AODC              = (int)atof(a1);
+										block.IODC              = -1; //No IODC provided
+										block.fitInterval		= 4; //Fit interval is not provided
+										//Set broadcast message type
+										block.BRDCtype = BDSD1;
+										products->BRDC->AvailBRDCType[BDS][BDSD1]=1;
+										break;
+									case IRNSS:
+										block.transTime			= atof(a0);
+										block.IODC              = -1; //No IODC provided
+										block.fitInterval		= 4; //Fit interval is not provided
+										//Set broadcast message type
+										block.BRDCtype = IRNCNAV;
+										products->BRDC->AvailBRDCType[IRNSS][IRNCNAV]=1;
+										if (block.IODE<0 || block.IODE>255) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid IRNSS message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODE,numline-5,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										}
+										break;
+									default:
+										break;
+								}
+								if (block.transTime>=0.9999E9) {
+									//Invalid transmission time
+									switch(satSystem) {
+										case GPS:
+											sprintf(messagestr,"WARNING: Invalid %s tranmission time (%f) in line %d in navigation file [%s]. Toe - FitInterval/2 will be used as transmission time",gnsstype2gnssname(block.GNSS),block.transTime,numline,filename);
+											block.transTime=block.toe-block.fitInterval*3600./2.;
+											break;
+										case Galileo:
+											sprintf(messagestr,"WARNING: Invalid %s tranmission time (%f) in line %d in navigation file [%s]. Toe will be used as transmission time",gnsstype2gnssname(block.GNSS),block.transTime,numline,filename);
+											block.transTime=block.toe;
+											break;
+										default:
+											sprintf(messagestr,"WARNING: Invalid %s tranmission time (%f) in line %d in navigation file [%s]. Toe - 2h will be used as transmission time",gnsstype2gnssname(block.GNSS),block.transTime,numline,filename);
+											block.transTime=block.toe-7200.;
+											break;
+									}
+									printInfo(messagestr,options);
+								}
+								break;
+							default:
 								break;
 						}
 						break;
 					case GLONASS: case GEO:
 						switch(row){
 							case 0:
-								block.clockbias     		        = atof(a1);
-								if (satSystem == GLONASS) {
-									block.clockdrift           	= atof(a2);
-									block.transTime			= atof(a3);
-								} else {
-									block.clockdrift                = atof(a2);
-									block.transTime			= atof(a3);
+								//Glonass in UTC time. GEO in GPS time
+								block.clockbias					= atof(a1);
+								switch(satSystem) {
+									case GLONASS:
+										block.clockdrift    	= atof(a2);
+										frameTimeGLO			= atof(a3);
+										break;
+									case GEO:
+										block.clockdrift    	= atof(a2);
+										block.transTime			= atof(a3);
+										break;
+									default:
+										break;
 								}
 								block.clockdriftrate			= 0.0;
-								//No IODE provided. Set it to -1
-								block.IODE						= -1;
-								block.SVaccuracy				= 0.;
+								//No IODE and IODC provided. Set it to -1
+								block.IODE								= -1;
+								block.IODC         			           	= -1; 
+								block.SVaccuracy						= 0.;
 								break;
 							case 1:
-								block.satposX                           = atof(a0)*1000;
-								block.satvelX                           = atof(a1)*1000;
-								block.sataccX                           = atof(a2)*1000;
-								block.SVhealth                          = (int)atof(a3);
+								block.satPos[0]           		= atof(a0)*1000;
+								block.satVel[0]           		= atof(a1)*1000;
+								block.satAcc[0]           		= atof(a2)*1000;
+								block.SVhealth          		= (int)atof(a3);
 								break;
 							case 2:
-								block.satposY                           = atof(a0)*1000;
-								block.satvelY                           = atof(a1)*1000;
-								block.sataccY                           = atof(a2)*1000;
-								if (satSystem == GLONASS) {
-									block.freqnumber                = (int)atof(a3);
-								} else {
-									block.URAGEO			= (int)atof(a3);
+								block.satPos[1]           		= atof(a0)*1000;
+								block.satVel[1]           		= atof(a1)*1000;
+								block.satAcc[1]    		    	= atof(a2)*1000;
+								switch(satSystem) {
+									case GLONASS:
+										block.freqnumber    	= (int)atof(a3);
+										block.SVaccuracy		= 0.;
+										break;
+									case GEO:
+										block.URAGEO			= (int)atof(a3);
+										block.SVaccuracy		= (int)atof(a3);;
+										break;
+									default:
+										break;
 								}
 								break;
 							case 3:
-								block.satposZ                           = atof(a0)*1000;
-								block.satvelZ                           = atof(a1)*1000;
-								block.sataccZ                           = atof(a2)*1000;
-								if (satSystem == GLONASS) {
-									block.ageofoperation            = (int)atof(a3);
-									block.fitInterval = 2; //For GLONASS, we will interpolate one hour back and one ahead
-								} else {
-									block.IODNGEO			= (int)atof(a3);
-									block.fitInterval = 4;
+								block.satPos[2]           		= atof(a0)*1000;
+								block.satVel[2]           		= atof(a1)*1000;
+								block.satAcc[2]           		= atof(a2)*1000;
+								switch(satSystem) {
+									case GLONASS:
+										block.ageofoperation	= (int)atof(a3);
+										block.fitInterval 		= 0.5; //For GLONASS, fit interval is 30 min
+										//Set broadcast message type
+										block.BRDCtype = GLOFDMA;
+										products->BRDC->AvailBRDCType[GLONASS][GLOFDMA]=1;
+										break;
+									case GEO:
+										block.IODNGEO			= (int)atof(a3);
+										block.IODE				= block.IODNGEO;
+										block.fitInterval 		= 4;
+										//Set broadcast message type
+										block.BRDCtype = GEOCNAV;
+										products->BRDC->AvailBRDCType[GEO][GEOCNAV]=1;
+										if (block.IODNGEO<0 || block.IODNGEO>255) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid GEO message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODNGEO,numline,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										}
+										break;
+									default:
+										break;
 								}
+								break;
+							default:
 								break;
 						}
 						break;
@@ -3791,99 +5089,301 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 				row++;
 				if ( row == 8 || (row==4 && (satSystem == GLONASS || satSystem == GEO ))) {
 					row = 0;
-					if (satSystem == GLONASS ) {
-						//Toc and Toe of GLONASS will be left in UTC because orbits will be computed in UTC time
-						block.Ttoe = block.Ttoc;
-						ttime2gpswsnoroll(&block.Ttoc,&GPSweek,&SoW);
-						//In Rinex v2, GLONASS transmission time is in UTC seconds of day!! We need to change to seconds of GPS Week
-						DoW=(int)(SoW/86400); //Get Day of Week from Toe
-						if(block.transTime<0) {
-							block.transTime+=86400;
-							DoW--;
-							if(DoW<0) {
-								DoW=6;
-								GPSweek--;
+					switch(satSystem) {
+						case GLONASS:
+							//TocGLO and ToeGLO of GLONASS will be left in UTC because orbits will be computed in UTC time
+							block.TtoeUTC = block.TtocUTC;
+							ttime2gpswsnoroll(&block.TtocUTC,&GPSweek,&SoW);
+							//In Rinex v2, GLONASS frame time is in UTC seconds of day!! We need to change to seconds of GPS Week
+							DoW=(int)(SoW/86400); //Get Day of Week from Toc
+							if(frameTimeGLO<0) {
+								frameTimeGLO+=86400;
+								DoW--;
+								if(DoW<0) {
+									DoW=6;
+									GPSweek--;
+								}
 							}
-						}
-						//Transform transmission time from UTC to GPS time
-						block.transTime+=products->BRDC->AT_LS;
-						if(block.transTime>=86400) {
-							block.transTime-=86400;
-							DoW++;
-							if(DoW>6) {
-								DoW=0;
-								GPSweek++;
+							//Get leap seconds value
+							if (products->BRDC->LeapSecondsAvail==1) {
+								leapSecond=products->BRDC->AT_LS;
+							} else {
+								//Use the hardcoded values for leap seconds
+								if (products->BRDC->leapSeconds==-1) {
+									leapSecond=getLeapSeconds(&block.TtocUTC,products->BRDC->LeapSecondsTimeList,products->BRDC->LeapSecondsNumList);
+									if (products->BRDC->LeapSecondsAvailPast==1) {
+										//Check if hardocded value is smaller then the one read in previous header.
+										//In that case use the last one read
+										if (products->BRDC->AT_LSpast>leapSecond) {
+											leapSecond=products->BRDC->AT_LSpast;
+										}
+									}
+									products->BRDC->leapSeconds=leapSecond;
+								} else {
+									leapSecond=products->BRDC->leapSeconds;
+								}
 							}
-
-						}
-						block.transTime+=DoW*86400;//Convert to seconds of week
-						block.TtransTime = gpsws2ttime(GPSweek,block.transTime);
-					} else if (satSystem == GEO ) {
-						block.Ttoe = block.Ttoc;
-						ttime2gpswsnoroll(&block.Ttoc,&GPSweek,&SoW);
-						block.TtransTime = gpsws2ttime(GPSweek,block.transTime);
-					} else {
-						block.Ttoe = gpsws2ttime(block.GPSweek,block.toe);
-						block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime);
+							//Transform Toc to GPS time
+							block.Ttoc=tdadd(&block.TtoeUTC,leapSecond);
+							//Copy Ttoc to Toe
+							block.Ttoe = block.Ttoc;
+							//Get frametime and convert it to GPS time
+							frameTimeGLO+=DoW*86400;//Convert to seconds of week
+							block.TframeTime = gpsws2ttime(GPSweek,frameTimeGLO);
+							block.TframeTime=tdadd(&block.TframeTime,leapSecond);
+							//Transmission time is 15 minutes prior to the time of clock
+							block.TtransTime=tdadd(&block.Ttoc,-900.);
+							break;
+						case GEO:
+							block.Ttoe = block.Ttoc;
+							ttime2gpswsnoroll(&block.Ttoc,&GPSweek,&SoW);
+							block.TtransTime = gpsws2ttime(GPSweek,block.transTime);
+							break;
+						case Galileo:
+							block.Ttoe = gpsws2ttime(block.GPSweek,block.toe);
+							block.Ttoe = tdadd (&block.Ttoe,7200.); //Add 2 hours to Toe so Toe time is centered in the valid period
+							block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime);
+							break;
+						default:
+							block.Ttoe = gpsws2ttime(block.GPSweek,block.toe);
+							block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime);
+							break;
 					}
-					indSat = products->BRDC->index[satSystem][block.PRN];
-					if (indSat == -1) {
-						products->BRDC->index[satSystem][block.PRN] = products->BRDC->numsats;
+					//Sanity check. Discard messages with 0's in some parameters that should never be 0
+					switch(satSystem) {
+						case GPS: case Galileo: case QZSS: 
+							if (block.deltan==0.||block.M0==0.) {
+								//Bad package. Skip it
+								sprintf(messagestr,"WARNING: Invalid %s message (%s) in line %d in navigation file [%s]. Message discarded",gnsstype2gnssname(satSystem),block.deltan==0?"DeltaN=0":"M0=0",numline-7,filename);
+								printInfo(messagestr,options);
+								continue;
+							}
+							break;
+						case GLONASS: case GEO:
+							if (block.satPos[0]==0. && block.satPos[1]==0. && block.satPos[2]==0.) {
+								//Bad package. Skip it
+								sprintf(messagestr,"WARNING: Invalid %s message (X=Y=0) in line %d in navigation file [%s]. Message discarded",gnsstype2gnssname(satSystem),numline-3,filename);
+								printInfo(messagestr,options);
+								continue;
+							}
+							break;
+						default:
+							break;
+					}
+					fillBroadcastHealth(&block);
+					if (options->brdcHealthSkip[block.GlobalHealth]==0) {
 						indSat = products->BRDC->index[satSystem][block.PRN];
-						products->BRDC->block = realloc(products->BRDC->block,sizeof(TBRDCblock*)*(products->BRDC->numsats+1));
-						products->BRDC->numblocks = realloc(products->BRDC->numblocks,sizeof(int)*(products->BRDC->numsats+1));
-						products->BRDC->block[indSat] = NULL;
-						products->BRDC->numblocks[indSat] = 0;
-						products->BRDC->numsats++;
+						if (indSat == -1) {
+							products->BRDC->index[satSystem][block.PRN] = products->BRDC->numsats;
+							indSat = products->BRDC->index[satSystem][block.PRN];
+							products->BRDC->block = realloc(products->BRDC->block,sizeof(TBRDCblock*)*(products->BRDC->numsats+1));
+							products->BRDC->blockPointer = realloc(products->BRDC->blockPointer,sizeof(TBRDCblock*)*(products->BRDC->numsats+1));
+							products->BRDC->numblocks = realloc(products->BRDC->numblocks,sizeof(int *)*(products->BRDC->numsats+1));
+							products->BRDC->numblocks[indSat] = NULL;
+							products->BRDC->numblocks[indSat]= malloc(sizeof(int)*MAX_BRDC_TYPES);
+							products->BRDC->block[indSat]= NULL;
+							products->BRDC->block[indSat]= malloc(sizeof(TBRDCblock*)*MAX_BRDC_TYPES);
+							products->BRDC->blockPointer[indSat]= NULL;
+							products->BRDC->blockPointer[indSat]= malloc(sizeof(TBRDCblock*)*MAX_BRDC_TYPES);
+							for(i=0;i<MAX_BRDC_TYPES;i++) {
+								products->BRDC->block[indSat][i] = NULL;
+								products->BRDC->blockPointer[indSat][i] = NULL;
+								products->BRDC->numblocks[indSat][i] = 0;
+							}
+							products->BRDC->numsats++;
+							//Navigation message contains IOD. Add space also for IOD ordered array
+							products->BRDC->blockIOD = realloc(products->BRDC->blockIOD,sizeof(TBRDCblock*)*(products->BRDC->numsats+1));
+							products->BRDC->numblocksIOD = realloc(products->BRDC->numblocksIOD,sizeof(int *)*(products->BRDC->numsats+1));
+							products->BRDC->numblocksIOD[indSat] = NULL;
+							products->BRDC->numblocksIOD[indSat]= malloc(sizeof(int*)*MAX_BRDC_TYPES);
+							products->BRDC->blockIOD[indSat]= NULL;
+							products->BRDC->blockIOD[indSat]= malloc(sizeof(TBRDCblock*)*MAX_BRDC_TYPES);
+							for(i=0;i<MAX_BRDC_TYPES;i++) {
+								products->BRDC->blockIOD[indSat][i] = NULL;
+								products->BRDC->blockIOD[indSat][i] = malloc(sizeof(TBRDCblock*)*MAX_IODE_VALUE);
+								products->BRDC->numblocksIOD[indSat][i]= malloc(sizeof(int)*MAX_IODE_VALUE);
+								for(j=0;j<MAX_IODE_VALUE;j++) {
+									products->BRDC->numblocksIOD[indSat][i][j] = 0;
+									products->BRDC->blockIOD[indSat][i][j] = NULL;
+								}
+							}
+						}
+						//DataTypeRead[indSat][block.BRDCtype]=1;
+						indBlock = products->BRDC->numblocks[indSat][block.BRDCtype];
+						products->BRDC->block[indSat][block.BRDCtype] = realloc(products->BRDC->block[indSat][block.BRDCtype],sizeof(TBRDCblock)*(indBlock+1));
+						memcpy(&products->BRDC->block[indSat][block.BRDCtype][indBlock], &block,sizeof(TBRDCblock));
+						products->BRDC->numblocks[indSat][block.BRDCtype]++;
 					}
-					indBlock = products->BRDC->numblocks[indSat];
-					products->BRDC->block[indSat] = realloc(products->BRDC->block[indSat],sizeof(TBRDCblock)*(indBlock+1));
-					memcpy(&products->BRDC->block[indSat][indBlock], &block,sizeof(TBRDCblock));
-					products->BRDC->numblocks[indSat]++;
 				}
 			}// End Nav Rinex v2
 			 // Start Nav Rinex v3
-			else if ((int)(*rinexNavVersion)==3) {
+			else if ((int)(*rinexNavVersion)==3||(int)(*rinexNavVersion)==4) {
 				if (row==0) {
-					getstr(ConstellationType,line,0,1);	//GNSS type letter
+					initBRDCblock(&block);
+					getstr(ConstellationType,line,len,0,1);	//GNSS type letter
 					satSystem = gnsschar2gnsstype(ConstellationType[0]);
-					if ( satSystem==QZSS || satSystem==IRNSS)  {row++;continue;} // QZSS and IRNSS are unsupported
-						getstr(aux,line,1,2);	//PRN
-						block.PRN = atoi(aux);
-						getstr(aux,line,4,4);	//Year
-						tm.tm_year = atoi(aux) -1900;
-						getstr(aux,line,9,2);	//Month
-						tm.tm_mon  = atoi(aux)-1;
-						getstr(aux,line,12,2);	//Day
-						tm.tm_mday = atoi(aux);
-						getstr(aux,line,15,2);	//Hour
-						tm.tm_hour = atoi(aux);
-						getstr(aux,line,18,2);	//Minute
-						tm.tm_min  = atoi(aux);
-						getstr(aux,line,21,2);	//Second
-						tm.tm_sec  = atoi(aux);
-						seconds = atof(aux);
+					block.GNSS=satSystem;
+					getstr(aux,line,len,1,2);	//PRN
+					block.PRN = atoi(aux);
+					if (block.PRN<=0 || block.PRN>=MAX_SATELLITES_PER_GNSS) {
+						sprintf(messagestr,"Invalid PRN '%s' in line %d in navigation file [%s]",aux,numline,filename);
+						printError(messagestr,options);
+					}
+					//Check if navigation file contains LNAV, CNAV or CNAV2
+					if (strncmp(&line[5],"NAV",3)==0) {
+						strncpy(aux2,&line[4],4);
+						if (strncmp(&line[4],"LNAV",4)==0) {
+							msgtype=(int)GPSLNAV; //GPSLNAV or QZSLNAV
+						} else if (strncmp(&line[4],"CNAV2",5)==0 ) {
+							switch(satSystem) {
+								case GPS:
+									msgtype=(int)GPSCNAV2;
+									break;
+								case BDS:
+									msgtype=(int)BDSCNAV2;
+									break;
+								case QZSS:
+									msgtype=(int)QZSCNAV2;
+									break;
+								default:
+									msgtype=0; //GEO and IRNSS have CNAV on position 0
+									break;
+							}
+						} else if (strncmp(&line[4],"CNAV1",5)==0 ) {
+							switch(satSystem) {
+								case GPS:
+									msgtype=(int)GPSCNAV; 
+									break;
+								case QZSS:
+									msgtype=(int)QZSCNAV;
+									break;
+								case BDS:
+									msgtype=(int)BDSCNAV1;
+									break;
+								default:
+									msgtype=0; //GEO and IRNSS have CNAV on position 0
+									break;
+							}
+						} else if (strncmp(&line[4],"CNAV",4)==0 ) {
+							switch(satSystem) {
+								case GPS:
+									msgtype=(int)GPSCNAV; 
+									break;
+								case QZSS:
+									msgtype=(int)QZSCNAV;
+									break;
+								case Galileo:
+									msgtype=(int)GalCNAV;
+									break;
+								case BDS:
+									msgtype=(int)BDSCNAV1;
+									break;
+								default:
+									msgtype=0; //GEO and IRNSS have CNAV on position 0
+									break;
+							}
+						} else if (strncmp(&line[4],"FNAV",4)==0) {
+							msgtype=0; //0 is GALFNAV
+						} else if (strncmp(&line[4],"INAV",4)==0) {
+							msgtype=1; //1 is GALINAV
+						} else if (aux2[0]=='\0') {
+							msgtype=0; //Any other constellation which has not defined message type
+						} else {
+							sprintf(messagestr,"WARNING: Invalid %s message type '%s' in line %d in navigation file [%s]. Message discarded",gnsstype2gnssname(satSystem),aux2,numline,filename);
+							printInfo(messagestr,options);
+							row = 0;
+							switch(satSystem) {
+								case GLONASS: case GEO:
+									j=5;
+									break;
+								default:
+									j=8;
+									break;
+							}
+							//Skip lines for the discarded navigation message
+							for(i=0;i<j;i++) {
+								ret = getL(line,&len,fd);
+								if (ret==-1) return 0;
+								numline++;
+							}
+							//CNAV messages have an extra line. Check if we have to discard another extra line	
+							ret = getL(line,&len,fd);
+							if (ret==-1 && feof_function(fd)==0) return 0;
+							else if (feof_function(fd)>0) break; //End of file
+							if (line[0]!=' ') {
+								//We were already in the last line of the navigation message
+								getLback(line,&len,fd);
+							} else {
+								numline++;
+							}
+							continue;
+						}
+						//Data is in next line
+						ret = getL(line,&len,fd);
+						if (ret==-1) return 0;
+						numline++;
+					} else {
+						switch(satSystem) {
+							case GPS:
+								msgtype=GPSLNAV;
+								break;
+							case QZSS:
+								msgtype=QZSLNAV;
+								break;
+							default:
+								//To be filled when navigation messages RINEX format is updated
+								break;
+						}
+					}
+
+
+					invalidDate=0;
+					getstr(aux,line,len,4,4);	//Year
+					tm.tm_year = atoi(aux);
+					if (tm.tm_year<1900) invalidDate=1;
+					tm.tm_year -= 1900;
+					getstr(aux,line,len,9,2);	//Month
+					tm.tm_mon  = atoi(aux);
+					if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+					tm.tm_mon  -= 1;
+					getstr(aux,line,len,12,2);	//Day
+					tm.tm_mday = atoi(aux);
+					if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+					getstr(aux,line,len,15,2);	//Hour
+					tm.tm_hour = atoi(aux);
+					if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+					getstr(aux,line,len,18,2);	//Minute
+					tm.tm_min  = atoi(aux);
+					if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+					getstr(aux,line,len,21,2);	//Second
+					tm.tm_sec  = atoi(aux);
+					if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1;	//Seconds can have value 60 when a leap second is inserted
+					seconds = atof(aux);
+					if (satSystem==GLONASS) {
+						block.TtocUTC.MJDN = MJDN(&tm);
+						block.TtocUTC.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+					} else {
 						block.Ttoc.MJDN = MJDN(&tm);
 						block.Ttoc.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+					}
+					if (invalidDate==1) {
+						sprintf(messagestr,"Invalid date '%.23s' in line %d in navigation file [%s]",line,numline,filename);
+						printError(messagestr,options);
+					}
 				}
-				if ( satSystem==QZSS || satSystem==IRNSS ) { //QZSS and IRNSS are unsupported
-					row++;
-					if(row==8) { row=0;}	
-					continue;
-				} 
-				getstr(a0,line,4,19);
+				getstr(a0,line,len,4,19);
 				if (a0[13]=='D' || a0[13]=='e') a0[13]='E';
 				if (a0[14]=='D' || a0[14]=='e') a0[14]='E';
 				if (a0[15]=='D' || a0[15]=='e') a0[15]='E';	// '-' sign can appear or not
-				getstr(a1,line,23,19);
+				getstr(a1,line,len,23,19);
 				if (a1[13]=='D' || a1[13]=='e') a1[13]='E';
 				if (a1[14]=='D' || a1[14]=='e') a1[14]='E';
 				if (a1[15]=='D' || a1[15]=='e') a1[15]='E';	// '-' sign can appear or not
-				getstr(a2,line,42,19);
+				getstr(a2,line,len,42,19);
 				if (a2[13]=='D' || a2[13]=='e') a2[13]='E';
 				if (a2[14]=='D' || a2[14]=='e') a2[14]='E';
 				if (a2[15]=='D' || a2[15]=='e') a2[15]='E';	// '-' sign can appear or not
-				getstr(a3,line,61,19);
+				getstr(a3,line,len,61,19);
 				if (a3[13]=='D' || a3[13]=='e') a3[13]='E';
 				if (a3[14]=='D' || a3[14]=='e') a3[14]='E';
 				if (a3[15]=='D' || a3[15]=='e') a3[15]='E';	// '-' sign can appear or not
@@ -3891,7 +5391,7 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 				
 
 				switch (satSystem) {
-					case GPS: case Galileo: case BDS:
+					case GPS: case Galileo: case BDS: case QZSS: case IRNSS:
 						switch (row) {
 							case 0:
 								block.clockbias							= atof(a1);
@@ -3899,7 +5399,23 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 								block.clockdriftrate					= atof(a3);
 								break;
 							case 1:
-								block.IODE								= (int)atof(a0);
+								switch (satSystem) {
+									case GPS: case QZSS:
+										if (msgtype==GPSLNAV) { //LNAV
+											block.IODE                  = (int)atof(a0);
+										} else { //CNAV
+											block.IODE					= -1; //No IODE provided
+											block.aDot					= atof(a0);
+										}
+										break;
+									case BDS:
+										block.IODE		                = -1; //No IODE provided
+										block.AODE						= (int)atof(a0);
+										break;
+									default:
+										block.IODE						= (int)atof(a0);
+										break;
+								}
 								block.crs								= atof(a1);
 								block.deltan							= atof(a2);
 								block.M0								= atof(a3);
@@ -3911,7 +5427,18 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 								block.sqrta								= atof(a3);
 								break;
 							case 3:
-								block.toe								= atof(a0);
+								switch (satSystem) {
+									case GPS: case QZSS:
+										if (msgtype==GPSLNAV) { //LNAV
+											block.toe                   = (int)atof(a0);
+										} else { //CNAV
+											block.top					= atof(a0); //Time of ephemeris prediction
+										}
+										break;
+									default:
+										block.toe						= (int)atof(a0);
+										break;
+								}
 								block.cic								= atof(a1);
 								block.OMEGA								= atof(a2);
 								block.cis								= atof(a3);
@@ -3923,59 +5450,278 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 								block.OMEGADOT							= atof(a3);
 								break;
 							case 5:
+								//GPS, Galileo, QZSS and IRNSS are all in GPS time
+								//BDS in BeiDou time
 								block.IDOT								= atof(a0);
-								if (satSystem == GPS) {
-									block.codesOnL2						= (int)atof(a1);
-									block.GPSweek						= (int)atof(a2);
-									block.L2Pdataflag					= (int)atof(a3);
-								} else if (satSystem == Galileo) {
-									block.dataSources		= (int)atof(a1);
-									block.GALweek			= (int)atof(a2);
-									block.GPSweek			= block.GALweek;
-								} else if (satSystem == BDS) {
-									block.BDSweek			= (int)atof(a2);
-									block.GPSweek			= block.BDSweek+1356;
+								switch(satSystem) {
+									case GPS: case QZSS:
+										if (msgtype==GPSLNAV) { //LNAV
+											block.codesOnL2				= (int)atof(a1);
+											block.GPSweek				= (int)atof(a2);
+											block.L2Pdataflag			= (int)atof(a3);
+										} else { //CNAV
+											block.nDot					= atof(a1);
+											block.URANED0				= (int)atof(a2);
+											block.URANED1				= (int)atof(a3);
+											//GPSweek not provided. Get it from Toc
+											ttime2gpswsnoroll(&block.Ttoc,&block.GPSweek,&block.toe);
+										}
+										break;
+									case Galileo:
+										block.dataSources				= (int)atof(a1);
+										block.GALweek					= (int)atof(a2);
+										block.GPSweek					= block.GALweek;
+										break;
+									case BDS:
+										block.BDSweek					= (int)atof(a2);
+										block.GPSweek					= block.BDSweek+1356;
+										break;
+									case IRNSS:
+										block.GPSweek                   = (int)atof(a2);
+										break;
+									default:
+										break;
 								}
 								break;
 							case 6:
-								block.SVaccuracy = block.SISASignal		= atof(a0);
-								block.SVhealth							= (int)atof(a1);
-								if (satSystem == GPS) {
-									block.TGD							= atof(a2);
-									block.IODC							= (int)atof(a3);
-								} else if (satSystem == Galileo) {
-									block.BGDE5a			= atof(a2);
-									block.BGDE5b			= atof(a3);
-								} else if (satSystem == BDS) {
-									block.TGD                       = atof(a2);
-									block.TGD2                      = atof(a3);
-								}
+								switch(satSystem) {	
+									case GPS: case QZSS:
+										if (msgtype==GPSLNAV) { //LNAV
+											block.SVaccuracy 			= atof(a0);
+											block.SVhealth				= (int)atof(a1);
+											block.TGD					= atof(a2);
+											block.IODC					= (int)atof(a3);
+										} else {	//CNAV
+											block.URAIndexED			= atof(a0);
+											block.SVhealth              = (int)atof(a1);
+											block.TGD                   = atof(a2);
+											block.URANED2				= (int)atof(a3);
+											block.SVaccuracy 			= 0.;
+										}
+										break;
+									case Galileo:
+										block.SISASignal				= atof(a0);
+										block.SVaccuracy				= block.SISASignal;
+										block.SVhealth					= (int)atof(a1);
+										block.BGDE5a					= atof(a2);
+										block.BGDE5b					= atof(a3);
+										break;
+									case BDS:
+										block.SVaccuracy				= atof(a0);
+										block.SVhealth					= (int)atof(a1);
+										block.TGD26         		    = atof(a2);
+										block.TGD76        		    	= atof(a3);
+										block.TGD16        		    	= 0.;
+										block.TGD56     		       	= 0.;
+										block.ISCB1Cd					= 0.;
+										block.ISCB2ad					= 0.;
+										break;
+									case IRNSS:
+										block.IRNURA					= atof(a0);
+										block.SVaccuracy				= block.IRNURA;
+										block.SVhealth					= (int)atof(a1);
+										block.TGD						= atof(a2);
+										break;
+									default:
+										break;
+									}
 								break;
 							case 7:
-								block.transTime							= atof(a0);
-								if (satSystem == GPS) {								
-									block.fitInterval					= (int)atof(a1);
-									if ( block.fitInterval == 0 ) block.fitInterval = 4;
-								} else if (satSystem == BDS) {
-									//block.transTime-=14;//Adjust 14 seconds to GPS time
-									block.IODC                      = (int)atof(a1);
-									if ( block.IODC>=0 && block.IODC<=1023 ) block.fitInterval=4;
-								} else  if (satSystem == Galileo) {
-									block.fitInterval		= 4;
+								//GPS, Galileo, QZSS and IRNSS are all in GPS time
+								//BDS in BeiDou time
+								switch(satSystem) {
+									case GPS:
+										if (msgtype==GPSLNAV) { //LNAV
+											block.transTime				= atof(a0);
+											block.fitInterval			= atof(a1);
+											block.ISCL1CA				= 0.;
+											block.ISCL1CD				= 0.;
+											block.ISCL1CP				= 0.;
+											block.ISCL2C				= 0.;
+											block.ISCL5I5				= 0.;
+											block.ISCL5Q5				= 0.;
+											//Check if IODC%256 matches with IODE
+											if (block.IODC%256!=block.IODE) {
+												//Invalid message type
+												sprintf(messagestr,"WARNING: Invalid GPS message (IODC%%256 does not match IODE) in line %d in navigation file [%s]. Message discarded",numline-1,filename);
+												printInfo(messagestr,options);
+												row = 0;
+												continue;
+											} else if (block.IODE<0 || block.IODE>255) {
+												//Invalid message type
+												sprintf(messagestr,"WARNING: Invalid GPS message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODE,numline-6,filename);
+												printInfo(messagestr,options);
+												row = 0;
+												continue;
+											}
+										} else { //CNAV
+											block.ISCL1CA				= atof(a0);
+											block.ISCL1CD				= 0.;
+											block.ISCL1CP				= 0.;
+											block.ISCL2C				= atof(a1);
+											block.ISCL5I5				= atof(a2);
+											block.ISCL5Q5				= atof(a3);
+											//Get next line of data
+											ret = getL(line,&len,fd);
+											if (ret==-1) return 0;
+											numline++;
+											block.transTime             = atof(a0);
+											block.fitInterval           = 0; //Fit interval not provided in CNAV
+										}
+										if ( block.fitInterval == 0 ) block.fitInterval = 4;
+										//Set broadcast message type
+										block.BRDCtype = msgtype;
+										products->BRDC->AvailBRDCType[GPS][msgtype]=1;
+										break;
+									case QZSS:
+										if (msgtype==QZSLNAV) { //LNAV
+											block.transTime				= atof(a0);
+											block.fitInterval			= atof(a1);
+											block.ISCL1CA				= 0.;
+											block.ISCL1CD				= 0.;
+											block.ISCL1CP				= 0.;
+											block.ISCL2C				= 0.;
+											block.ISCL5I5				= 0.;
+											block.ISCL5Q5				= 0.;
+											//Check if IODC%256 matches with IODE
+											if (block.IODC%256!=block.IODE) {
+												//Invalid message type
+												sprintf(messagestr,"WARNING: Invalid QZSS message (IODC%%256 (%d) does not match IODE (%d)) in line %d in navigation file [%s]. Message discarded",block.IODC%256,block.IODE,numline,filename);
+												printInfo(messagestr,options);
+												row = 0;
+												continue;
+											} else if (block.IODE<0 || block.IODE>255) {
+												//Invalid message type
+												sprintf(messagestr,"WARNING: Invalid QZSS message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODE,numline-5,filename);
+												printInfo(messagestr,options);
+												row = 0;
+												continue;
+											}
+										} else { //CNAV
+											block.ISCL1CA				= 0.; //L1 C/A is reference signal in QZSS
+											block.ISCL1CD				= 0.;
+											block.ISCL1CP				= 0.;
+											block.ISCL2C				= atof(a1);
+											block.ISCL5I5				= atof(a2);
+											block.ISCL5Q5				= atof(a3);
+											//Get next line of data
+											ret = getL(line,&len,fd);
+											if (ret==-1) return 0;
+											numline++;
+											block.transTime             = atof(a0);
+											block.fitInterval           = 0; //Fit interval not provided in CNAV
+
+										}
+										if ( block.fitInterval == 0 ) block.fitInterval = 2;
+										else block.fitInterval = 4;
+										//Set broadcast message type
+										block.BRDCtype = msgtype;
+										products->BRDC->AvailBRDCType[QZSS][msgtype]=1;
+										break;
+									case Galileo:
+										block.transTime					= atof(a0);
+										block.fitInterval				= 4;
+										block.IODC                    	= -1; //No IODC provided
+										//Set broadcast message type
+										switch (block.dataSources & GALILEOBRDCMSGMASK) {
+											case 258:
+												//FNAV
+												block.BRDCtype = GalFNAV;
+												products->BRDC->AvailBRDCType[Galileo][GalFNAV]=1;
+												break;
+											case 513:
+												//INAV E1-B only
+												block.BRDCtype = GalINAVE1;
+												products->BRDC->AvailBRDCType[Galileo][GalINAVE1]=1;
+												break;
+											case 516:
+												//INAV E5b only
+												block.BRDCtype = GalINAVE5b;
+												products->BRDC->AvailBRDCType[Galileo][GalINAVE5b]=1;
+												break;
+											case 517:
+												//INAV E1-B+E5b
+												block.BRDCtype = GalINAVE1E5b;
+												products->BRDC->AvailBRDCType[Galileo][GalINAVE1E5b]=1;
+												break;
+											default:
+												//Invalid message type
+												sprintf(messagestr,"WARNING: Invalid Galileo message type (Data Sources has invalid value %d) in line %d in navigation file [%s]. Message discarded",block.dataSources,numline-2,filename);
+												printInfo(messagestr,options);
+												row = 0;
+												continue;
+												break;
+										} 
+										if (block.IODE<0 || block.IODE>1023) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid Galileo message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODE,numline-6,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										}
+										break;
+									case BDS:
+										block.transTime					= atof(a0);
+										block.AODC                    	= (int)atof(a1);
+										block.IODC                    	= -1; //No IODC provided
+										block.fitInterval				= 4; //Fit interval is not provided
+										//Set broadcast message type
+										block.BRDCtype = BDSD1;
+										products->BRDC->AvailBRDCType[BDS][BDSD1]=1;
+										break;
+									case IRNSS:
+										block.transTime					= atof(a0);
+										block.IODC                    	= -1; //No IODC provided
+										block.fitInterval				= 4; //Fit interval is not provided
+										//Set broadcast message type
+										block.BRDCtype = IRNCNAV;
+										products->BRDC->AvailBRDCType[IRNSS][IRNCNAV]=1;
+										if (block.IODE<0 || block.IODE>255) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid IRNSS message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODE,numline-5,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										}
+										break;
+									default:
+										break;
 								}
+								if (block.transTime>=0.9999E9) {
+									//Invalid transmission time
+									switch(satSystem) {
+										case Galileo:
+											sprintf(messagestr,"WARNING: Invalid %s tranmission time (%f) in line %d in navigation file [%s]. Toe will be used as transmission time",gnsstype2gnssname(block.GNSS),block.transTime,numline,filename);
+											block.transTime=block.toe;
+											break;
+										default:
+											sprintf(messagestr,"WARNING: Invalid %s tranmission time (%f) in line %d in navigation file [%s]. Toe-2h will be used as transmission time",gnsstype2gnssname(block.GNSS),block.transTime,numline,filename);
+											block.transTime=block.toe-7200.;
+											break;
+									}
+									printInfo(messagestr,options);
+								}
+								break;
+							default:
 								break;
 						}
 						break;
 					case GLONASS: case GEO:
 						switch(row){
 							case 0:
-								block.clockbias     		        = atof(a1);
-								if (satSystem == GLONASS) {
-									block.clockdrift          	= atof(a2);
-									block.transTime			= atof(a3);
-								} else {
-									block.clockdrift                = atof(a2);
-									block.transTime			= atof(a3);
+								//Glonass in UTC time. GEO in GPS time
+								block.clockbias     		    	    = atof(a1);
+								switch(satSystem) {
+									case GLONASS:
+										block.clockdrift         	 	= atof(a2);
+										frameTimeGLO					= atof(a3);
+										break;
+									case GEO:
+										block.clockdrift               	= atof(a2);
+										block.transTime					= atof(a3);
+										break;
+									default:
+										break;
 								}
 								block.clockdriftrate					= 0.0;
 								//No IODE and IODC provided. Set it to -1
@@ -3984,32 +5730,73 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 								block.SVaccuracy						= 0.;
 								break;
 							case 1:
-								block.satposX                           = atof(a0)*1000;
-								block.satvelX                           = atof(a1)*1000;
-								block.sataccX                           = atof(a2)*1000;
+								block.satPos[0]                         = atof(a0)*1000;
+								block.satVel[0]                         = atof(a1)*1000;
+								block.satAcc[0]                         = atof(a2)*1000;
 								block.SVhealth                          = (int)atof(a3);
 								break;
 							case 2:
-								block.satposY                           = atof(a0)*1000;
-								block.satvelY                           = atof(a1)*1000;
-								block.sataccY                           = atof(a2)*1000;
-								if (satSystem == GLONASS) {
-									block.freqnumber                = (int)atof(a3);
-								} else {
-									block.URAGEO			= (int)atof(a3);
+								block.satPos[1]                         = atof(a0)*1000;
+								block.satVel[1]                         = atof(a1)*1000;
+								block.satAcc[1]                         = atof(a2)*1000;
+								switch(satSystem) {
+									case GLONASS:
+										block.freqnumber               	= (int)atof(a3);
+										break;
+									case GEO:
+										block.URAGEO					= (int)atof(a3);
+										block.SVaccuracy				= block.URAGEO;
+										break;
+									default:
+										break;
 								}
 								break;
 							case 3:
-								block.satposZ                           = atof(a0)*1000;
-								block.satvelZ                           = atof(a1)*1000;
-								block.sataccZ                           = atof(a2)*1000;
-								if (satSystem == GLONASS) {
-									block.ageofoperation            = (int)atof(a3);
-									block.fitInterval = 2; //For GLONASS, we will interpolate one hour back and one ahead
-								} else {
-									block.IODNGEO			= (int)atof(a3);
-									block.fitInterval = 4;
+								block.satPos[2]                         = atof(a0)*1000;
+								block.satVel[2]                         = atof(a1)*1000;
+								block.satAcc[2]                         = atof(a2)*1000;
+								switch(satSystem) {
+									case GLONASS:
+										block.ageofoperation          	= (int)atof(a3);
+										block.fitInterval 				= 0.5; //For GLONASS, fit interval is 30 min
+										//Set broadcast message type
+										block.BRDCtype = GLOFDMA;
+										products->BRDC->AvailBRDCType[GLONASS][GLOFDMA]=1;
+										break;
+									case GEO:
+										block.IODNGEO					= (int)atof(a3);
+										block.IODE						= block.IODNGEO;
+										block.fitInterval 				= 4;
+										//Set broadcast message type
+										block.BRDCtype = GEOCNAV;
+										products->BRDC->AvailBRDCType[GEO][GEOCNAV]=1;
+										if (block.IODNGEO<0 || block.IODNGEO>255) {
+											//Invalid message type
+											sprintf(messagestr,"WARNING: Invalid GEO message (Invalid IODE value %d) in line %d in navigation file [%s]. Message discarded",block.IODNGEO,numline,filename);
+											printInfo(messagestr,options);
+											row = 0;
+											continue;
+										}
+										break;
+									default:
+										break;
 								}
+								break;
+							case 4:
+								//This line is only for GLONASS since RINEX 3.05
+								switch(satSystem) {
+									case GLONASS:
+										block.GLOfifthLineAvail			= 1;
+										block.GLOstatusflags			=(int)atof(a0);
+										block.TGD						=atof(a1);
+										block.URAI						=atof(a2);
+										block.GLOextraHealthFlags		=(int)atof(a3);
+										if (block.TGD>=0.9999E9) block.TGD=0.;
+										break;
+									default:
+										break;
+								}
+							default:
 								break;
 						}
 						break;
@@ -4017,50 +5804,237 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
 						break;
 				}
 				row++;
-				if (row==8 || (row==4 && (satSystem == GLONASS || satSystem == GEO ))) {
+				if (row==8 || (row==4 && satSystem == GEO ) || (satSystem == GLONASS && ( (row==4 && *rinexNavVersion<=3.04) || row==5 ) ) ) {
 					row = 0;
-					if (satSystem == GLONASS ) {
-						//Toc and Toe of GLONASS will be left in UTC because orbits will be computed in UTC time
-						block.Ttoe = block.Ttoc;
-						ttime2gpswsnoroll(&block.Ttoc,&GPSweek,&SoW);
-						//In Rinex v3, GLONASS transmission time is in UTC seconds of week!
-						//Transform transmission time from UTC to GPS time
-						block.transTime+=products->BRDC->AT_LS;
-						block.TtransTime = gpsws2ttime(GPSweek,block.transTime);
-					} else if (satSystem == GEO ) {
-						block.Ttoe = block.Ttoc;
-						ttime2gpswsnoroll(&block.Ttoc,&GPSweek,&SoW);
-						block.TtransTime = gpsws2ttime(GPSweek,block.transTime);
-					} else if (satSystem == BDS ) {
-						//Convert from BeiDou time to GPS time
-						//block.toe (toe in in seconds of BDS week) must be left untouched for computing satellite coordinates correctly
-						block.Ttoc = tdadd(&block.Ttoc,14.);
-						block.Ttoe = gpsws2ttime(block.GPSweek,block.toe+14.);
-						block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime+14.);
-					} else {
-						block.Ttoe = gpsws2ttime(block.GPSweek,block.toe);
-						block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime);
+					switch(satSystem) {
+						case GLONASS:
+							//Get leap seconds value
+							if (products->BRDC->LeapSecondsAvail==1) {
+								leapSecond=products->BRDC->AT_LS;
+							} else {
+								//Use the hardcoded values for leap seconds
+								if (products->BRDC->leapSeconds==-1) {
+									leapSecond=getLeapSeconds(&block.TtocUTC,products->BRDC->LeapSecondsTimeList,products->BRDC->LeapSecondsNumList);
+									if (products->BRDC->LeapSecondsAvailPast==1) {
+										//Check if hardocded value is smaller then the one read in previous header.
+										//In that case use the last one read
+										if (products->BRDC->AT_LSpast>leapSecond) {
+											leapSecond=products->BRDC->AT_LSpast;
+										}
+									}
+									products->BRDC->leapSeconds=leapSecond;
+								} else {
+									leapSecond=products->BRDC->leapSeconds;
+								}
+							}
+							//TocGLO and ToeGLO of GLONASS will be left in UTC because orbits will be computed in UTC time
+							block.TtoeUTC = block.TtocUTC;
+							ttime2gpswsnoroll(&block.TtocUTC,&GPSweek,&SoW);
+							//Transform Toc to GPS time
+							block.Ttoc=tdadd(&block.TtoeUTC,leapSecond);
+							//Copy Ttoc to Toe
+							block.Ttoe = block.Ttoc;
+							//Get frametime and convert it to GPS time
+							//In Rinex v3, GLONASS transmission time is in UTC seconds of week!
+							block.TframeTime = gpsws2ttime(GPSweek,frameTimeGLO);
+							//Transmission time is 15 minutes prior to the time of clock
+							block.TtransTime=tdadd(&block.Ttoc,-900.);
+							break;
+						case GEO:
+							block.Ttoe = block.Ttoc;
+							ttime2gpswsnoroll(&block.Ttoc,&GPSweek,&SoW);
+							block.TtransTime = gpsws2ttime(GPSweek,block.transTime);
+							break;
+						case BDS:
+							//Convert from BeiDou time to GPS time
+							//block.toe (toe in in seconds of BDS week) must be left untouched for computing satellite coordinates correctly
+							block.Ttoc = tdadd(&block.Ttoc,DIFFBDS2GPSTIME);
+							block.Ttoe = gpsws2ttime(block.GPSweek,block.toe+DIFFBDS2GPSTIME);
+							block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime+DIFFBDS2GPSTIME);
+							break;
+						case GPS: 
+							if (block.BRDCtype==GPSCNAV || block.BRDCtype==GPSCNAV2) {
+								//CNAV
+								//The top (Time of ephemeris prediction) is the time where the message is estimated, not the actual Toe
+								//We need to use as Toe the Toc
+								block.Ttoe = block.Ttoc; 
+							} else {
+								//LNAV
+								block.Ttoe = gpsws2ttime(block.GPSweek,block.toe);
+							}
+							block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime);
+							break;
+						case QZSS:
+							if (block.BRDCtype==QZSCNAV || block.BRDCtype==QZSCNAV2) {
+								//CNAV
+								//The top (Time of ephemeris prediction) is the time where the message is estimated, not the actual Toe
+								//We need to use as Toe the Toc
+								block.Ttoe = block.Ttoc; 
+							} else {
+								//LNAV
+								block.Ttoe = gpsws2ttime(block.GPSweek,block.toe);
+							}
+							block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime);
+							break;
+						case Galileo:
+							block.Ttoe = gpsws2ttime(block.GPSweek,block.toe);
+							block.Ttoe = tdadd (&block.Ttoe,7200.); //Add 2 hours to Toe so Toe time is centered in the valid period
+							block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime);
+							break;
+						default:
+							//IRNSS
+							block.Ttoe = gpsws2ttime(block.GPSweek,block.toe);
+							block.TtransTime = gpsws2ttime(block.GPSweek,block.transTime);
+							break;
 					}
-					indSat = products->BRDC->index[satSystem][block.PRN];
-					if (indSat == -1) {
-						products->BRDC->index[satSystem][block.PRN] = products->BRDC->numsats;
+					//Sanity check. Discard messages with 0's in some parameters that should never be 0
+					switch(satSystem) {
+						case GPS:
+							if (block.deltan==0.||block.M0==0.) {
+								//Bad package. Skip it
+								sprintf(messagestr,"WARNING: Invalid %s message (%s) in line %d in navigation file [%s]. Message discarded",gnsstype2gnssname(satSystem),block.deltan==0?"DeltaN=0":"M0=0",msgtype==GPSLNAV?numline-7:numline-8,filename);
+								printInfo(messagestr,options);
+								continue;
+							}
+							break;
+						case QZSS: 
+							//In QZSS some of these values may be 0 due to they can be GEO satellites
+							if (block.deltan==0.||block.M0==0.) {
+								//Bad package. Skip it
+								sprintf(messagestr,"WARNING: Invalid %s message (%s) in line %d in navigation file [%s]. Message discarded",gnsstype2gnssname(satSystem),block.deltan==0?"DeltaN=0":"M0=0",msgtype==QZSLNAV?numline-7:numline-8,filename);
+								printInfo(messagestr,options);
+								continue;
+							}
+							break;
+						case Galileo: case BDS: case IRNSS:
+							if (block.deltan==0.||block.M0==0.) {
+								//Bad package. Skip it
+								sprintf(messagestr,"WARNING: Invalid %s message (%s) in line %d in navigation file [%s]. Message discarded",gnsstype2gnssname(satSystem),block.deltan==0?"DeltaN=0":"M0=0",numline-7,filename);
+								printInfo(messagestr,options);
+								continue;
+							}
+							break;
+						case GLONASS: case GEO:
+							if (block.satPos[0]==0. && block.satPos[1]==0. && block.satPos[2]==0.) {
+								//Bad package. Skip it
+								sprintf(messagestr,"WARNING: Invalid %s message (X=Y=Z=0) in line %d in navigation file [%s]. Message discarded",gnsstype2gnssname(satSystem),numline-3,filename);
+								printInfo(messagestr,options);
+								continue;
+							}
+							break;
+						default:
+							break;
+					}
+					fillBroadcastHealth(&block);
+					if (options->brdcHealthSkip[block.GlobalHealth]==0) {
 						indSat = products->BRDC->index[satSystem][block.PRN];
-						products->BRDC->block = realloc(products->BRDC->block,sizeof(TBRDCblock*)*(products->BRDC->numsats+1));
-						products->BRDC->numblocks = realloc(products->BRDC->numblocks,sizeof(int)*(products->BRDC->numsats+1));
-						products->BRDC->block[indSat] = NULL;
-						products->BRDC->numblocks[indSat] = 0;
-						products->BRDC->numsats++;
+						if (indSat == -1) {
+							products->BRDC->index[satSystem][block.PRN] = products->BRDC->numsats;
+							indSat = products->BRDC->index[satSystem][block.PRN];
+							products->BRDC->block = realloc(products->BRDC->block,sizeof(TBRDCblock*)*(products->BRDC->numsats+1));
+							products->BRDC->blockPointer = realloc(products->BRDC->blockPointer,sizeof(TBRDCblock*)*(products->BRDC->numsats+1));
+							products->BRDC->numblocks = realloc(products->BRDC->numblocks,sizeof(int *)*(products->BRDC->numsats+1));
+							products->BRDC->numblocks[indSat] = NULL;
+							products->BRDC->numblocks[indSat]= malloc(sizeof(int)*MAX_BRDC_TYPES);
+							products->BRDC->block[indSat]= NULL;
+							products->BRDC->block[indSat]= malloc(sizeof(TBRDCblock*)*MAX_BRDC_TYPES);
+							products->BRDC->blockPointer[indSat]= NULL;
+							products->BRDC->blockPointer[indSat]= malloc(sizeof(TBRDCblock*)*MAX_BRDC_TYPES);
+							for(i=0;i<MAX_BRDC_TYPES;i++) {
+								products->BRDC->block[indSat][i] = NULL;
+								products->BRDC->blockPointer[indSat][i] = NULL;
+								products->BRDC->numblocks[indSat][i] = 0;
+							}
+							//Navigation message contains IOD. Add space also for IOD ordered array
+							products->BRDC->blockIOD = realloc(products->BRDC->blockIOD,sizeof(TBRDCblock*)*(products->BRDC->numsats+1));
+							products->BRDC->numblocksIOD = realloc(products->BRDC->numblocksIOD,sizeof(int *)*(products->BRDC->numsats+1));
+							products->BRDC->numblocksIOD[indSat] = NULL;
+							products->BRDC->numblocksIOD[indSat]= malloc(sizeof(int*)*MAX_BRDC_TYPES);
+							products->BRDC->blockIOD[indSat]= NULL;
+							products->BRDC->blockIOD[indSat]= malloc(sizeof(TBRDCblock*)*MAX_BRDC_TYPES);
+							for(i=0;i<MAX_BRDC_TYPES;i++) {
+								products->BRDC->blockIOD[indSat][i] = NULL;
+								products->BRDC->blockIOD[indSat][i] = malloc(sizeof(TBRDCblock*)*MAX_IODE_VALUE);
+								products->BRDC->numblocksIOD[indSat][i]= malloc(sizeof(int)*MAX_IODE_VALUE);
+								for(j=0;j<MAX_IODE_VALUE;j++) {
+									products->BRDC->numblocksIOD[indSat][i][j] = 0;
+									products->BRDC->blockIOD[indSat][i][j] = NULL;
+								}
+							}
+							products->BRDC->numsats++;
+						}
+						//DataTypeRead[indSat][block.BRDCtype]=1;
+						indBlock = products->BRDC->numblocks[indSat][block.BRDCtype];
+						products->BRDC->block[indSat][block.BRDCtype] = realloc(products->BRDC->block[indSat][block.BRDCtype],sizeof(TBRDCblock)*(indBlock+1));
+						memcpy(&products->BRDC->block[indSat][block.BRDCtype][indBlock], &block,sizeof(TBRDCblock));
+						products->BRDC->numblocks[indSat][block.BRDCtype]++;
 					}
-					indBlock = products->BRDC->numblocks[indSat];
-					products->BRDC->block[indSat] = realloc(products->BRDC->block[indSat],sizeof(TBRDCblock)*(indBlock+1));
-					memcpy(&products->BRDC->block[indSat][indBlock], &block,sizeof(TBRDCblock));
-					products->BRDC->numblocks[indSat]++;
 				}
 			}// End Nav Rinex v3
 		}
+	} while(getL(line,&len,fd)!=-1);
+
+	//Build a list of pointer to the navigation messages by IOD, so when searching a message by
+	//IOD, the search is almost instantaneous (as even during two or three consecutive days a
+	//satellite does not repeat an IOD).
+	//This list of pointer has to be done after reading all navigation messages, as pointers
+	//to the navigation messages change every time a new navigation message is read for a 
+	//given satellite (due to realloc function call)
+	for(i=0;i<products->BRDC->numsats;i++) {
+		for(j=0;j<MAX_BRDC_TYPES;j++) {
+			//Free data from list (for the case multiple navigation files are read,
+			//the list has to be rebuilt each time a file is read
+			if (products->BRDC->blockPointer[i][j]!=NULL) {
+				free(products->BRDC->blockPointer[i][j]);
+				products->BRDC->blockPointer[i][j]=NULL;
+			}
+			for(l=0;l<MAX_IODE_VALUE;l++) {
+				if (products->BRDC->blockIOD[i][j][l]!=NULL) {
+					free(products->BRDC->blockIOD[i][j][l]);
+					products->BRDC->blockIOD[i][j][l]=NULL;
+					products->BRDC->numblocksIOD[i][j][l]=0;
+				}
+			}
+			products->BRDC->blockPointer[i][j]=malloc(sizeof(TBRDCblock*)*products->BRDC->numblocks[i][j]);
+			for(l=0;l<products->BRDC->numblocks[i][j];l++) {
+				//Build blockPointer list of unordered messages, so blockPointer is a pointer
+				//list as blockIOD is (but with different ordering)
+				products->BRDC->blockPointer[i][j][l]=&products->BRDC->block[i][j][l];
+				//Build blockIOD list
+				IODE=products->BRDC->block[i][j][l].IODE;
+				if (IODE!=-1) {
+					indBlockIOD = products->BRDC->numblocksIOD[i][j][IODE];
+					products->BRDC->blockIOD[i][j][IODE]=realloc(products->BRDC->blockIOD[i][j][IODE],sizeof(TBRDCblock*)*(indBlockIOD+1));
+					products->BRDC->blockIOD[i][j][IODE][indBlockIOD]=&products->BRDC->block[i][j][l];
+					products->BRDC->numblocksIOD[i][j][IODE]++;
+				} else if (products->BRDC->block[i][j][l].GNSS==GLONASS) {
+					//For GLONASS, compute an IODE based on the formula
+					// modulo((Tpackage-900/1800.),1024)
+					//The substraction of 900 seconds is due to time given corresponds to central time of validity not the first epoch of validity
+					//The 1800 corresponds to 30 minutes, which is the total validity time of one package
+					IODE=((int)((tsec(&products->BRDC->block[i][j][l].TtocUTC)-900)/1800.))%MAX_IODE_VALUE;
+					products->BRDC->block[i][j][l].IODEGLONASS=IODE;
+					indBlockIOD = products->BRDC->numblocksIOD[i][j][IODE];
+					products->BRDC->blockIOD[i][j][IODE]=realloc(products->BRDC->blockIOD[i][j][IODE],sizeof(TBRDCblock*)*(indBlockIOD+1));
+					products->BRDC->blockIOD[i][j][IODE][indBlockIOD]=&products->BRDC->block[i][j][l];
+					products->BRDC->numblocksIOD[i][j][IODE]++;
+				}
+			}
+		}
 	}
 
-	return (properlyRead); // properly read 
+	//Sort navigation messages by transmission time (currently disabled until
+	//optimization in selectBRDCBlock taking advantange of sorted navigation
+	//message is implemented)
+	/*for(i=0;i<products->BRDC->numsats;i++) {
+		for(j=0;j<MAX_BRDC_TYPES;j++) {
+			if (DataTypeRead[i][j]==1) {
+				qsort(products->BRDC->block[i][j],products->BRDC->numblocks[i][j],sizeof(TBRDCblock),qsort_compare_transtime);
+			}
+		}
+	}*/
+
+	return (returnValue); // properly read 
 }
 
 /*****************************************************************************
@@ -4071,17 +6045,18 @@ int readRinexNav (FILE *fd, TGNSSproducts *products, double *rinexNavVersion) {
  * Name                           |Da|Unit|Description
  * FILE  *fd                       I  N/A  File descriptor
  * TTime *lastEpoch                O  N/A  Last Epoch in SP3 file
+ * char *filename                  I  N/A  Navigation filename
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1 => Last Epoch read
  *                                         0 => Error
  *****************************************************************************/
-int readRinexNavLastEpoch (FILE *fd, TTime *lastEpoch) {
+int readRinexNavLastEpoch (FILE *fd, TTime *lastEpoch, char *filename, TOptions  *options) {
 
     struct stat             filestat;   //This is to get the file size
     off_t                   filesize;
     long                    CurrentPos;
     int                     len = 0;
-	int						i;
     char                    line[MAX_INPUT_LINE];
 	double					rinexNavVersion; 						
 	TGNSSproducts 			products;
@@ -4109,19 +6084,18 @@ int readRinexNavLastEpoch (FILE *fd, TTime *lastEpoch) {
 			break;
 		}
 	}
-	if (readRinexNav(fd, &products, &rinexNavVersion)<1) {
-		free(products.BRDC->block);
+	if (readRinexNav(fd, filename, &products, &rinexNavVersion,NEWDAYNAV,options)<1) {
+		//Free memory
+		freeBRDCproducts(FREEALLNAV,&products);
+		free(products.BRDC);
 		fseek(fd,CurrentPos,SEEK_SET);
 		return 0;
 	}
 	fseek(fd,CurrentPos,SEEK_SET);
 	*lastEpoch=getProductsLastEpochBRDC(&products);
 	//Free memory
-	for(i=0;i<products.BRDC->numsats;i++) {
-		free(products.BRDC->block[i]);
-	}
-	free(products.BRDC->numblocks);
-	free(products.BRDC->block);
+	freeBRDCproducts(FREEALLNAV,&products);
+	free(products.BRDC);
 	return 1;
 }
 
@@ -4144,6 +6118,7 @@ int readRinexNavLastEpoch (FILE *fd, TTime *lastEpoch) {
  *                                        -2 => Number of entries in header is incorrect (deprecated)
  *                                        -3 => If reading reference position file, there is more than
  *                                                one satellite available
+ *                                        -4 => No epoch data in SP3
  *****************************************************************************/
 int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, int readingRefFile, TOptions *options) {
 	char 			line[MAX_INPUT_LINE];
@@ -4156,6 +6131,7 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 	int				PRN;
 	int				HeaderNumRecords;
 	int				FirstHeaderfline=1;
+	int				invalidDate=0;
 	TTime			t,lastT;
 	int				ind;
 	struct tm		tm;
@@ -4164,10 +6140,11 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 	int				readedLine = 0;
 	int				readedSatellites;
 	//char			versionId;
-	enum GNSSystem	system;
+	enum GNSSystem	GNSS;
 	int				usedRecords;
 	int				CurrentInd;
 	int				auxN;
+	int				blankOffset=0;
 	double			BaseSigmaOrbit;
 	double			BaseSigmaClock;
 
@@ -4178,6 +6155,10 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 	initSP3products(products->SP3);
 	lastT.MJDN = 0;
 	lastT.SoD = 0;
+	//This characters are initialized to NULL to avoid comparing strncmp against unintialized values
+	line[70]=line[71]='\0';
+	line[74]=line[75]='\0';
+	line[78]=line[79]='\0';
 
 	while(getL(line,&len,fd)!=-1) {
 		readedLine++;
@@ -4187,26 +6168,47 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 				if (line[0]!='#') error = 1;
 				if (line[2]=='V') products->SP3->orbits.velocityAvailable = 1;
 				else products->SP3->orbits.velocityAvailable = 0;
-				getstr(aux,line,32,7);
+				getstr(aux,line,len,32,7);
 				HeaderNumRecords=atoi(aux);
 				if (readOrbits) products->SP3->orbits.numRecords = atoi(aux);
 				if (readClocks) products->SP3->clocks.numRecords = atoi(aux);
 			} else if (readedLine==2) {
 				// ## 1494 259200.00000000   900.00000000 54705 0.0000000000000
-				//getstr(aux,line,24,14);
-				//if (readOrbits) products->SP3->orbits.interval = atof(aux);
-				//if (readClocks) products->SP3->clocks.interval = atof(aux);
-				getstr(aux,line,39,5);
+				getstr(aux,line,len,39,5);
 				if (readOrbits) products->SP3->orbits.startTime.MJDN = atoi(aux);
 				if (readClocks) products->SP3->clocks.startTime.MJDN = atoi(aux);
-				getstr(aux,line,45,15);
-				if (readOrbits) products->SP3->orbits.startTime.SoD = atof(aux)*86400.0;
-				if (readClocks) products->SP3->clocks.startTime.SoD = atof(aux)*86400.0;
+				getstr(aux,line,len,45,15);
+				if (readOrbits) {
+					products->SP3->orbits.startTime.SoD = atof(aux)*86400.0;
+					if (products->SP3->orbits.startTime.MJDN<FIRSTMJDNGPS || products->SP3->orbits.startTime.SoD<0 || products->SP3->orbits.startTime.SoD>=86400) {
+						sprintf(messagestr,"Invalid start date '%s' in header line number 2 of SP3 file",line);
+						printError(messagestr,options);
+					}
+				}
+				if (readClocks) {
+					products->SP3->clocks.startTime.SoD = atof(aux)*86400.0;
+					if (products->SP3->clocks.startTime.MJDN<FIRSTMJDNGPS || products->SP3->clocks.startTime.SoD<0 || products->SP3->clocks.startTime.SoD>=86400) {
+						sprintf(messagestr,"Invalid start date '%s' in header line number 2 of SP3 file",line);
+						printError(messagestr,options);
+					}
+				}
 			} else if (strncmp(line,"+ ",2)==0) {
 				// +   31   G02G03G04G05G06G07G08G09G10G11G12G13G14G15G16G17G18
 				if (readedLine==3) {
-					getstr(aux,line,3,3);
+					//The blankOffset variable is for a workaround for a bug when generating the SP3 file when it has 
+					//more than 100 satellites, where the first line of satellites get moved one character to the
+					//right due to the number of satellites having three characters and not being properly aligned
+					if (line[9]==' ' && (line[10]>=65 && line[10]<=90)) { //65 is ASCII 'A' and 90 is ASCII 'Z'
+						blankOffset=1;
+					} else {
+						blankOffset=0;
+					}
+					getstr(aux,line,len,3+blankOffset,3);
 					auxN = atoi(aux);
+					if(auxN<=0) {
+						sprintf(messagestr,"Invalid number of satellites '%s' in header line number %d of SP3 file",aux,readedLine);
+						printError(messagestr,options);
+					}
 					if(readingRefFile==1) {
 						//If we are reading reference file only one satellite must be in the SP3 file
 						if (auxN>1) {
@@ -4230,32 +6232,51 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 						}
 					}
 					readedSatellites = 0;
+				} else {
+					blankOffset=0;
 				}
 				for (i=0;i<17 && readedSatellites<auxN;i++,readedSatellites++) { //auxN = products->SP3->XXXX.numSatellites;
-					system = gnsschar2gnsstype(line[9+3*i]);
-					getstr(aux,line,10+3*i,2);
-					if (readOrbits) products->SP3->orbits.index[system][atoi(aux)] = readedSatellites;
-					if (readClocks) products->SP3->clocks.index[system][atoi(aux)] = readedSatellites;
+					GNSS = gnsschar2gnsstype(line[9+blankOffset+3*i]);
+					getstr(aux,line,len,10+blankOffset+3*i,2);
+					PRN=atoi(aux);
+					if (PRN<=0||PRN>=MAX_SATELLITES_PER_GNSS) {
+						sprintf(messagestr,"Invalid PRN number '%s' in header line number %d of SP3 file",aux,readedLine);
+						printError(messagestr,options);
+					}
+					if (readOrbits) {
+						if (products->SP3->orbits.index[GNSS][PRN] != -1 ) {
+							sprintf(messagestr,"Satellite %c%02d is repeated twice in header line number %d of SP3 file",gnsstype2char(GNSS),PRN,readedLine);
+							printError(messagestr,options);
+						}
+						products->SP3->orbits.index[GNSS][PRN] = readedSatellites;
+					}
+					if (readClocks) {
+						if (products->SP3->clocks.index[GNSS][PRN] != -1 ) {
+							sprintf(messagestr,"Satellite %c%02d is repeated twice in header line number %d of SP3 file",gnsstype2char(GNSS),PRN,readedLine);
+							printError(messagestr,options);
+						}
+						products->SP3->clocks.index[GNSS][PRN] = readedSatellites;
+					}
 				}
 			} else if (strncmp(line,"++",2)==0) {
 				if (readedSatellites==auxN) readedSatellites=0; //This is the first line with "++" read
 				for (i=0;i<17 && readedSatellites<auxN;i++,readedSatellites++) { //auxN = products->SP3->XXXX.numSatellites;
 					// Accuracy is 2^val mm.
-					getstr(aux,line,10+3*i,2);
+					getstr(aux,line,len,10+3*i,2);
 					if (readOrbits) products->SP3->orbits.accuracy[readedSatellites] = pow(2,atoi(aux))*1e-3;
 				}
 			} else if (strncmp(line,"%f",2)==0) {
 				if (FirstHeaderfline==1) {
 					FirstHeaderfline=0;
 					if (readOrbits) {
-						getstr(aux,line,3,10);
+						getstr(aux,line,len,3,10);
 						BaseSigmaOrbit=atof(aux);
 						if (BaseSigmaOrbit==0.) {
 							BaseSigmaOrbit=2.;
 						}
 					}
 					if (readClocks) {
-						getstr(aux,line,14,10);
+						getstr(aux,line,len,14,10);
 						BaseSigmaClock=atof(aux);
 						if (BaseSigmaClock==0.) {
 							BaseSigmaClock=2.;
@@ -4279,34 +6300,56 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 		} else { // !readingHeader
 			if (line[0]=='*') { // Epoch starting
 				// *  2008 08 27 00 00 00.00000000
-				getstr(aux,line,3,4);
-				tm.tm_year = atoi(aux)-1900;
-				getstr(aux,line,8,2);
-				tm.tm_mon  = atoi(aux)-1;
-				getstr(aux,line,11,2);
+				invalidDate=0;
+				getstr(aux,line,len,3,4);
+				tm.tm_year = atoi(aux);
+				if (tm.tm_year<1900) invalidDate=1;
+				tm.tm_year -= 1900;
+				getstr(aux,line,len,8,2);
+				tm.tm_mon  = atoi(aux);
+				if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+				tm.tm_mon  -= 1;
+				getstr(aux,line,len,11,2);
 				tm.tm_mday = atoi(aux);
-				getstr(aux,line,14,2);
+				if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+				getstr(aux,line,len,14,2);
 				tm.tm_hour = atoi(aux);
-				getstr(aux,line,17,2);
+				if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+				getstr(aux,line,len,17,2);
 				tm.tm_min  = atoi(aux);
-				getstr(aux,line,20,11);
+				if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+				getstr(aux,line,len,20,11);
 				tm.tm_sec  = atoi(aux);
+				if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1; //Seconds can have value 60 when a leap second is inserted
 				seconds = atof(aux);
 				t.MJDN = MJDN(&tm);
 				t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
-				//Compute interval (do not trust header)
-				if (products->SP3->orbits.interval == 0. && lastT.MJDN!=0) { // If interval is still not known (and it is not the first epoch)
-					interval = tdiff(&t,&lastT);
-					if (interval>=1.) {
-						//Take out decimals if interval is greater than 1
-						if (readOrbits) products->SP3->orbits.interval = (double)((int)(interval));
-						if (readClocks) products->SP3->clocks.interval = (double)((int)(interval));
-					} else {
-						if (readOrbits) products->SP3->orbits.interval = interval;
-						if (readClocks) products->SP3->clocks.interval = interval;
-					}
-
+				if (t.MJDN<FIRSTMJDNGPS || t.SoD<.0 || invalidDate==1 ) {
+					sprintf(messagestr,"Invalid epoch '%.26s' in precise SP3 file",&line[3]);
+					printError(messagestr,options);
 				}
+				if (lastT.MJDN!=0) { //It is not the first epoch
+					//Compute interval (do not trust header)
+					if (products->SP3->orbits.interval == 0.) { // If interval is still not known
+						interval = tdiff(&t,&lastT);
+						if (interval>=1.) {
+							//Take out decimals if interval is greater than 1
+							if (readOrbits) products->SP3->orbits.interval = (double)((int)(interval));
+							if (readClocks) products->SP3->clocks.interval = (double)((int)(interval));
+						} else {
+							if (readOrbits) products->SP3->orbits.interval = interval;
+							if (readClocks) products->SP3->clocks.interval = interval;
+						}
+	
+					}	
+					//Check that new epoch is not before the last epoch read
+					if (tdiff(&t,&lastT)<-DIFFEQTHRESHOLD) {
+						t2tmnolocal(&lastT,&tm,&seconds);
+						sprintf(messagestr,"Epoch '%.26s' is previous to the last epoch read '%4d %02d %02d %02d %02d %9.6f' in precise orbit file",&line[3],tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds);
+						printError(messagestr,options);
+					}
+				}
+
 				memcpy(&lastT,&t,sizeof(TTime));
 				for (i=0;i<products->SP3->orbits.numSatellites;i++) {
 					if(readOrbits) {
@@ -4330,20 +6373,28 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 				CurrentInd=usedRecords-1;
 				if(readingRefFile==1) {
 					//Reference position is saved in position [0][0]
-					system=0;
+					GNSS=0;
 					PRN=0;
 					ind=0;
 				} else {
-					system = gnsschar2gnsstype(line[1]);
-					getstr(aux,line,2,2);
+					GNSS = gnsschar2gnsstype(line[1]);
+					getstr(aux,line,len,2,2);
 					PRN = atoi(aux);
-					if (readOrbits) ind = products->SP3->orbits.index[system][PRN];
-					else ind = products->SP3->clocks.index[system][PRN];
+					if (PRN<=0||PRN>=MAX_SATELLITES_PER_GNSS) {
+						sprintf(messagestr,"Invalid PRN number '%s' in SP3 file",aux);
+						printError(messagestr,options);
+					}
+					if (readOrbits) ind = products->SP3->orbits.index[GNSS][PRN];
+					else ind = products->SP3->clocks.index[GNSS][PRN];
+					if (ind==-1) {
+						sprintf(messagestr,"Satellite '%c%02d' data read, but it is not in the header of SP3 file",line[1],PRN);
+						printError(messagestr,options);
+					}
 				}
 				if (readOrbits) {
 					if (CurrentInd==0) {
 						//Check if sigmas per epoch are provided
-						getstr(aux,line,46,14);
+						getstr(aux,line,len,46,14);
 						products->SP3->orbits.hasSigmaPerEpoch=0;
 						if (atof(aux)!=INVALID_CLOCK) {
 							if (strncmp(&line[61],"  ",2)!=0) {
@@ -4351,23 +6402,23 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 							}
 						}
 					}
-					getstr(aux,line,4,14);
+					getstr(aux,line,len,4,14);
 					products->SP3->orbits.block[ind][CurrentInd].x[0] = atof(aux)*1e3;
-					getstr(aux,line,18,14);
+					getstr(aux,line,len,18,14);
 					products->SP3->orbits.block[ind][CurrentInd].x[1] = atof(aux)*1e3;
-					getstr(aux,line,32,14);
+					getstr(aux,line,len,32,14);
 					products->SP3->orbits.block[ind][CurrentInd].x[2] = atof(aux)*1e3;
 					memcpy(&products->SP3->orbits.block[ind][usedRecords-1].t,&t,sizeof(TTime));
 
-					getstr(aux,line,46,14);
+					getstr(aux,line,len,46,14);
 					if (products->SP3->orbits.hasSigmaPerEpoch==1) {
-						getstr(aux,line,46,14);
+						getstr(aux,line,len,46,14);
 						if (atof(aux)!=INVALID_CLOCK) {
-							getstr(aux,line,61,2);
+							getstr(aux,line,len,61,2);
 							products->SP3->orbits.block[ind][CurrentInd].xsigma[0] = pow(BaseSigmaOrbit,atof(aux))*1e-3;
-							getstr(aux,line,64,2);
+							getstr(aux,line,len,64,2);
 							products->SP3->orbits.block[ind][CurrentInd].xsigma[1] = pow(BaseSigmaOrbit,atof(aux))*1e-3;
-							getstr(aux,line,67,2);
+							getstr(aux,line,len,67,2);
 							products->SP3->orbits.block[ind][CurrentInd].xsigma[2] = pow(BaseSigmaOrbit,atof(aux))*1e-3;
 						} else {
 							//When an invalid clock is given, also sigmas are not provided. Use the default ones
@@ -4383,7 +6434,7 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 					}
 
 					//Read orbit flags
-					if(strlen(line)>=80 && strncmp(&line[78],"  ",2)!=0) {
+					if(len>=80 && strncmp(&line[78],"  ",2)!=0) {
 						strncpy(products->SP3->orbits.block[ind][CurrentInd].orbitflags,&line[78],2);
 						products->SP3->orbits.block[ind][CurrentInd].orbitflags[2]='\0';
 					} else {
@@ -4391,7 +6442,7 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 					}
 				}
 				if (readClocks) {
-					getstr(aux,line,46,14);
+					getstr(aux,line,len,46,14);
 					if (CurrentInd==0) {
 						//Check if sigmas per epoch are provided
 						products->SP3->clocks.hasSigmaPerEpoch=0;
@@ -4407,14 +6458,14 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 					} else {
 						products->SP3->clocks.block[ind][CurrentInd].clock = atof(aux)*(c0/1e6);
 						if (products->SP3->clocks.hasSigmaPerEpoch==1) {
-							getstr(aux,line,70,3);
+							getstr(aux,line,len,70,3);
 							products->SP3->clocks.block[ind][CurrentInd].clocksigma=pow(BaseSigmaClock,atof(aux))*1e-12*c0;
 						}
 					}
 					memcpy(&products->SP3->clocks.block[ind][CurrentInd].t,&t,sizeof(TTime));
 
 					//Read clock flags
-					if(strlen(line)>=76 && strncmp(&line[74],"  ",2)!=0) {
+					if(len>=76 && strncmp(&line[74],"  ",2)!=0) {
 						strncpy(products->SP3->clocks.block[ind][CurrentInd].clockflags,&line[74],2);
 						products->SP3->clocks.block[ind][CurrentInd].clockflags[2]='\0';
 					} else {
@@ -4426,31 +6477,41 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 				CurrentInd=usedRecords-1;
 				if(readingRefFile==1) {
 					//Reference position is saved in position [0][0]
-					system=0;
+					GNSS=0;
 					PRN=0;
 					ind=0;
 				} else {					
-					system = gnsschar2gnsstype(line[1]);
-					getstr(aux,line,2,2);
+					GNSS = gnsschar2gnsstype(line[1]);
+					getstr(aux,line,len,2,2);
 					PRN = atoi(aux);
-					if (readOrbits) ind = products->SP3->orbits.index[system][PRN];
-					else ind = products->SP3->clocks.index[system][PRN];
+					if (PRN<=0||PRN>=MAX_SATELLITES_PER_GNSS) {
+						sprintf(messagestr,"Invalid PRN number '%s' in SP3 file",aux);
+						printError(messagestr,options);
+					}
+					if (readOrbits) ind = products->SP3->orbits.index[GNSS][PRN];
+					else ind = products->SP3->clocks.index[GNSS][PRN];
+					if (ind==-1) {
+						sprintf(messagestr,"Satellite '%c%02d' data read, but it is not in the header of SP3 file",line[1],PRN);
+						printError(messagestr,options);
+					}
+
 				}
 				if (readOrbits) {
-					getstr(aux,line,4,14);
+					getstr(aux,line,len,4,14);
 					products->SP3->orbits.block[ind][CurrentInd].v[0] = atof(aux)*1e-1;
-					getstr(aux,line,18,14);
+					getstr(aux,line,len,18,14);
 					products->SP3->orbits.block[ind][CurrentInd].v[1] = atof(aux)*1e-1;
-					getstr(aux,line,32,14);
+					getstr(aux,line,len,32,14);
 					products->SP3->orbits.block[ind][CurrentInd].v[2] = atof(aux)*1e-1;
 					memcpy(&products->SP3->orbits.block[ind][CurrentInd].t,&t,sizeof(TTime));
 				}
 				if (readClocks) {
-					getstr(aux,line,46,14);
+					getstr(aux,line,len,46,14);
 					products->SP3->clocks.block[ind][CurrentInd].clockrate = atof(aux)*(c0/1e7);
 					memcpy(&products->SP3->clocks.block[ind][CurrentInd].t,&t,sizeof(TTime));
 				}
 			} else if (strncmp(line,"EOF",3)==0) { // End of File
+				if (usedRecords==0) return -4;
 				if (readOrbits) {
 					products->SP3->orbits.numRecords = usedRecords;
 					memcpy(&products->SP3->orbits.endTime,&t,sizeof(TTime));
@@ -4461,7 +6522,7 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 				}
 				if(usedRecords!=HeaderNumRecords) {
 					//Header had incorrect number of entries
-					sprintf(messagestr,"WARNING Number of entries in header (%d) does not match with number of entries read (%d)",HeaderNumRecords,usedRecords);
+					sprintf(messagestr,"WARNING Number of entries in header (%d) does not match with number of entries read (%d) in SP3 file",HeaderNumRecords,usedRecords);
 					printInfo(messagestr,options);
 				}
 				for (k=0;k<5;k++) {
@@ -4473,9 +6534,10 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 				return 2;
 			} else if (line[0]=='#') {
 				printInfo("WARNING SP3 file has no 'EOF' line at the end. SP3 file may be incomplete",options);
+				if (usedRecords==0) return -4;
 				if(usedRecords!=HeaderNumRecords) {
 					//Header had incorrect number of entries
-					sprintf(messagestr,"WARNING Number of entries in header (%d) does not match with number of entries read (%d)",HeaderNumRecords,usedRecords);
+					sprintf(messagestr,"WARNING Number of entries in header (%d) does not match with number of entries read (%d) in SP3 file",HeaderNumRecords,usedRecords);
 					printInfo(messagestr,options);
 				}
 				//Concatenated file
@@ -4498,7 +6560,7 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 	printInfo("WARNING SP3 file has no 'EOF' line at the end. SP3 file may be incomplete",options);
 	if(usedRecords!=HeaderNumRecords) {
 		//Header had incorrect number of entries
-		sprintf(messagestr,"WARNING Number of entries in header (%d) does not match with number of entries read (%d)",HeaderNumRecords,usedRecords);
+		sprintf(messagestr,"WARNING Number of entries in header (%d) does not match with number of entries read (%d) in SP3 file",HeaderNumRecords,usedRecords);
 		printInfo(messagestr,options);
 	}
 	if (readOrbits) {
@@ -4509,6 +6571,8 @@ int readSP3 (FILE *fd, TGNSSproducts *products, int readOrbits, int readClocks, 
 		products->SP3->clocks.numRecords = usedRecords;
 		memcpy(&products->SP3->clocks.endTime,&t,sizeof(TTime));
 	}
+
+	if (usedRecords==0) return -4;
 	
 	return (properlyRead && !error); // properly read AND no error
 }
@@ -4535,6 +6599,7 @@ int readSP3LastEpoch (FILE *fd, TTime *lastEpoch) {
 	double					seconds;
 	char		    		aux[100];
 	char					line[MAX_INPUT_LINE];
+	int						invalidDate=0;
 
 
 	CurrentPos = ftell(fd);
@@ -4551,23 +6616,34 @@ int readSP3LastEpoch (FILE *fd, TTime *lastEpoch) {
 		}
 		if (line[0]=='*') { // Epoch starting
 			// *  2008 08 27 00 00 00.00000000
-			getstr(aux,line,3,4);
-			tm.tm_year = atoi(aux)-1900;
-			getstr(aux,line,8,2);
-			tm.tm_mon  = atoi(aux)-1;
-			getstr(aux,line,11,2);
+			invalidDate=0;
+			getstr(aux,line,len,3,4);
+			tm.tm_year = atoi(aux);
+			if (tm.tm_year<1900) invalidDate=1;
+			tm.tm_year -= 1900;
+			getstr(aux,line,len,8,2);
+			tm.tm_mon  = atoi(aux);
+			if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+			tm.tm_mon  -= 1;
+			getstr(aux,line,len,11,2);
 			tm.tm_mday = atoi(aux);
-			getstr(aux,line,14,2);
+			if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+			getstr(aux,line,len,14,2);
 			tm.tm_hour = atoi(aux);
-			getstr(aux,line,17,2);
+			if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+			getstr(aux,line,len,17,2);
 			tm.tm_min  = atoi(aux);
-			getstr(aux,line,20,11);
+			if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+			getstr(aux,line,len,20,11);
 			tm.tm_sec  = atoi(aux);
+			if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1; //Seconds can have value 60 when a leap second is inserted
 			seconds = atof(aux);
-			lastEpoch->MJDN = MJDN(&tm);
-			lastEpoch->SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
-			fseek(fd,CurrentPos,SEEK_SET);
-			return 1;
+			if (invalidDate==0) {
+				lastEpoch->MJDN = MJDN(&tm);
+				lastEpoch->SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+				fseek(fd,CurrentPos,SEEK_SET);
+				return 1;
+			}
 		}
 	}
 	return 0;
@@ -4580,12 +6656,13 @@ int readSP3LastEpoch (FILE *fd, TTime *lastEpoch) {
  * Name                           |Da|Unit|Description
  * FILE  *fd                       I  N/A  File descriptor
  * TGNSSproducts  *products        O  N/A  Structure to save the data
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1 => Properly read
  *                                         2 => Another file concatenated
  *                                         0 => Error
  *****************************************************************************/
-int readRinexClocks (FILE *fd, TGNSSproducts *products) {
+int readRinexClocks (FILE *fd, TGNSSproducts *products, TOptions *options) {
 	char 			line[MAX_INPUT_LINE];
 	char	 	   	aux[100];
 	char	 	   	aux2[100];
@@ -4595,7 +6672,7 @@ int readRinexClocks (FILE *fd, TGNSSproducts *products) {
 	int				properlyRead = 0;
 	int				error = 0;
 	int				readingHeader = 1;
-	enum GNSSystem	system;
+	enum GNSSystem	GNSS;
 	int				PRN;
 	struct tm		tm;
 	int				i,j;
@@ -4604,15 +6681,30 @@ int readRinexClocks (FILE *fd, TGNSSproducts *products) {
 	double			interval;
 	TTime			t, lastT;
 	int				readedSatellites;
-	const int		ini_vsize = 64;
 	int 			found_prn_list = 0;
+	int				invalidDate=0;
+
+	//The following variables are for the field start position. 
+	//Default values are for version <3.04. If version >=3.04, they will be updated accordingly
+	int				headerLabelStartPos=60;
+	int				numSatPRNList=15;
+	int				initPosYear=8;
+	int				initPosMonth=13;
+	int				initPosDay=16;
+	int				initPosHour=19;
+	int				initPosMin=22;
+	int				initPosSec=25;
+	int				initPosClkCorr=37;
+	//int				initPosClkSigma=60;
+	int				initPosClkFlags=81;
+	int				minLenFlags=83;
 	
 	lastT.MJDN = 0;
 	lastT.SoD = 0;
 	
 	while(getL(line,&len,fd)!=-1) {
 		if (!readingHeader) {
-			if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
+			if (strncmp(&line[headerLabelStartPos],"RINEX VERSION / TYPE",20)==0) {
 				//Save last epoch
 				memcpy(&products->SP3->clocks.endTime,&t,sizeof(TTime));
 				getLback(line,&len,fd);
@@ -4629,31 +6721,57 @@ int readRinexClocks (FILE *fd, TGNSSproducts *products) {
 		}
 		if (readingHeader) {
 			if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
-				getstr(aux,line,0,9);
+				getstr(aux,line,len,0,9);
 				//rinexVersion = atof(aux); //Commented to avoid not used variable warning
-			} else if (strncmp(&line[60],"# OF SOLN SATS",14)==0) {
-				getstr(aux,line,4,2);
+			} else if (strncmp(&line[65],"RINEX VERSION / TYPE",20)==0) {
+				//This second header check is because from version 3.04 header names are moved 5 characters to the right
+				getstr(aux,line,len,0,9);
+				//rinexVersion = atof(aux); //Commented to avoid not used variable warning
+				//Set fields position for version >=3.04
+				headerLabelStartPos=65;
+				numSatPRNList=16;
+				initPosYear=13;
+				initPosMonth=18;
+				initPosDay=21;
+				initPosHour=24;
+				initPosMin=27;
+				initPosSec=30;
+				initPosClkCorr=42;
+				//initPosClkSigma=65;
+				initPosClkFlags=86;
+				minLenFlags=88;
+			} else if (strncmp(&line[headerLabelStartPos],"# OF SOLN SATS",14)==0) {
+				getstr(aux,line,len,0,6);
 				products->SP3->clocks.numSatellites = products->SP3->clocks.numSatellitesRead = atoi(aux);
+				if (products->SP3->clocks.numSatellites<=0) {
+					sprintf(messagestr,"Invalid number of satellites '%s' in precise clocks file",aux);
+					printError(messagestr,options);
+				}
 				// Reserve memory for satellites
 				products->SP3->clocks.block = malloc(sizeof(TSP3clockblock*)*products->SP3->clocks.numSatellites);
-				// RINEX clock standard does not provide any apriori information on the number of records that will 
-				// appear on the file. A dynamic readjustment becomes necessary to overcome this issue.
-				products->SP3->clocks.vsizeblock = ini_vsize;
 				// Reserve initial memory for blocks
 				for (i=0;i<products->SP3->clocks.numSatellites;i++) {
-					products->SP3->clocks.block[i] = malloc(sizeof(TSP3clockblock)*products->SP3->clocks.vsizeblock);
-					for (j=0;j<products->SP3->clocks.vsizeblock;j++) 
-						initSP3clockblock(&products->SP3->clocks.block[i][j]);
+					products->SP3->clocks.block[i] = NULL;
 				}
 				readedSatellites = 0;
-			} else if (strncmp(&line[60],"PRN LIST",8)==0) {
+			} else if (strncmp(&line[headerLabelStartPos],"PRN LIST",8)==0) {
 				found_prn_list = 1;
-				for (i=0;i<15 && readedSatellites<products->SP3->clocks.numSatellites;i++,readedSatellites++) {
-					system = gnsschar2gnsstype(line[4*i]);
-					getstr(aux,line,1+4*i,2);
-					products->SP3->clocks.index[system][atoi(aux)] = readedSatellites;
+				for (i=0;i<numSatPRNList && readedSatellites<products->SP3->clocks.numSatellites;i++,readedSatellites++) {
+					GNSS = gnsschar2gnsstype(line[4*i]);
+					getstr(aux,line,len,1+4*i,2);
+					PRN=atoi(aux);
+
+					if (PRN<=0||PRN>=MAX_SATELLITES_PER_GNSS) {
+						sprintf(messagestr,"Invalid PRN number '%s' in precise clocks file",aux);
+						printError(messagestr,options);
+					}
+					if (products->SP3->clocks.index[GNSS][PRN] != -1 ) {
+						sprintf(messagestr,"Satellite %c%02d is repeated twice in header of CLK file",gnsstype2char(GNSS),PRN);
+						printError(messagestr,options);
+					}
+					products->SP3->clocks.index[GNSS][PRN] = readedSatellites;
 				}
-			} else if (strncmp(&line[60],"END OF HEADER",13)==0) {
+			} else if (strncmp(&line[headerLabelStartPos],"END OF HEADER",13)==0) {
 				readingHeader = 0;
 				properlyRead = 1;
 				products->SP3->clocks.numRecords = 0;
@@ -4662,7 +6780,7 @@ int readRinexClocks (FILE *fd, TGNSSproducts *products) {
 				if (!found_prn_list) {
 					readedSatellites = 0;
 					for (i=0;i<MAX_GNSS;i++) {
-						for (j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+						for (j=1;j<=listMaxSatGNSS[i];j++) {
 							products->SP3->clocks.index[i][j] = readedSatellites;
 							readedSatellites++;
 						}
@@ -4670,48 +6788,74 @@ int readRinexClocks (FILE *fd, TGNSSproducts *products) {
 					products->SP3->clocks.numSatellites = readedSatellites;
 					// Reserve memory for satellites
 					products->SP3->clocks.block = malloc(sizeof(TSP3clockblock*)*products->SP3->clocks.numSatellites);
-					products->SP3->clocks.vsizeblock = ini_vsize;
 					for (i=0;i<products->SP3->clocks.numSatellites;i++) {
-						products->SP3->clocks.block[i] = malloc(sizeof(TSP3clockblock)*products->SP3->clocks.vsizeblock);
-						for (j=0;j<products->SP3->clocks.vsizeblock;j++) 
-							initSP3clockblock(&products->SP3->clocks.block[i][j]);
+						products->SP3->clocks.block[i] = NULL;
 					}
 				}
 			}
 		} else { // !readingHeader
-			getstr(aux,line,3,4);
-			getstr(aux2,line,0,2);
-			getstr(aux3,line,4,2);
+			getstr(aux,line,len,3,4);
+			getstr(aux2,line,len,0,2);
+			getstr(aux3,line,len,4,2);
 			PRN = atoi(aux3);
-			if ( (aux[0]=='G' || aux[0]=='R' || aux[0]=='E' || aux[0]=='S' || aux[0]=='C' || aux[0]=='J' || aux[0]=='I' ) && PRN>0 && strncmp(aux2,"AS",2)==0 )  {
+			if ( checkConstellationChar(aux[0])==1 && PRN>0 && strncmp(aux2,"AS",2)==0 )  {
 				// AS G02  2008 10 10 00 00  0.000000  2    1.813604156067e-04  3.113411106060e-11
-				system = gnsschar2gnsstype(aux[0]);
-				ind = products->SP3->clocks.index[system][PRN];
+				GNSS = gnsschar2gnsstype(aux[0]);
+				if (PRN>=MAX_SATELLITES_PER_GNSS) {
+					sprintf(messagestr,"Invalid PRN number '%s' in precise clock file",aux);
+					printError(messagestr,options);
+				}
+				ind = products->SP3->clocks.index[GNSS][PRN];
+				if (ind==-1) {
+					sprintf(messagestr,"Satellite '%c%02d' data read, but it is not in the header of CLK file",aux[0],PRN);
+					printError(messagestr,options);
+				}
 
-				getstr(aux,line,8,4);
-				tm.tm_year = atoi(aux)-1900;
-				getstr(aux,line,13,2);
-				tm.tm_mon  = atoi(aux)-1;
-				getstr(aux,line,16,2);
+				invalidDate=0;
+				getstr(aux,line,len,initPosYear,4);
+				tm.tm_year = atoi(aux);
+				if (tm.tm_year<1900) invalidDate=1;
+				tm.tm_year -= 1900;
+				getstr(aux,line,len,initPosMonth,2);
+				tm.tm_mon  = atoi(aux);
+				if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+				tm.tm_mon  -= 1;
+				getstr(aux,line,len,initPosDay,2);
 				tm.tm_mday = atoi(aux);
-				getstr(aux,line,19,2);
+				if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+				getstr(aux,line,len,initPosHour,2);
 				tm.tm_hour = atoi(aux);
-				getstr(aux,line,22,2);
+				if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+				getstr(aux,line,len,initPosMin,2);
 				tm.tm_min  = atoi(aux);
-				getstr(aux,line,25,9);
+				if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+				getstr(aux,line,len,initPosSec,9);
 				tm.tm_sec  = atoi(aux);
+				if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1; //Seconds can have value 60 when a leap second is inserted
 				seconds = atof(aux);
 				t.MJDN = MJDN(&tm);
 				t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
+				if (t.MJDN<FIRSTMJDNGPS || t.SoD<0. || invalidDate==1 ) {
+					sprintf(messagestr,"Invalid epoch '%.26s' for satellite %c%2d in precise clock file",&line[initPosYear],line[3],PRN);
+					printError(messagestr,options);
+				}
 				
 				if (lastT.MJDN != t.MJDN || lastT.SoD != t.SoD) { // New Epoch
-					if (products->SP3->clocks.interval == 0. && lastT.MJDN!=0) { // If interval is still not known (and it is not the first epoch)
-						interval = tdiff(&t,&lastT);
-						if (interval>=1.) {
-							//Take out decimals if interval is greater than 1
-							products->SP3->clocks.interval = (double)((int)(interval));
-						} else {
-							products->SP3->clocks.interval = interval;
+					if (lastT.MJDN!=0) {  //It is not the first epoch
+						if (products->SP3->clocks.interval == 0.) { // If interval is still not known
+							interval = tdiff(&t,&lastT);
+							if (interval>=1.) {
+								//Take out decimals if interval is greater than 1
+								products->SP3->clocks.interval = (double)((int)(interval));
+							} else {
+								products->SP3->clocks.interval = interval;
+							}
+						}
+						//Check that new epoch is not before the last epoch read
+						if (tdiff(&t,&lastT)<-DIFFEQTHRESHOLD) {
+							t2tmnolocal(&lastT,&tm,&seconds);
+							sprintf(messagestr,"Epoch '%.26s' for satellite %c%2d is previous to the last epoch read '%4d %02d %02d %02d %02d %9.6f' in precise clock file",&line[initPosYear],line[3],PRN,tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,seconds);
+							printError(messagestr,options);
 						}
 					}
 
@@ -4732,34 +6876,25 @@ int readRinexClocks (FILE *fd, TGNSSproducts *products) {
 
 					memcpy(&lastT,&t,sizeof(TTime));
 					products->SP3->clocks.numRecords++;
-					if (products->SP3->clocks.numRecords == products->SP3->clocks.vsizeblock) {
-						products->SP3->clocks.vsizeblock *= 2;
-						// Reserve memory for blocks
-						for (i=0;i<products->SP3->clocks.numSatellites;i++) {
-							products->SP3->clocks.block[i] = realloc(products->SP3->clocks.block[i],sizeof(TSP3clockblock)*products->SP3->clocks.vsizeblock);
-							for (j=products->SP3->clocks.vsizeblock/2;j<products->SP3->clocks.vsizeblock;j++)  {
-								initSP3clockblock(&products->SP3->clocks.block[i][j]);
-							}
-						}
+					// Reserve memory for blocks
+					for (i=0;i<products->SP3->clocks.numSatellites;i++) {
+						products->SP3->clocks.block[i] = realloc(products->SP3->clocks.block[i],sizeof(TSP3clockblock)*products->SP3->clocks.numRecords);
+						initSP3clockblock(&products->SP3->clocks.block[i][products->SP3->clocks.numRecords-1]);
 					}
 				}
 			
-				getstr(aux,line,37,22);
+				getstr(aux,line,len,initPosClkCorr,22);
 				products->SP3->clocks.block[ind][products->SP3->clocks.numRecords-1].clock = atof(aux)*c0;
 				products->SP3->clocks.block[ind][products->SP3->clocks.numRecords-1].clockrate = 0.0;
 				products->SP3->clocks.block[ind][products->SP3->clocks.numRecords-1].clockdriftrate = 0.0;
 
-				//Read clock flags if available (NOTE: This is not in RINEX standard, but appear in MGEX clock files
-				if(len>=83) {
-				   if (	strncmp(&line[81],"  ",2)!=0) {
-						strncpy(products->SP3->clocks.block[ind][products->SP3->clocks.numRecords-1].clockflags,&line[81],2);
-						products->SP3->clocks.block[ind][products->SP3->clocks.numRecords-1].clockflags[2]='\0';
-				   }
+				//Read clock flags if available (NOTE: This is not in RINEX standard, but appear in MGEX clock files)
+				if(len>=minLenFlags && strncmp(&line[initPosClkFlags],"  ",2)!=0) {
+					strncpy(products->SP3->clocks.block[ind][products->SP3->clocks.numRecords-1].clockflags,&line[initPosClkFlags],2);
+					products->SP3->clocks.block[ind][products->SP3->clocks.numRecords-1].clockflags[2]='\0';
 				} else {
 					products->SP3->clocks.block[ind][products->SP3->clocks.numRecords-1].clockflags[0]='\0';
 				}
-			
-				//getstr(aux,line,59,22);
 			
 				memcpy(&products->SP3->clocks.block[ind][products->SP3->clocks.numRecords-1].t,&t,sizeof(TTime));
 			}
@@ -4786,19 +6921,20 @@ int readRinexClocks (FILE *fd, TGNSSproducts *products) {
  * Name                           |Da|Unit|Description
  * char  *filename                 I  N/A  Name of the file
  * TGNSSproducts  *products        O  N/A  Structure to save the data
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1  => File open and properly read
  *                                         0  => File open and failed to read
  *                                         -1 => File not open
  *****************************************************************************/
-int readRinexClocksFile (char *filename, TGNSSproducts *products) {
+int readRinexClocksFile (char *filename, TGNSSproducts *products, TOptions *options) {
 	FILE	*fd;
 	int		ret;
 	
 	if (whatFileTypeIs(filename)!=ftRINEXclocks) return 0;
 	
 	if ((fd = fopen(filename,"rb"))) {
-		ret = readRinexClocks (fd, products);
+		ret = readRinexClocks (fd, products,options);
 		fclose(fd);
 		return ret;
 	} else {
@@ -4838,6 +6974,7 @@ int readGalileoTroposphericData (TTROPOGal *TropoGal, char *filename, TOptions *
  * FILE  *fd                       I  N/A  File descriptor
  * TIONEX  *IONEX                  O  N/A  Structure to save the data
  * double *ionexVersion            O  N/A  IONEX file version
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         4 => File is concatenated but no END OF FILE found
  *                                         3 => File is concatenated
@@ -4847,7 +6984,7 @@ int readGalileoTroposphericData (TTROPOGal *TropoGal, char *filename, TOptions *
  *                                        -2 => Number of records read do not match the number given in the header
  *                                        -3 => Something wrong or missing in Header
  *****************************************************************************/
-int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion) {
+int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion, TOptions *options) {
 	char			line[MAX_INPUT_LINE];
 	char			aux[100];
 	int				len = 0;
@@ -4879,6 +7016,7 @@ int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion) {
 	ConstellationType[0] = '\0';
 
 	while(getL(line,&len,fd)!=-1) {
+		if(len<2) continue;
 		if (!readingCells) {
 			if (strncmp(&line[60],"IONEX VERSION / TYPE",20)==0) {
 				numFirstLineHeaderRead++;
@@ -4893,7 +7031,7 @@ int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion) {
 					}
 					break;
 				}
-				getstr(aux,line,0,9);
+				getstr(aux,line,len,0,9);
 				*ionexVersion = atof(aux);
 				if (firstTimeRead==0) {
 					//Free memory from the previous day read
@@ -4911,108 +7049,112 @@ int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion) {
 				if (*ionexVersion != 1.0 ) return 0;
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"EPOCH OF FIRST MAP",18)==0) {
-				getstr(aux,line,2,4);
+				getstr(aux,line,len,2,4);
 				tm.tm_year = atoi(aux)-1900;
-				getstr(aux,line,10,2);
+				getstr(aux,line,len,10,2);
 				tm.tm_mon  = atoi(aux)-1;
-				getstr(aux,line,16,2);
+				getstr(aux,line,len,16,2);
 				tm.tm_mday = atoi(aux);
-				getstr(aux,line,22,2);
+				getstr(aux,line,len,22,2);
 				tm.tm_hour = atoi(aux);
-				getstr(aux,line,28,2);
+				getstr(aux,line,len,28,2);
 				tm.tm_min  = atoi(aux);
-				getstr(aux,line,34,11);
+				getstr(aux,line,len,34,11);
 				tm.tm_sec  = atoi(aux);
 				seconds = atof(aux);
 				IONEX->startTime.MJDN = MJDN(&tm);
 				IONEX->startTime.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"EPOCH OF LAST MAP",17)==0) {
-				getstr(aux,line,2,4);
+				getstr(aux,line,len,2,4);
 				tm.tm_year = atoi(aux)-1900;
-				getstr(aux,line,10,2);
+				getstr(aux,line,len,10,2);
 				tm.tm_mon  = atoi(aux)-1;
-				getstr(aux,line,16,2);
+				getstr(aux,line,len,16,2);
 				tm.tm_mday = atoi(aux);
-				getstr(aux,line,22,2);
+				getstr(aux,line,len,22,2);
 				tm.tm_hour = atoi(aux);
-				getstr(aux,line,28,2);
+				getstr(aux,line,len,28,2);
 				tm.tm_min  = atoi(aux);
-				getstr(aux,line,34,11);
+				getstr(aux,line,len,34,11);
 				tm.tm_sec  = atoi(aux);
 				seconds = atof(aux);
 				IONEX->endTime.MJDN = MJDN(&tm);
 				IONEX->endTime.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"INTERVAL",8)==0) {
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				IONEX->interval = atoi(aux);
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"# OF MAPS IN FILE",17)==0) {
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				IONEX->numMaps = atoi(aux); 
 				// Reserve memory for maps
 				IONEX->map = malloc(sizeof(TIonoMap)*IONEX->numMaps);
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"MAPPING FUNCTION",16)==0) {
-				getstr(aux,line,2,4);
-				strcpy(IONEX->mappingFunction,aux);
+				getstr(aux,line,len,2,4);
+				IONEX->mappingFunctionType=mappingFunctionStr2Type(aux);
+				if (IONEX->mappingFunctionType==MappingFunctionUnknown) {
+					sprintf(messagestr,"Mapping function type \"%s\" in IONEX file not supported\n",aux); 
+					printError(messagestr,options);
+				}
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"ELEVATION CUTOFF",16)==0) {
-				getstr(aux,line,0,8);
+				getstr(aux,line,len,0,8);
 				IONEX->elevationCutoff = atof(aux);
 			} else if (strncmp(&line[60],"OBSERVABLES USED",16)==0) {
-				getstr(aux,line,0,60);
+				getstr(aux,line,len,0,60);
 				strcpy(IONEX->observablesUsed,aux);
 			} else if (strncmp(&line[60],"# OF STATIONS",13)==0) {
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				IONEX->stationNumber = atoi(aux);
 			} else if (strncmp(&line[60],"# OF SATELLITES",15)==0) {
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				IONEX->satNumber = atoi(aux);
 			} else if (strncmp(&line[60],"BASE RADIUS",11)==0) {
-				getstr(aux,line,0,8);
-				IONEX->baseRadius = atof(aux);
+				getstr(aux,line,len,0,8);
+				IONEX->baseRadius = atof(aux)*1000.; //Convert to metres
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"MAP DIMENSION",13)==0) {
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				IONEX->mapDimension = atoi(aux);
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"EXPONENT",8)==0) {
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				IONEX->exponent = atoi(aux);
 				IONEX->conversionFactor = E(IONEX->exponent);
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"HGT1 / HGT2 / DHGT",18)==0) {
-				getstr(aux,line,2,6);			// HGT1
+				getstr(aux,line,len,2,6);			// HGT1
 				ionoMap.hgt1 = atof(aux);
-				getstr(aux,line,8,6);			// HGT2
+				getstr(aux,line,len,8,6);			// HGT2
 				ionoMap.hgt2 = atof(aux);
-				getstr(aux,line,14,6);			// DHGT
+				getstr(aux,line,len,14,6);			// DHGT
 				ionoMap.dhgt = atof(aux);
 				ionoMap.nhgt = numSteps(ionoMap.hgt1,ionoMap.hgt2,ionoMap.dhgt);
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"LAT1 / LAT2 / DLAT",18)==0) {
-				getstr(aux,line,2,6);			// LAT1
+				getstr(aux,line,len,2,6);			// LAT1
 				ionoMap.lat1 = atof(aux);
-				getstr(aux,line,8,6);			// LAT2
+				getstr(aux,line,len,8,6);			// LAT2
 				ionoMap.lat2 = atof(aux);
-				getstr(aux,line,14,6);			// DLAT
+				getstr(aux,line,len,14,6);			// DLAT
 				ionoMap.dlat = atof(aux);
 				ionoMap.nlat = numSteps(ionoMap.lat1,ionoMap.lat2,ionoMap.dlat);
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"LON1 / LON2 / DLON",18)==0) {
-				getstr(aux,line,2,6);			// LON1
+				getstr(aux,line,len,2,6);			// LON1
 				ionoMap.lon1 = atof(aux);
-				getstr(aux,line,8,6);			// LON2
+				getstr(aux,line,len,8,6);			// LON2
 				ionoMap.lon2 = atof(aux);
-				getstr(aux,line,14,6);			// DLON
+				getstr(aux,line,len,14,6);			// DLON
 				ionoMap.dlon = atof(aux);
 				ionoMap.nlon = numSteps(ionoMap.lon1,ionoMap.lon2,ionoMap.dlon);
 				HeaderLinesNecessary++;
 			} else if (strncmp(&line[60],"START OF TEC MAP",16)==0) {
 				if(HeaderLinesNecessary!=0) break;
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				ind = atoi(aux) -1;
 				mapType = 0;  // 0->TEC
 				//Check if number of records read is not greater than the number given in the header
@@ -5026,7 +7168,7 @@ int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion) {
 					return -2;
 				}
 				RMSstarted=1;
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				ind = atoi(aux) -1;
 				mapType = 1;  // 1->RMS
 				IONEX->RMSavailable = 1; 
@@ -5041,7 +7183,7 @@ int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion) {
 					return -2;
 				}
 				HGTstarted=1;
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				ind = atoi(aux) -1;
 				mapType = 2;  // 2->HGT
 				IONEX->HGTavailable = 1;
@@ -5075,57 +7217,61 @@ int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion) {
 				}
 			} else if (strncmp(&line[60],"EPOCH OF CURRENT MAP",20)==0) {
 				if(HeaderLinesNecessary!=0) break;
-				getstr(aux,line,2,4);
+				getstr(aux,line,len,2,4);
 				tm.tm_year = atoi(aux)-1900;
-				getstr(aux,line,10,2);
+				getstr(aux,line,len,10,2);
 				tm.tm_mon  = atoi(aux)-1;
-				getstr(aux,line,16,2);
+				getstr(aux,line,len,16,2);
 				tm.tm_mday = atoi(aux);
-				getstr(aux,line,22,2);
+				getstr(aux,line,len,22,2);
 				tm.tm_hour = atoi(aux);
-				getstr(aux,line,28,2);
+				getstr(aux,line,len,28,2);
 				tm.tm_min  = atoi(aux);
-				getstr(aux,line,34,11);
+				getstr(aux,line,len,34,11);
 				tm.tm_sec  = atoi(aux);
 				seconds = atof(aux);
 				IONEX->map[ind].t.MJDN = MJDN(&tm);
 				IONEX->map[ind].t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
 			} else if (strncmp(&line[60],"LAT/LON1/LON2/DLON/H",20)==0) {
 				if(HeaderLinesNecessary!=0) break;
-				getstr(aux,line,2,6);
+				getstr(aux,line,len,2,6);
 				lat = atof(aux);
-				getstr(aux,line,8,6);
+				getstr(aux,line,len,8,6);
 				lon1 = atof(aux);
-				getstr(aux,line,14,6);
+				getstr(aux,line,len,14,6);
 				lon2 = atof(aux);
-				getstr(aux,line,20,6);
+				getstr(aux,line,len,20,6);
 				dlon = atof(aux);
-				getstr(aux,line,26,6);
+				getstr(aux,line,len,26,6);
 				h = atof(aux);
 				if (IONEX->map[ind].hgt1==0) { IONEX->map[ind].hgt1=IONEX->map[ind].hgt2=h; } //To avoid 0 values in case HGT1=HGT2=DHGT=0 in IONEX file
 				nlon = numSteps(lon1,lon2,dlon);
 				ilon = 0;
 				readingCells = 1;
 			} else if (strncmp(&line[60],"PRN / BIAS / RMS",16)==0) {
-				getstr(ConstellationType,line,3,1);     //GNSS type letter
+				getstr(ConstellationType,line,len,3,1);     //GNSS type letter
 				satSystem = gnsschar2gnsstype(ConstellationType[0]);
-				getstr(aux,line,4,2);
+				getstr(aux,line,len,4,2);
 				PRN = atoi(aux);
-				getstr(aux,line,6,10);
+				if (PRN<=0||PRN>=MAX_SATELLITES_PER_GNSS) {
+					sprintf(messagestr,"Invalid PRN number '%s' in IONEX file",aux);
+					printError(messagestr,options);
+				}
+				getstr(aux,line,len,6,10);
 				IONEX->ionexDCB.DCB[satSystem][PRN] = atof(aux);
-				getstr(aux,line,16,10);
+				getstr(aux,line,len,16,10);
 				IONEX->ionexDCB.DCBRMS[satSystem][PRN] = atof(aux);
 				IONEX->ionexDCB.DCBavailable = 1;
 			} else if (strncmp(&line[60],"STATION / BIAS / RMS",20)==0) {
 				IONEX->numStationData++;
-				IONEX->ionexStation = malloc(sizeof(TIonexStation)*IONEX->numStationData);
-				getstr(aux,line,6,4);
+				IONEX->ionexStation = realloc(IONEX->ionexStation,sizeof(TIonexStation)*IONEX->numStationData);
+				getstr(aux,line,len,6,4);
 				strcpy(IONEX->ionexStation[IONEX->numStationData -1].stationInitials,aux);
-				getstr(aux,line,11,10);
+				getstr(aux,line,len,11,10);
 				strcpy(IONEX->ionexStation[IONEX->numStationData -1].stationcode,aux);
-				getstr(aux,line,26,10);
+				getstr(aux,line,len,26,10);
 				IONEX->ionexStation[IONEX->numStationData -1].stationBias = atof(aux);
-				getstr(aux,line,36,10);
+				getstr(aux,line,len,36,10);
 				IONEX->ionexStation[IONEX->numStationData -1].stationRMS = atof(aux);
 			} else if (strncmp(&line[60],"END OF FILE",11)==0) {
 				properlyRead = 1;
@@ -5135,17 +7281,17 @@ int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion) {
 		} else {  // readingCells
 			if(HeaderLinesNecessary!=0) break;
 			for (i=0;i<16 && ilon<nlon;i++,ilon++) {
-				getstr(aux,line,i*5,5);
+				getstr(aux,line,len,i*5,5);
 				lon = ilon*dlon + lon1;
 				ionoValue = atof(aux);
-				if (ionoValue==9999) { setIonoValue(&IONEX->map[ind],mapType,h,lat,lon,ionoValue);}
-				else {
+				if (ionoValue>=9999.) {
+					setIonoValue(&IONEX->map[ind],mapType,h,lat,lon,ionoValue);
+				} else {
 					setIonoValue(&IONEX->map[ind],mapType,h,lat,lon,ionoValue*IONEX->conversionFactor);
 				}
 			}
 			if (ilon==nlon) readingCells = 0;
 		}
-		
 	}
 
 	if (HeaderLinesNecessary!=0) properlyRead=-3;
@@ -5160,11 +7306,12 @@ int readIONEX (FILE *fd, TIONEX *IONEX, double *ionexVersion) {
  * FILE  *fd                       I  N/A  File descriptor
  * TFPPP  *FPPP                    O  N/A  Structure to save the data
  * double *FPPPVersion             O  N/A  FPPP file version
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1 => Properly read
  *                                         0 => Error
  *****************************************************************************/
-int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion) {
+int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion, TOptions *options) {
 	char		line[MAX_INPUT_LINE];
 	char 		aux[100];
 	int 		len = 0;
@@ -5188,55 +7335,55 @@ int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion) {
 	while(getL(line,&len,fd)!=-1) {
 		if (readingHeader) {
 			if (strncmp(&line[60],"FPPP VERSION / TYPE",19)==0) {
-				getstr(aux,line,0,9);
+				getstr(aux,line,len,0,9);
 				*FPPPVersion = atof(aux);
 				if (*FPPPVersion != 1.0 ) return 0;
 			} else if (strncmp(&line[60],"EPOCH OF FIRST MAP",18)==0) {
-				getstr(aux,line,2,4);
+				getstr(aux,line,len,2,4);
 				tm.tm_year = atoi(aux)-1900;
-				getstr(aux,line,10,2);
+				getstr(aux,line,len,10,2);
 				tm.tm_mon  = atoi(aux)-1;
-				getstr(aux,line,16,2);
+				getstr(aux,line,len,16,2);
 				tm.tm_mday = atoi(aux);
-				getstr(aux,line,22,2);
+				getstr(aux,line,len,22,2);
 				tm.tm_hour = atoi(aux);
-				getstr(aux,line,28,2);
+				getstr(aux,line,len,28,2);
 				tm.tm_min  = atoi(aux);
-				getstr(aux,line,34,11);
+				getstr(aux,line,len,34,11);
 				tm.tm_sec  = atoi(aux);
 				seconds = atof(aux);
 				FPPP->startTime.MJDN = MJDN(&tm);
 				FPPP->startTime.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
 			} else if (strncmp(&line[60],"INTERVAL",8)==0) {
-				getstr(aux,line,0,6);
+				getstr(aux,line,len,0,6);
 				FPPP->interval = atoi(aux);
 			} else if (strncmp(&line[60],"BASE RADIUS",11)==0) {
-				getstr(aux,line,0,8);
-				FPPP->baseRadius = atof(aux);
+				getstr(aux,line,len,0,8);
+				FPPP->baseRadius = atof(aux)*1000.; //Convert to metres
 			} else if (strncmp(&line[60],"HGT1 / HGT2",11)==0) {
-				getstr(aux,line,0,8);			// HGT1
+				getstr(aux,line,len,0,8);			// HGT1
 				FPPPMap.hgt1 = atof(aux);
-				getstr(aux,line,8,8);			// HGT2
+				getstr(aux,line,len,8,8);			// HGT2
 				FPPPMap.hgt2 = atof(aux);
 				FPPPMap.dhgt = FPPPMap.hgt2 - FPPPMap.hgt1;
 		/*	} else if (strncmp(&line[60],"LAT1 / LAT2 / DLAT",18)==0) {
-				getstr(aux,line,2,6);			// LAT1
+				getstr(aux,line,len,2,6);			// LAT1
 				ionoMap.lat1 = atof(aux);
-				getstr(aux,line,8,6);			// LAT2
+				getstr(aux,line,len,8,6);			// LAT2
 				ionoMap.lat2 = atof(aux);
-				getstr(aux,line,14,6);			// DLAT
+				getstr(aux,line,len,14,6);			// DLAT
 				ionoMap.dlat = atof(aux);
 				ionoMap.nlat = numSteps(ionoMap.lat1,ionoMap.lat2,ionoMap.dlat);*/
 			} else if (strncmp(&line[60],"DLT / DLAT",10)==0) {
-				getstr(aux,line,0,8);			// DLT
+				getstr(aux,line,len,0,8);			// DLT
 				FPPPMap.dlt = atof(aux);
 				FPPPMap.lt2 = FPPPMap.lt2 - FPPPMap.dlt;
-				getstr(aux,line,8,8);			// DLAT
+				getstr(aux,line,len,8,8);			// DLAT
 				FPPPMap.dlat = atof(aux);
 			} else if (strncmp(&line[60],"MIN/MAX  LAT",12)==0) {
-				getstr(aux,line,0,8);                   // LAT1
-								FPPPMap.lat1 = atof(aux);
-				getstr(aux,line,8,8);			// LAT2
+				getstr(aux,line,len,0,8);			// LAT1
+				FPPPMap.lat1 = atof(aux);
+				getstr(aux,line,len,8,8);			// LAT2
 				FPPPMap.lat2 = atof(aux);
 				FPPPMap.nlt = numSteps(FPPPMap.lt1,FPPPMap.lt2,FPPPMap.dlt);
 				FPPPMap.nlat = numSteps(FPPPMap.lat1,FPPPMap.lat2,FPPPMap.dlat);
@@ -5245,8 +7392,8 @@ int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion) {
 			}
 		
 		} else {
-			if (strncmp(&line[60],"START OF TEC MAP",16)==0 && strlen(line)>60) {
-				getstr(aux,line,0,7);
+			if (strncmp(&line[60],"START OF TEC MAP",16)==0 && len>60) {
+				getstr(aux,line,len,0,7);
 				ind = atoi(aux) -1;
 				//Reserve memory for new map, copy variables and initialize all points to 9999
 				FPPP->map = (TFPPPMap*) (realloc(FPPP->map,sizeof(TFPPPMap)*(ind+1)));
@@ -5255,51 +7402,55 @@ int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion) {
 				FPPP->map[ind].SIGMA = malloc(sizeof(double)*getFPPPMapTotalSize(&FPPP->map[ind]));
 				initFPPPMapData(&FPPP->map[ind]);
 
-								//Prepare for reading DCB (if there are any available)
-								readingDCB = 1;
+				//Prepare for reading DCB (if there are any available)
+				readingDCB = 1;
 
 				//Check if really this last map has data (due to FPPP is real time generated, it includes the Header but not the data)
 				lastMapNotStarted=1;
-			} else if (strncmp(&line[60],"EPOCH OF CURRENT MAP",20)==0 && strlen(line)>60) {
-				getstr(aux,line,2,4);		// Year
+			} else if (strncmp(&line[60],"EPOCH OF CURRENT MAP",20)==0 && len>60) {
+				getstr(aux,line,len,2,4);		// Year
 				tm.tm_year = atoi(aux)-1900;
-				getstr(aux,line,10,2);		// Month
+				getstr(aux,line,len,10,2);		// Month
 				tm.tm_mon  = atoi(aux)-1;
-				getstr(aux,line,16,2);		// Day
+				getstr(aux,line,len,16,2);		// Day
 				tm.tm_mday = atoi(aux);
-				getstr(aux,line,22,2);		// Hour
+				getstr(aux,line,len,22,2);		// Hour
 				tm.tm_hour = atoi(aux);
-				getstr(aux,line,28,2);		// Minute
+				getstr(aux,line,len,28,2);		// Minute
 				tm.tm_min  = atoi(aux);
-				getstr(aux,line,34,2);		// Second
+				getstr(aux,line,len,34,2);		// Second
 				tm.tm_sec  = atoi(aux);
 				seconds = atof(aux);
 				FPPP->map[ind].t.MJDN = MJDN(&tm);
 				FPPP->map[ind].t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
-								//DCB data ended
-								readingDCB = 0;
+				//DCB data ended
+				readingDCB = 0;
 			} else if (readingDCB){
-								getstr(ConstellationType,line,0,1);     //GNSS type letter
-								satSystem = gnsschar2gnsstype(ConstellationType[0]);
-				getstr(aux,line,1,2); // PRN 
+				getstr(ConstellationType,line,len,0,1);     //GNSS type letter
+				satSystem = gnsschar2gnsstype(ConstellationType[0]);
+				getstr(aux,line,len,1,2); // PRN 
 				PRN = atoi(aux);	
-				getstr(aux,line,4,9); // frac1 	
+				if (PRN<=0||PRN>=MAX_SATELLITES_PER_GNSS) {
+					sprintf(messagestr,"Invalid PRN number '%s' in Fast-PPP file",aux);
+					printError(messagestr,options);
+				}
+				getstr(aux,line,len,4,9); // frac1 	
 				FPPP->fpppDCB.frac1[satSystem][PRN] = atof(aux);
-				getstr(aux,line,14,9); // frac2
+				getstr(aux,line,len,14,9); // frac2
 				FPPP->fpppDCB.fracw[satSystem][PRN] = atof(aux);
-				getstr(aux,line,24,9); // IFB
+				getstr(aux,line,len,24,9); // IFB
 				FPPP->fpppDCB.IFB[satSystem][PRN] = atof(aux);
 				FPPP->fpppDCB.DCBavailable = 1;
 		/*	} else if (strncmp(&line[60],"LAT/LON1/LON2/DLON/H",20)==0) {
-				getstr(aux,line,2,6);
+				getstr(aux,line,len,2,6);
 				lat = atof(aux);
-				getstr(aux,line,8,6);
+				getstr(aux,line,len,8,6);
 				lon1 = atof(aux);
-				getstr(aux,line,14,6);
+				getstr(aux,line,len,14,6);
 				lon2 = atof(aux);
-				getstr(aux,line,20,6);
+				getstr(aux,line,len,20,6);
 				dlon = atof(aux);
-				getstr(aux,line,26,6);
+				getstr(aux,line,len,26,6);
 				h = atof(aux);
 				if (FPPP->map[ind].hgt1==0) { FPPP->map[ind].hgt1=FPPP->map[ind].hgt2=h; } //To avoid 0 values in case HGT1=HGT2=DHGT=0 in IONEX file
 				nlon = numSteps(lon1,lon2,dlon);
@@ -5309,20 +7460,20 @@ int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion) {
 		/*	} else if (strncmp(&line[60],"END OF FILE",11)==0) {
 								properlyRead = 1;
 		*/	
-			}else {  // readingCells
+			} else {  // readingCells
 
-				getstr(aux,line,0,6); // LT
+				getstr(aux,line,len,0,6); // LT
 				lt = modulo(atof(aux)+360,360);
-				getstr(aux,line,6,6); // LAT
+				getstr(aux,line,len,6,6); // LAT
 				lat = atof(aux);
-				getstr(aux,line,12,9); // PARTIAL TEC
+				getstr(aux,line,len,12,9); // PARTIAL TEC
 				tec = atof(aux);
-				getstr(aux,line,21,5); // SIGMA
+				getstr(aux,line,len,21,5); // SIGMA
 				sigma = atof(aux);
-				getstr(aux,line,27,3); // SIGMA EXPONENT
+				getstr(aux,line,len,27,3); // SIGMA EXPONENT
 				exponent = atof(aux);
 				sigma = sigma * E(exponent);
-				getstr(aux,line,30,3); // MAP POSITION
+				getstr(aux,line,len,30,3); // MAP POSITION
 				mapPosition = atoi(aux) -1;
 			
 
@@ -5332,7 +7483,7 @@ int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion) {
 				setFPPPValue(&FPPP->map[ind],mapType,mapHeight,lat,lt,tec);
 				//Set SIGMA values for current map
 				mapType = 1;
-								setFPPPValue(&FPPP->map[ind],mapType,mapHeight,lat,lt,sigma);
+				setFPPPValue(&FPPP->map[ind],mapType,mapHeight,lat,lt,sigma);
 			
 				properlyRead = 1;
 				lastMapNotStarted = 0;
@@ -5341,6 +7492,7 @@ int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion) {
 		
 	} //end While
 
+	FPPP->numMapsAlloc = ind+1;	//Save maps allocated for memory free later
 	if (lastMapNotStarted) {ind--;} //Take into consideration the case in which the Header is given but not the data (due to the file is real time generated)
 	FPPP->numMaps = ind +1;
 	FPPP->endTime.MJDN = FPPP->map[ind].t.MJDN;
@@ -5356,18 +7508,19 @@ int readFPPP (FILE *fd, TFPPPIONEX *FPPP, double *FPPPVersion) {
  * char  *filename                 I  N/A  Name of the file
  * TFPPP  *FPPP                    O  N/A  Structure to save the data
  * double *FPPPVersion             O  N/A  FPPP file version
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1  => File open and properly read
  *                                         0  => File open and failed to read
  *                                         -1 => File not open
  *****************************************************************************/
-int readFPPPFile (char *filename, TFPPPIONEX *FPPP, double *FPPPVersion) {
+int readFPPPFile (char *filename, TFPPPIONEX *FPPP, double *FPPPVersion, TOptions *options) {
 	FILE	*fd;
 	int		ret;
 	
 	if (whatFileTypeIs(filename)!=ftFPPP) return 0;
 	if ((fd = fopen(filename,"rb"))) {
-		ret = readFPPP (fd, FPPP, FPPPVersion);
+		ret = readFPPP (fd, FPPP, FPPPVersion,options);
 		fclose(fd);
 		return ret;
 	} else {
@@ -5388,11 +7541,12 @@ int readFPPPFile (char *filename, TFPPPIONEX *FPPP, double *FPPPVersion) {
  * Name                           |Da|Unit|Description
  * FILE  *fd                       I  N/A  File descriptor
  * TConstellation  *constellation  O  N/A  Structure to save the data
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1 => Properly read
  *                                         0 => Error
  *****************************************************************************/
-int readConstellation (FILE *fd, TConstellation *constellation) {
+int readConstellation (FILE *fd, TConstellation *constellation, TOptions *options) {
 	char 					line[MAX_INPUT_LINE];
 	char    				aux[100];
 	int 					len = 0;
@@ -5408,14 +7562,13 @@ int readConstellation (FILE *fd, TConstellation *constellation) {
 	tm.tm_sec = 0;
 
 	while(getL(line,&len,fd)!=-1) {
-		if (line[strlen(line)-1]==13) line[strlen(line)-1] = '\n';
-		getstr(aux,line,0,5);
+		getstr(aux,line,len,0,5);
 		if (strcmp(aux,"Block")==0) {
 			// Initialize
 			initConstellationElement(&sat);
 			sat.GNSS = GPS;		// Only prepared for GPS right now
 						
-			getstr(aux,line,6,10);
+			getstr(aux,line,len,6,10);
 			if (strcmp(aux,"I")==0) {
 				sat.block = GPS_BLOCK_I;
 			} else if (strcmp(aux,"II")==0) {
@@ -5453,19 +7606,23 @@ int readConstellation (FILE *fd, TConstellation *constellation) {
 				if (strcmp(aux,"Notes")==0) {
 					readingInfo = 0;
 				} else { // Satellite Data
-					getstr(aux,line,7,3);
+					getstr(aux,line,len,7,3);
 					sat.SVN = atoi(aux);
-					getstr(aux,line,57,14);
+					getstr(aux,line,len,57,14);
 					if (sat.SVN!=0 && strcmp(aux,"Launch failure")!=0) { // Valid line
-						getstr(aux,line,11,2);
+						getstr(aux,line,len,11,2);
 						sat.PRN = atoi(aux);
+						if (sat.PRN<=0||sat.PRN>=MAX_SATELLITES_PER_GNSS) {
+							sprintf(messagestr,"Invalid PRN number '%s' in constellation file",aux);
+							printError(messagestr,options);
+						}
 						
-						getstr(aux,line,41,2);
+						getstr(aux,line,len,41,2);
 						tm.tm_year = atoi(aux);
 						if (tm.tm_year < 70) tm.tm_year+=100;
-						getstr(aux,line,44,2);
+						getstr(aux,line,len,44,2);
 						tm.tm_mon = atoi(aux)-1;
-						getstr(aux,line,47,2);
+						getstr(aux,line,len,47,2);
 						tm.tm_mday = atoi(aux);
 						sat.tLaunch.MJDN = MJDN(&tm);
 						sat.tLaunch.SoD = 0;
@@ -5475,23 +7632,23 @@ int readConstellation (FILE *fd, TConstellation *constellation) {
 							tm.tm_mon = 0;
 							tm.tm_mday = 1;
 						} else { // Satellite decomissioned
-							getstr(aux,line,70,2);
+							getstr(aux,line,len,70,2);
 							tm.tm_year = atoi(aux);
 							if (tm.tm_year < 70) tm.tm_year+=100;
-							getstr(aux,line,73,2);
+							getstr(aux,line,len,73,2);
 							tm.tm_mon = atoi(aux)-1;
-							getstr(aux,line,76,2);
+							getstr(aux,line,len,76,2);
 							tm.tm_mday = atoi(aux);
 						} 
 						sat.tDecommissioned.MJDN = MJDN(&tm);
 						sat.tDecommissioned.SoD = 0;
 						
 						// Allocate memory
-						constellation->numSatellites ++;
-						constellation->sat = realloc(constellation->sat,sizeof(TConstellationElement)*constellation->numSatellites);
+						constellation->numSatellites[sat.GNSS][sat.PRN]++;
+						constellation->sat[sat.GNSS][sat.PRN] = realloc(constellation->sat[sat.GNSS][sat.PRN],sizeof(TConstellationElement)*constellation->numSatellites[sat.GNSS][sat.PRN]);
 						
 						// Store satellite
-						memcpy(&constellation->sat[constellation->numSatellites-1],&sat,sizeof(TConstellationElement));
+						memcpy(&constellation->sat[sat.GNSS][sat.PRN][constellation->numSatellites[sat.GNSS][sat.PRN]-1],&sat,sizeof(TConstellationElement));
 					}
 				}
 			}
@@ -5512,19 +7669,20 @@ int readConstellation (FILE *fd, TConstellation *constellation) {
  * Name                           |Da|Unit|Description
  * char  *filename                 I  N/A  Name of the file
  * TConstellation  *constellation  O  N/A  Structure to save the data
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1  => File open and properly read
  *                                         0  => File open and failed to read
  *                                         -1 => File not open
  *****************************************************************************/
-int readConstellationFile (char *filename, TConstellation *constellation) {
+int readConstellationFile (char *filename, TConstellation *constellation, TOptions *options) {
 	FILE	*fd;
 	int		ret;
 	
 	if (whatFileTypeIs(filename)!=ftConstellation) return 0;
 	
 	if ((fd = fopen(filename,"rb"))) {
-		ret = readConstellation (fd, constellation);
+		ret = readConstellation (fd, constellation, options);
 		fclose(fd);
 		return ret;
 	} else {
@@ -5542,33 +7700,40 @@ int readConstellationFile (char *filename, TConstellation *constellation) {
  * TConstellation  *constellation  O  N/A  Structure to save the data of GNSS satellites
  * TAntennaList *antennaList       O  N/A  Structure to save the data of receiver 
  *                                         antennas
+ * int type                        I  N/A  0 -> Reading ANTEX for satellite and receiver data
+ *                                         1 -> Reading ANTEX for receiver data
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1 => Properly read
  *                                         0 => Error
  *****************************************************************************/
-int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaList) {
-	char			line[MAX_INPUT_LINE];
-	char			aux[100];
-	char			*ca;
-	int 			len = 0;
-	struct tm		tm;
-	int				properlyRead = 0;
+int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaList, int type, TOptions  *options) {
+	char					line[MAX_INPUT_LINE];
+	char					aux[100];
+	char					*ca;
+	int 					len = 0;
+	struct tm				tm;
+	int						properlyRead = 0;
+	int						AddAntenna,strictradome;
 	TConstellationElement	sat;
-	TAntenna		ant;
-	int				i, j, k;
-	int				freqInd;
-	int				readingHeader = 1;
-	int				error = 0;
-	int				PRN;
-	int				system;
-	int				readingWhat; // = 0 Satellite    = 1 Receiver antenna
-	double			seconds;
+	TAntenna				ant;
+	TAntenna 				*antSearch;
+	int						i, j, k;
+	int						freqInd;
+	int						readingHeader = 1;
+	int						error = 0;
+	int						PRN;
+	int						GNSS;
+	int						readingWhat; // = 0 Satellite    = 1 Receiver antenna
+	int						invalidDate=0;
+	double					seconds;
 	
 	tm.tm_hour = 0;
 	tm.tm_min = 0;
 	tm.tm_sec = 0;
 	
 	while(getL(line,&len,fd)!=-1) {
+		if (len<2) continue; //Skip blank lines
 		if (readingHeader) {
 			if (strncmp(&line[60],"ANTEX VERSION / SYST",20)==0) {
 				properlyRead = 1;
@@ -5579,22 +7744,28 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 			}
 		} else { // readingHeader==0
 			if (strncmp(&line[60],"TYPE / SERIAL NO",16)==0) {
-				getstr(aux,line,20,20);
+				getstr(aux,line,len,20,20);
 				PRN = atoi(&aux[1]);
-				if (PRN!=0 && (aux[0]=='G' || aux[0]=='R' || aux[0]=='E' || aux[0]=='S' || aux[0]=='C' || aux[0]=='J' || aux[0]=='I')) {
+				if (PRN!=0 && checkConstellationChar(aux[0])==1){
 					// GNSS Satellite
-					initConstellationElement(&sat);
-					sat.GNSS = gnsschar2gnsstype(aux[0]);
-					sat.PRN = PRN;
-					getstr(aux,line,40,10);
-					sat.SVN = atoi(&aux[1]);
-					getstr(aux,line,0,20);
-					sat.block = satblockstr2satblock(aux);
+					if(type==0) {
+						initConstellationElement(&sat);
+						sat.GNSS = gnsschar2gnsstype(aux[0]);
+						sat.PRN = PRN;
+						if (sat.PRN<=0 || sat.PRN>=MAX_SATELLITES_PER_GNSS) {
+							sprintf(messagestr,"Invalid PRN number '%s' in ANTEX file",aux);
+							printError(messagestr,options);
+						}
+						getstr(aux,line,len,40,10);
+						sat.SVN = atoi(&aux[1]);
+						getstr(aux,line,len,0,20);
+						sat.block = satblockstr2satblock(aux,sat.GNSS);
+					}
 					readingWhat = 0;
 				} else {
 					// Receiver antenna
 					initAntenna(&ant);
-					getstr(aux,line,0,20);
+					getstr(aux,line,len,0,20);
 					strcpy(ant.type,aux);
 					// Separate the anntena.type into antenna and radome
 					strcpy(ant.type_ant,ant.type);
@@ -5602,24 +7773,40 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 					if (ca != NULL) {
 						*ca = '\0';
 						strcpy(ant.type_radome,&ca[1]);
-						trim(ant.type_radome);
+						trim(ant.type_radome,(int)strlen(ant.type_radome));
 					}
 					readingWhat = 1;
 				}
+			} else if (type==1 && readingWhat==0) {
+				//If reading ANTEX for  receiver data, skip satellite data
+				continue;
 			} else if (strncmp(&line[60],"VALID",5)==0) {
 				if (readingWhat==0) { // Satellite Antenna
-					getstr(aux,line,2,4);
-					tm.tm_year = atoi(aux)-1900;
-					getstr(aux,line,10,2);
-					tm.tm_mon  = atoi(aux)-1;
-					getstr(aux,line,16,2);
+					invalidDate=0;
+					getstr(aux,line,len,2,4);
+					tm.tm_year = atoi(aux);
+					if (tm.tm_year<=1900) invalidDate=1;
+					tm.tm_year -= 1900;
+					getstr(aux,line,len,10,2);
+					tm.tm_mon  = atoi(aux);
+					if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+					tm.tm_mon  -= 1;
+					getstr(aux,line,len,16,2);
 					tm.tm_mday = atoi(aux);
-					getstr(aux,line,22,2);
+					if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+					getstr(aux,line,len,22,2);
 					tm.tm_hour = atoi(aux);
-					getstr(aux,line,28,2);
+					if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+					getstr(aux,line,len,28,2);
 					tm.tm_min  = atoi(aux);
-					getstr(aux,line,33,10);
+					if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+					getstr(aux,line,len,33,10);
 					tm.tm_sec  = atoi(aux);
+					if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1;	//Seconds can have value 60 when a leap second is inserted
+					if(invalidDate==1) {
+						sprintf(messagestr,"Invalid date '%.44s' in ANTEX file",line);
+						printError(messagestr,options);
+					}
 					seconds = atof(aux);
 					if (strncmp(&line[66],"FROM",4)==0) {
 						sat.tLaunch.MJDN = MJDN(&tm);
@@ -5630,19 +7817,19 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 					}
 				}
 			} else if (strncmp(&line[60],"DAZI",4)==0) {
-				getstr(aux,line,2,6);
+				getstr(aux,line,len,2,6);
 				if (readingWhat==0) { // Satellite Antenna
 					sat.dazi=atof(aux);
 				} else if (readingWhat==1) { // Receiver Antenna
 					ant.dazi=atof(aux);
 				}
 			} else if (strncmp(&line[60],"ZEN1 / ZEN2 / DZEN",18)==0) {
-				getstr(aux,line,2,6);
+				getstr(aux,line,len,2,6);
 				if (readingWhat==0) { // Satellite Antenna
 					sat.zen1=sat.azi1=atof(aux);
-					getstr(aux,line,8,6);
+					getstr(aux,line,len,8,6);
 					sat.zen2=sat.azi2=atof(aux);
-					getstr(aux,line,14,6);
+					getstr(aux,line,len,14,6);
 					sat.dzen=atof(aux);
 					sat.nzen=numSteps(sat.zen1,sat.zen2,sat.dzen);
 					//Allocate memory for non azimuth corrections
@@ -5650,7 +7837,7 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 					for(i=0;i<MAX_GNSS;i++) {
 						sat.noazi[i]=malloc(sizeof(double*)*MAX_FREQUENCIES_PER_GNSS);
 						for(j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
-							sat.noazi[i][j]=malloc(sizeof(double)*sat.nzen);
+							sat.noazi[i][j]=calloc(sat.nzen,sizeof(double));//Use calloc to initialize all to 0, as there may be no data for some constellations/frequencies
 						}
 					}
 					if(sat.dazi>0) {
@@ -5662,16 +7849,16 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 							for(j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
 								sat.azi[i][j]=malloc(sizeof(double*)*sat.numazi);
 								for(k=0;k<sat.numazi;k++) {
-									sat.azi[i][j][k]=malloc(sizeof(double)*sat.nzen);
+									sat.azi[i][j][k]=calloc(sat.nzen,sizeof(double)); //Use calloc to initialize all to 0, as there may be no data for some constellations/frequencies
 								}
 							}
 						}
 					}
 				} else if (readingWhat==1) { // Receiver Antenna
 					ant.zen1=ant.azi1=atof(aux);
-					getstr(aux,line,8,6);
+					getstr(aux,line,len,8,6);
 					ant.zen2=ant.azi2=atof(aux);
-					getstr(aux,line,14,6);
+					getstr(aux,line,len,14,6);
 					ant.dzen=atof(aux);
 					ant.nzen=numSteps(ant.zen1,ant.zen2,ant.dzen);
 					//Allocate memory for non azimuth corrections
@@ -5679,7 +7866,7 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 					for(i=0;i<MAX_GNSS;i++) {
 						ant.noazi[i]=malloc(sizeof(double*)*MAX_FREQUENCIES_PER_GNSS);
 						for(j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
-							ant.noazi[i][j]=malloc(sizeof(double)*ant.nzen);
+							ant.noazi[i][j]=calloc(ant.nzen,sizeof(double)); //Use calloc to initialize all to 0, as there may be no data for some constellations/frequencies
 						}
 					}
 					if(ant.dazi>0) {
@@ -5691,34 +7878,24 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 							for(j=0;j<MAX_FREQUENCIES_PER_GNSS;j++) {
 								ant.azi[i][j]=malloc(sizeof(double*)*ant.numazi);
 								for(k=0;k<ant.numazi;k++) {
-									ant.azi[i][j][k]=malloc(sizeof(double)*ant.nzen);
+									ant.azi[i][j][k]=calloc(ant.nzen,sizeof(double)); //Use calloc to initialize all to 0, as there may be no data for some constellations/frequencies
 								}
 							}
 						}
 					}
 				}
 			} else if (strncmp(&line[60],"START OF FREQUENCY",18)==0) {
-				getstr(aux,line,4,2);
+				getstr(aux,line,len,4,2);
 				freqInd = atoi(aux);
-				getstr(aux,line,3,1);
-				system=gnsschar2gnsstype(aux[0]);
+				getstr(aux,line,len,3,1);
+				GNSS=gnsschar2gnsstype(aux[0]);
 			} else if (strncmp(&line[60],"NORTH / EAST / UP",17)==0) {
-				/*if(system!=GPS) {
-					//NORTH / EAST / UP is stored in single constellations, so data different from GPS has to be skipped!!!!!
-					getL(line,&len,fd); //Skip NOAZI data
-					if( (readingWhat==0 && sat.dazi>0) || (readingWhat==1 && ant.dazi>0) ) {
-						for(i=0;i<sat.numazi;i++) {
-							getL(line,&len,fd); //Skip AZI data if available
-						}
-					}
-					continue;
-				}*/
 				for (i=0;i<3;i++) {
-					getstr(aux,line,i*10,10);
+					getstr(aux,line,len,i*10,10);
 					if (readingWhat==0) { // Satellite Antenna
 						sat.PCO[freqInd][i] = atof(aux)/1e3; // (ANTEX in mm)
 					} else if (readingWhat==1) { // Receiver Antenna
-						ant.PCO[system][freqInd][i] = atof(aux)/1e3; // (ANTEX in mm)
+						ant.PCO[GNSS][freqInd][i] = atof(aux)/1e3; // (ANTEX in mm)
 					}
 				}
 				//Read non azimuth corrections
@@ -5726,13 +7903,13 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 					if (strncmp(&line[3],"NOAZI",5)==0) {
 						if (readingWhat==0) { // Satellite Antenna
 							for(i=0;i<sat.nzen;i++) {
-								getstr(aux,line,8+8*i,8);
-								sat.noazi[system][freqInd][i]=atof(aux)/1e3;  // (ANTEX in mm)
+								getstr(aux,line,len,8+8*i,8);
+								sat.noazi[GNSS][freqInd][i]=atof(aux)/1e3;  // (ANTEX in mm)
 							}
 						} else if (readingWhat==1) { // Receiver Antenna
 							for(i=0;i<ant.nzen;i++) {
-								getstr(aux,line,8+8*i,8);
-								ant.noazi[system][freqInd][i]=atof(aux)/1e3;  // (ANTEX in mm)
+								getstr(aux,line,len,8+8*i,8);
+								ant.noazi[GNSS][freqInd][i]=atof(aux)/1e3;  // (ANTEX in mm)
 							}
 						}
 					} else {
@@ -5746,8 +7923,8 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 						for(i=0;i<sat.numazi;i++) {
 							if(getL(line,&len,fd)!=-1) {
 								for(j=0;j<sat.nzen;j++) {
-									getstr(aux,line,8+8*j,8);
-									sat.azi[system][freqInd][i][j]=atof(aux)/1e3;  // (ANTEX in mm)
+									getstr(aux,line,len,8+8*j,8);
+									sat.azi[GNSS][freqInd][i][j]=atof(aux)/1e3;  // (ANTEX in mm)
 								}
 							} else {
 								properlyRead=0;
@@ -5758,8 +7935,8 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 						for(i=0;i<ant.numazi;i++) {
 							if(getL(line,&len,fd)!=-1) {
 								for(j=0;j<ant.nzen;j++) {
-									getstr(aux,line,8+8*j,8);
-									ant.azi[system][freqInd][i][j]=atof(aux)/1e3;  // (ANTEX in mm)
+									getstr(aux,line,len,8+8*j,8);
+									ant.azi[GNSS][freqInd][i][j]=atof(aux)/1e3;  // (ANTEX in mm)
 								}
 							} else {
 								properlyRead=0;
@@ -5772,24 +7949,44 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
 			} else if (strncmp(&line[60],"END OF ANTENNA",14)==0) {
 				if (readingWhat==0) { // Satellite Antenna
 					// Allocate memory
-					constellation->numSatellites ++;
-					constellation->sat = realloc(constellation->sat,sizeof(TConstellationElement)*constellation->numSatellites);
+					constellation->numSatellites[sat.GNSS][sat.PRN]++;
+					constellation->sat[sat.GNSS][sat.PRN] = realloc(constellation->sat[sat.GNSS][sat.PRN],sizeof(TConstellationElement)*constellation->numSatellites[sat.GNSS][sat.PRN]);
 						
 					// Store satellite
-					memcpy(&constellation->sat[constellation->numSatellites-1],&sat,sizeof(TConstellationElement));
+					memcpy(&constellation->sat[sat.GNSS][sat.PRN][constellation->numSatellites[sat.GNSS][sat.PRN]-1],&sat,sizeof(TConstellationElement));
 
 				} else if (readingWhat==1) { // Receiver Antenna
-					// Allocate memory
-					antennaList->numAnt ++;
-					antennaList->ant = realloc(antennaList->ant,sizeof(TAntenna)*antennaList->numAnt);
+					if (type==1) {
+						//When reading an ANTEX file for receiver data, check if antenna is already saved
+						//If it exists, replace the existing one
+						//Temporary set strict radome to 1 so antenna and radome matches, and does not use radome "NONE" if not found
+						strictradome=options->strictradome;
+						options->strictradome=1;
+						antSearch=getAntenna(ant.type,antennaList,options);
+						if (antSearch!=NULL) {
+							//Antenna found
+							memcpy(antSearch,&ant,sizeof(TAntenna));
+							AddAntenna=0;
+						} else {
+							AddAntenna=1;
+						}
+						options->strictradome=strictradome;
+					} else {
+						AddAntenna=1;
+					}
+					if (AddAntenna==1) {
+						// Allocate memory
+						antennaList->numAnt++;
+						antennaList->ant = realloc(antennaList->ant,sizeof(TAntenna)*antennaList->numAnt);
 					
-					// Store antenna
-					memcpy(&antennaList->ant[antennaList->numAnt-1],&ant,sizeof(TAntenna));
+						// Store antenna
+						memcpy(&antennaList->ant[antennaList->numAnt-1],&ant,sizeof(TAntenna));
+					}
 				}
 			}
 		}
 	}
-	
+
 	return (properlyRead && !error); // properly read AND no error
 }
 
@@ -5802,19 +7999,22 @@ int readAntex (FILE *fd, TConstellation *constellation, TAntennaList *antennaLis
  * TConstellation  *constellation  O  N/A  Structure to save the data of GNSS satellites
  * TAntennaList *antennaList       O  N/A  Structure to save the data of receiver 
  *                                         antennas
+ * int type                        I  N/A  0 -> Reading ANTEX for satellite and receiver data
+ *                                         1 -> Reading ANTEX for receiver data
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                         1  => File open and properly read
  *                                         0  => File open and failed to read
  *                                         -1 => File not open
  *****************************************************************************/
-int readAntexFile (char *filename, TConstellation *constellation, TAntennaList *antennaList) {
+int readAntexFile (char *filename, TConstellation *constellation, TAntennaList *antennaList, int type, TOptions  *options) {
 	FILE	*fd;
 	int		ret;
 	
 	if (whatFileTypeIs(filename)!=ftANTEX) return 0;
 	
 	if ((fd = fopen(filename,"rb"))) {
-		ret = readAntex (fd, constellation, antennaList);
+		ret = readAntex (fd, constellation, antennaList, type, options);
 		fclose(fd);
 		return ret;
 	} else {
@@ -5825,17 +8025,19 @@ int readAntexFile (char *filename, TConstellation *constellation, TAntennaList *
 
 /*****************************************************************************
  * Name        : readDCB
- * Description : Read a DCB file from a file descriptor
+ * Description : Read a CODE DCB file from a file descriptor.
+ *                These DCBs are for GPS only
  * Parameters  :
  * Name                           |Da|Unit|Description
  * FILE  *fd                       I  N/A  File descriptor
- * TDCBdata  *DCB                  O  N/A  Structure to save the DCB data
+ * TTGDdata *tgdData               O  N/A  Structure to save the DCB data
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                          1 => Properly read
  *                                          0 => Error
  *                                         -2 => First header line not recognized
  *****************************************************************************/
-int readDCB (FILE *fd, TDCBdata *DCB) {
+int readDCB (FILE *fd, TTGDdata *tgdData, TOptions *options) {
 	char 					line[MAX_INPUT_LINE];
 	char					*pt;
 	char					*ptaux;
@@ -5853,11 +8055,18 @@ int readDCB (FILE *fd, TDCBdata *DCB) {
 	int						writtingAbs;
 	int						year,doy;
 	double					factor;
+	TDCBdata 				*DCB;
 	
 	tm.tm_hour = 0;
 	tm.tm_min = 0;
 	tm.tm_sec = 0;
 	tm.tm_mday = 1;
+
+	if (tgdData->DCB==NULL) {
+		tgdData->DCB = malloc(sizeof(TDCBdata));
+		initDCB(tgdData->DCB);
+	}
+	DCB=tgdData->DCB;
 	
 	while(getL(line,&len,fd)!=-1) {
 		if (readingHeader) {
@@ -5866,10 +8075,10 @@ int readDCB (FILE *fd, TDCBdata *DCB) {
 				firstLineHeaderFound=1;
 				DCB->n++;
 				pt += 11; // Pointing to '10-01 [...]'
-				getstr(aux,pt,0,2);
+				getstr(aux,pt,(int)strlen(pt),0,2);
 				tm.tm_year = atoi(aux);
 				if (tm.tm_year <= 70) tm.tm_year += 100;
-				getstr(aux,pt,3,2);
+				getstr(aux,pt,(int)strlen(pt),3,2);
 				tm.tm_mon = atoi(aux) - 1;
 				DCB->block[DCB->n-1].startTime.MJDN = MJDN(&tm);
 				tm.tm_mon ++;
@@ -5880,10 +8089,10 @@ int readDCB (FILE *fd, TDCBdata *DCB) {
 				firstLineHeaderFound=1;
 				DCB->n++;
 				pt += 5; // Pointing to year number
-				getstr(aux,pt,0,4);
+				getstr(aux,pt,(int)strlen(pt),0,4);
 				tm.tm_year = atoi(aux) -1900;
 				pt += 12; // Pointing to month number
-				getstr(aux,pt,0,2);
+				getstr(aux,pt,(int)strlen(pt),0,2);
 				tm.tm_mon = atoi(aux) - 1;
 				DCB->block[DCB->n-1].startTime.MJDN = MJDN(&tm);
 				tm.tm_mon ++;
@@ -5891,15 +8100,18 @@ int readDCB (FILE *fd, TDCBdata *DCB) {
 
 			} else if ((pt=strstr(line,"ENDING DAY"))!=NULL) { //From somewhere around 2017 the date format has been changed in the DCB header
 				// CODE'S 30-DAY GPS P1-C1 DCB SOLUTION, ENDING DAY 306, 2017       06-NOV-17 06:45
+				//or
+				// CODE'S 30-DAY GNSS P1-C1 DCB SOLUTION, ENDING DAY 306, 2017      06-NOV-17 06:45
+				//It does not matter wether is one or another, as the pointer returned by strstr(line,"ENDING DAY") will already have moved the extra character due to "GPS" or "GNSS" text difference
 				firstLineHeaderFound=1;
 				DCB->n++;
 				pt += 11; // Pointing to doy
-				getstr(aux,pt,0,3);
+				getstr(aux,pt,(int)strlen(pt),0,3);
 				doy=atoi(aux);
 				pt += 5; // Pointing to year
-				getstr(aux,pt,0,4);
+				getstr(aux,pt,(int)strlen(pt),0,4);
 				year=atoi(aux);
-				DCB->block[DCB->n-1].endTime.MJDN = yeardoy2MJDN(year,doy,0);
+				DCB->block[DCB->n-1].endTime.MJDN = (int)yeardoy2MJDN(year,doy,0);
 				DCB->block[DCB->n-1].startTime.MJDN = DCB->block[DCB->n-1].endTime.MJDN-30;
 
 			} else if (strstr(line,"CODE BIASES")!=NULL) {
@@ -5927,8 +8139,9 @@ int readDCB (FILE *fd, TDCBdata *DCB) {
 					DCB->block[DCB->n].measTo = NA;
 					memcpy(&DCB->block[DCB->n].startTime,&DCB->block[DCB->n-1].startTime,sizeof(TTime));
 					memcpy(&DCB->block[DCB->n].endTime,&DCB->block[DCB->n-1].endTime,sizeof(TTime));
-					factor = 1.0/(1.0-(GPSf1*GPSf1)/(GPSf2*GPSf2)); // 1/(1-f1^2/f2^2)
-					if (DCB->block[DCB->n-1].measFrom==C2P) factor*= -1.0;
+					//factor = 1.0/(1.0-(GPSf1*GPSf1)/(GPSf2*GPSf2)); // 1/(1-f1^2/f2^2) ->Factor is applied when retrieving the DCB
+					if (DCB->block[DCB->n-1].measFrom==C2P) factor = -1.0;
+					else  factor = 1.0;
 					writtingAbs = 1;
 				} else {
 					writtingAbs = 0;
@@ -5944,15 +8157,19 @@ int readDCB (FILE *fd, TDCBdata *DCB) {
 			}
 		} else { //readingHeader == 0
 			GNSS = gnsschar2gnsstype(line[0]);
-			getstr(aux,line,1,2);
+			getstr(aux,line,len,1,2);
 			PRN = atoi(aux);
 			if (PRN != 0) { // Satellite unidentified or blank line
+				if (PRN<=0 || PRN>=MAX_SATELLITES_PER_GNSS) {
+					sprintf(messagestr,"Invalid PRN number '%s' in DCB file",aux);
+					printError(messagestr,options);
+				}
 				properlyRead = 1;
-				getstr(aux,line,26,9);
+				getstr(aux,line,len,26,9);
 				value = atof(aux);
-				getstr(aux,line,38,9);
+				getstr(aux,line,len,38,9);
 				rms = atof(aux);
-				// From ns to meters
+				// From ns to metres
 				value *= 1e-9*c0;
 				rms *= 1e-9*c0;
 				DCB->block[DCB->n-1].dcb[GNSS][PRN] = value;
@@ -5971,28 +8188,25 @@ int readDCB (FILE *fd, TDCBdata *DCB) {
 
 /*****************************************************************************
  * Name        : readDCBFile
- * Description : Read a DCB file from a filename
+ * Description : Read a CODE DCB file from a filename.
+ *                These DCBs are for GPS only
  * Parameters  :
  * Name                           |Da|Unit|Description
  * char  *filename                 I  N/A  Name of the file
- * TDCBdata  *DCB                  O  N/A  Structure to save the DCB data
+ * TTGDdata *tgdData               O  N/A  Structure to save the DCB data
+ * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
  *                                          1 => File open and properly read
  *                                          0 => File open and failed to read
  *                                         -1 => File not open
  *                                         -2 => First header line not recognized
  *****************************************************************************/
-int readDCBFile (char *filename, TDCBdata *DCB) {
-	FILE		*fd;
-	int 		ret;
-	enum fileType	ft;
+int readDCBFile (char *filename,  TTGDdata *tgdData, TOptions *options) {
+	FILE			*fd;
+	int 			ret;
 	
-  ft = whatFileTypeIs(filename);
-
-	if (ft!=ftP1C1DCB && ft!=ftP1P2DCB) return 0;
-
 	if ((fd = fopen(filename,"rb"))) {
-		ret = readDCB (fd, DCB);
+		ret = readDCB (fd, tgdData, options);
 		fclose(fd);
 		return ret;
 	} else {
@@ -6000,6 +8214,316 @@ int readDCBFile (char *filename, TDCBdata *DCB) {
 		return -1;
 	}
 }
+
+/*****************************************************************************
+ * Name        : readSINEXBIAS
+ * Description : Read a SINEX BIAS DCB file. These are multiconstellation DCBs
+ *               NOTE: The following assumptions are made:
+ *                - No data gaps for all DCB provided
+ *                - Time interval between is equal for all measurements
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * FILE  *fd                       I  N/A  File descriptor
+ * enum fileType ft                I  N/A  SINEX BIAS file type (with DSB or OSB)
+ * TSINEXBiasData *SINEXBias       O  N/A  Structure to save the DCB data
+ * TOptions  *options              I  N/A  TOptions structure
+ * Returned value (int)            O  N/A  Status of the function
+ *                                          1 => File open and properly read
+ *                                          0 => File open and failed to read
+ *                                         -1 => File not open
+ *                                         -2 => No data lines
+ *****************************************************************************/
+int readSINEXBIAS (FILE  *fd, enum fileType ft, TSINEXBiasData *SINEXBias, TOptions *options) {
+
+	int						i,j,k;
+	int						len = 0;
+	int						res;
+	int						properlyRead=-2;
+	int						readingHeader=1;
+	int						numDigitsYear;
+	int						posGNSS,posPRN,posOBS1,posOBS2,posSTART,posEND,posVALUE,posDEV;
+	int						PRN,numMeas,numTimeBlocks,indexPos;
+	int						yearStart,doyStart,yearEnd,doyEnd;
+	int						maxMeas[MAX_GNSS];
+	double					DCBVal,DCBSigma,secondsStart,secondsEnd;
+	char					aux[100];
+	char					line[MAX_INPUT_LINE];
+	char					*p;
+	enum GNSSystem			GNSS;
+	enum MeasurementType	measFrom,measTo;
+
+	for(i=0;i<MAX_GNSS;i++) {
+		maxMeas[i]=0;
+	}
+
+	//Allocate memory if necessary (function may be called more than once)
+	if (ft==ftSINEXBIASOSB && SINEXBias->OSBindex==NULL) {
+		SINEXBias->OSBindex=malloc(MAX_GNSS*sizeof(int *));
+		SINEXBias->SNXBiasBlockOSB=malloc(MAX_GNSS*sizeof(TSINEXBiasBlock *));
+	
+		for(i=0;i<MAX_GNSS;i++) {
+			SINEXBias->OSBindex[i]=malloc(MAX_MEASUREMENTS_NO_COMBINATIONS*sizeof(int));
+			SINEXBias->SNXBiasBlockOSB[i]=malloc(MAX_SATELLITES_PER_GNSS*sizeof(TSINEXBiasBlock *));
+			for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+				SINEXBias->SNXBiasBlockOSB[i][j]=NULL;
+			}
+			for(j=0;j<MAX_MEASUREMENTS_NO_COMBINATIONS;j++) {
+				SINEXBias->OSBindex[i][j]=-1;
+			}
+		}
+	} else if (ft==ftSINEXBIASDSB && SINEXBias->DSBindex==NULL ) {
+		SINEXBias->DSBindex=malloc(MAX_GNSS*sizeof(int *));
+		SINEXBias->SNXBiasBlockDSB=malloc(MAX_GNSS*sizeof(TSINEXBiasBlock *));
+	
+		for(i=0;i<MAX_GNSS;i++) {
+			SINEXBias->DSBindex[i]=malloc(MAX_MEASUREMENTS_NO_COMBINATIONS*sizeof(int *));
+			SINEXBias->SNXBiasBlockDSB[i]=malloc(MAX_SATELLITES_PER_GNSS*sizeof(TSINEXBiasBlock *));
+			for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
+				SINEXBias->SNXBiasBlockDSB[i][j]=NULL;
+			}
+			for(j=0;j<MAX_MEASUREMENTS_NO_COMBINATIONS;j++) {
+				SINEXBias->DSBindex[i][j]=malloc(MAX_MEASUREMENTS_NO_COMBINATIONS*sizeof(int));
+				for(k=0;k<MAX_MEASUREMENTS_NO_COMBINATIONS;k++) {
+					SINEXBias->DSBindex[i][j][k]=-1;
+				}
+			}
+		}
+	}
+
+
+
+	while(getL(line,&len,fd)!=-1) {
+		if(len<2) continue; //Skip blank lines
+		if(readingHeader) {
+			if(strncmp(line,"+BIAS/SOLUTION",14)==0) {
+				//Read next header line. This will be the last line before data starts
+				res = getL(line,&len,fd);
+				if (res==-1) break;
+				//In this header line we need to find the initial character of each field
+			   	//(the position may change depending on the file author)
+				//Look for PRN column
+				p=strstr(line,"PRN");
+				if (p==NULL) return 0; //PRN column not found
+				posGNSS=p-line;
+				posPRN=posGNSS+1;
+				//Look for OBS1 column
+				p=strstr(line,"OBS1");
+				if (p==NULL) return 0; //OBS1 column not found
+				posOBS1=p-line;
+				//Look for OBS2 column
+				p=strstr(line,"OBS2");
+				if (p==NULL) return 0; //OBS2 column not found
+				posOBS2=p-line;
+				//Look for BIAS_START____ column
+				p=strstr(line,"BIAS_START____");
+				if (p==NULL) {
+					//BIAS_START____ not found. It may due to Year is given with 2 digits	
+					p=strstr(line,"BIAS_START__");
+					if (p==NULL) return 0; //BIAS_START column not found
+					numDigitsYear=2;
+				} else {
+					numDigitsYear=4;
+				}
+				posSTART=p-line;
+				//Look for BIAS_END__ column
+				p=strstr(line,"BIAS_END__");
+				if (p==NULL) return 0; //BIAS_END_ column not found
+				posEND=p-line;
+				//Look for __ESTIMATED_VALUE__ column
+				p=strstr(line,"__ESTIMATED_VALUE____");
+				if (p==NULL) return 0; //__ESTIMATED_VALUE____ column not found
+				posVALUE=p-line;
+				//Look for _STD_DEV_ column
+				p=strstr(line,"_STD_DEV___");
+				if (p==NULL) return 0; //_STD_DEV___ column not found
+				posDEV=p-line;
+
+				readingHeader=0;
+			}
+		} else {
+			if(strncmp(line,"-BIAS/SOLUTION",14)==0) break; //End of data
+			if (ft==ftSINEXBIASOSB) {
+				//
+				if (strncmp(&line[1],"OSB",3)!=0) continue; //Not a data line for absolute biases
+			} else {	// if (ft==ftSINEXBIASDSB)
+				if (strncmp(&line[1],"DSB",3)!=0 && strncmp(&line[1],"DCB",3)!=0) continue; //Not a data line for differential biases
+			}
+			//Reading data
+			properlyRead=1;
+			//Get Constellation
+			GNSS=gnsschar2gnsstype(line[posGNSS]);
+			//Get PRN
+			getstr(aux,line,len,posPRN,2);
+			PRN=atoi(aux);
+			if (PRN<=0) continue;
+			if (PRN>=MAX_SATELLITES_PER_GNSS) {
+				sprintf(messagestr,"Invalid PRN number '%s' in SINEX BIAS file",aux);
+				printError(messagestr,options);
+			}
+
+			//Get Start Epoch
+			getstr(aux,line,len,posSTART,numDigitsYear);
+			yearStart=atoi(aux);
+			getstr(aux,line,len,posSTART+numDigitsYear+1,3);
+			doyStart=atoi(aux);
+			getstr(aux,line,len,posSTART+numDigitsYear+5,5);
+			secondsStart=atof(aux);
+			//Get End Epoch
+			getstr(aux,line,len,posEND,numDigitsYear);
+			yearEnd=atoi(aux);
+			getstr(aux,line,len,posEND+numDigitsYear+1,3);
+			doyEnd=atoi(aux);
+			getstr(aux,line,len,posEND+numDigitsYear+5,5);
+			secondsEnd=atof(aux);
+			if (numDigitsYear==2) {
+				yearStart+=2000;
+				yearEnd+=2000;
+			}
+			//Get DCB value
+			getstr(aux,line,len,posVALUE,21);
+			DCBVal=atof(aux);
+			//Get DCB Sigma
+			getstr(aux,line,len,posDEV,11);
+			DCBSigma=atof(aux);
+			//Get MeasTo
+			getstr(aux,line,len,posOBS1,3);
+			measFrom=measstr2meastype(aux);
+			if (ft==ftSINEXBIASDSB) {
+				///////DSB data
+				//Get MeasTo
+				getstr(aux,line,len,posOBS2,3);
+				measTo=measstr2meastype(aux);
+				indexPos=SINEXBias->DSBindex[GNSS][measFrom][measTo];
+				numMeas=SINEXBias->numMeasBlocksDSB[GNSS];
+				if (indexPos==-1) {
+					//DSB or OSB measType not read before. Allocate memory for new DSB type for all satellites in the constellation
+					if (numMeas<maxMeas[GNSS]) {
+						indexPos=maxMeas[GNSS];
+						numMeas=maxMeas[GNSS];
+					} else {
+						indexPos=numMeas;
+					}
+					SINEXBias->DSBindex[GNSS][measFrom][measTo]=indexPos;
+					numTimeBlocks=0;
+					numMeas++;
+					for (i=0;i<MAX_SATELLITES_PER_GNSS;i++) {
+						SINEXBias->SNXBiasBlockDSB[GNSS][i]=realloc(SINEXBias->SNXBiasBlockDSB[GNSS][i],(numMeas)*sizeof(TSINEXBiasBlock));
+						SINEXBias->SNXBiasBlockDSB[GNSS][i][indexPos].numTimeBlocks=0;
+						SINEXBias->SNXBiasBlockDSB[GNSS][i][indexPos].EpochStart=NULL;
+						SINEXBias->SNXBiasBlockDSB[GNSS][i][indexPos].EpochEnd=NULL;
+						SINEXBias->SNXBiasBlockDSB[GNSS][i][indexPos].DCBVal=NULL;
+						SINEXBias->SNXBiasBlockDSB[GNSS][i][indexPos].DCBSigma=NULL;
+					}
+
+					SINEXBias->numMeasBlocksDSB[GNSS]=numMeas;
+				} else {
+					//DSB read for current satellite
+					numTimeBlocks=SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].numTimeBlocks;
+				}
+				if (numMeas>maxMeas[GNSS]) {
+					maxMeas[GNSS]=numMeas;
+				}
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].numTimeBlocks++;
+
+				//Allocate memory for new epoch of a DSB type
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].EpochStart=realloc(SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].EpochStart,(numTimeBlocks+1)*sizeof(TTime));
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].EpochEnd=realloc(SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].EpochEnd,(numTimeBlocks+1)*sizeof(TTime));
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].DCBVal=realloc(SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].DCBVal,(numTimeBlocks+1)*sizeof(double));
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].DCBSigma=realloc(SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].DCBSigma,(numTimeBlocks+1)*sizeof(double));
+
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].EpochStart[numTimeBlocks].MJDN=(int)yeardoy2MJDN (yearStart,doyStart,(int)secondsStart);
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].EpochStart[numTimeBlocks].SoD=secondsStart;
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].EpochEnd[numTimeBlocks].MJDN=(int)yeardoy2MJDN (yearEnd,doyEnd,(int)secondsEnd);
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].EpochEnd[numTimeBlocks].SoD=secondsEnd;
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].DCBVal[numTimeBlocks]=DCBVal;
+				SINEXBias->SNXBiasBlockDSB[GNSS][PRN][indexPos].DCBSigma[numTimeBlocks]=DCBSigma;
+
+			} else {
+				///////OSB data
+				measTo=NA;
+				indexPos=SINEXBias->OSBindex[GNSS][measFrom];
+				numMeas=SINEXBias->numMeasBlocksOSB[GNSS];
+				if (indexPos==-1) {
+					//OSB or OSB measType not read before. Allocate memory for new OSB type for all satellites in the constellation
+					if (numMeas<maxMeas[GNSS]) {
+						indexPos=maxMeas[GNSS];
+						numMeas=maxMeas[GNSS];
+					} else {
+						indexPos=numMeas;
+					}
+					SINEXBias->OSBindex[GNSS][measFrom]=indexPos;
+					numTimeBlocks=0;
+					numMeas++;
+					for (i=0;i<MAX_SATELLITES_PER_GNSS;i++) {
+						SINEXBias->SNXBiasBlockOSB[GNSS][i]=realloc(SINEXBias->SNXBiasBlockOSB[GNSS][i],(numMeas)*sizeof(TSINEXBiasBlock));
+						SINEXBias->SNXBiasBlockOSB[GNSS][i][indexPos].numTimeBlocks=0;
+						SINEXBias->SNXBiasBlockOSB[GNSS][i][indexPos].EpochStart=NULL;
+						SINEXBias->SNXBiasBlockOSB[GNSS][i][indexPos].EpochEnd=NULL;
+						SINEXBias->SNXBiasBlockOSB[GNSS][i][indexPos].DCBVal=NULL;
+						SINEXBias->SNXBiasBlockOSB[GNSS][i][indexPos].DCBSigma=NULL;
+					}
+
+					SINEXBias->numMeasBlocksOSB[GNSS]=numMeas;
+				} else {
+					//OSB read for current satellite
+					numTimeBlocks=SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].numTimeBlocks;
+				}
+				if (numMeas>maxMeas[GNSS]) {
+					maxMeas[GNSS]=numMeas;
+				}
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].numTimeBlocks++;
+
+				//Allocate memory for new epoch of a OSB type
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].EpochStart=realloc(SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].EpochStart,(numTimeBlocks+1)*sizeof(TTime));
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].EpochEnd=realloc(SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].EpochEnd,(numTimeBlocks+1)*sizeof(TTime));
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].DCBVal=realloc(SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].DCBVal,(numTimeBlocks+1)*sizeof(double));
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].DCBSigma=realloc(SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].DCBSigma,(numTimeBlocks+1)*sizeof(double));
+
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].EpochStart[numTimeBlocks].MJDN=(int)yeardoy2MJDN (yearStart,doyStart,(int)secondsStart);
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].EpochStart[numTimeBlocks].SoD=secondsStart;
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].EpochEnd[numTimeBlocks].MJDN=(int)yeardoy2MJDN (yearEnd,doyEnd,(int)secondsEnd);
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].EpochEnd[numTimeBlocks].SoD=secondsEnd;
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].DCBVal[numTimeBlocks]=DCBVal;
+				SINEXBias->SNXBiasBlockOSB[GNSS][PRN][indexPos].DCBSigma[numTimeBlocks]=DCBSigma;
+			}
+		}
+	}
+
+	return (properlyRead);
+
+
+}
+
+/*****************************************************************************
+ * Name        : readSINEXBIASFile
+ * Description : Read a SINEX BIAS DCB file. These are multiconstellation DCBs
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * char  *filename                 I  N/A  Name of the file
+ * enum fileType ft                I  N/A  SINEX BIAS file type (with DSB or OSB)
+ * TSINEXBiasData *SINEXBias       O  N/A  Structure to save the DCB data
+ * TOptions  *options              I  N/A  TOptions structure
+ * Returned value (int)            O  N/A  Status of the function
+ *                                          1 => File open and properly read
+ *                                          0 => File open and failed to read
+ *                                         -1 => File not open
+ *                                         -2 => First header line not recognized
+ *****************************************************************************/
+int readSINEXBIASFile (char *filename, enum fileType ft, TSINEXBiasData *SINEXBias, TOptions *options) {
+
+	FILE       		*fd;
+	int       	  	ret;
+
+	if ((fd = fopen(filename,"rb"))) {
+		ret = readSINEXBIAS (fd, ft, SINEXBias, options);
+		fclose(fd);
+		return ret;
+	} else {
+		// File do not exist
+		return -1;
+	}
+}
+
 
 /*****************************************************************************
  * Name        : readRecType
@@ -6020,7 +8544,7 @@ int readRecType (FILE *fd, TReceiverList *recList) {
 	
 	while(getL(line,&len,fd)!=-1) {
 		if (line[0]!='#') { // Line is not a comment
-			getstr(aux,line,0,20);
+			getstr(aux,line,len,0,20);
 			if (aux[0]!='\0' && aux[0]!='\n') {
 				recList->n++;
 				recList->rec = realloc(recList->rec,sizeof(TReceiverData)*recList->n);
@@ -6103,6 +8627,7 @@ int readSINEX (FILE *fd, TStationList *stationList) {
 	
 	section = 0;
 	while(getL(line,&len,fd)!=-1) {
+		if (len<2) continue;
 		if (line[0]=='+') { // Change of section
 			if (strncmp(line,"+SITE/ID",8)==0) section = 1;
 			else if (strncmp(line,"+SOLUTION/ESTIMATE",18)==0) {
@@ -6115,16 +8640,16 @@ int readSINEX (FILE *fd, TStationList *stationList) {
 			if (section==1) {
 				stationList->n++;
 			} else if (section==2) {
-				getstr(aux,line,7,3);
+				getstr(aux,line,len,7,3);
 				if (strcmp(aux,"STA")==0) { // It is a station
 					properlyRead = 1; // Any station has been found
-					getstr(aux,line,14,4);
+					getstr(aux,line,len,14,4);
 					if (strcmp(prevName,aux)!=0) { // New station
 						auxN++;
 						strcpy(stationList->station[auxN-1].name,aux);
 						strcpy(prevName,aux);
 					}
-					getstr(aux,line,46,23);
+					getstr(aux,line,len,46,23);
 					if (line[10]=='X') i=0;
 					else if (line[10]=='Y') i=1;
 					else if (line[10]=='Z') i=2;
@@ -6189,6 +8714,7 @@ int readSBASFile (char *filename, TSBASdatabox *SBASdatabox, double *rinexVersio
 	static FILE 			*fd;
 	static FILE				*fdlist[18];
 	static enum fileType 	sbasfile;
+	int						i;
 	int 					ret;
 	static int				prevday=0;
 	static int				initialized=0;
@@ -6215,8 +8741,25 @@ int readSBASFile (char *filename, TSBASdatabox *SBASdatabox, double *rinexVersio
 			// File do not exist
 			return -1;
 		}
+		//Allocate memory for sbasblock
+		SBASdatabox->sbasblock=malloc(sizeof(TSBASblock));
 
 		initialized=1;
+	} else if (SBASdatabox==NULL) {
+		//Special call to close all files in case we have reached the end of observation file
+		//but we have not closed the SBAS file
+		if(fd!=NULL && filesclosed==0) {
+			filesclosed=1;
+			fclose(fd);
+			fd=NULL;
+			closefiles(fdlist,18);	//Close all other files
+			for(i=0;i<18;i++) {
+				if (filelist[i]!=NULL) {
+					free(filelist[i]);
+					filelist[i]=NULL;
+				}
+			}
+		}
 	}
 
 	if(sbasfile==ftRINEXB && fd!=NULL) {
@@ -6234,7 +8777,7 @@ int readSBASFile (char *filename, TSBASdatabox *SBASdatabox, double *rinexVersio
 	}
 
 	if(fd!=NULL && filesclosed==0) {
-		if (feof(fd)>0) {
+		if (feof_function(fd)>0) {
 			//Reached end of file
 			filesclosed=1;
 			fclose(fd);
@@ -6244,6 +8787,10 @@ int readSBASFile (char *filename, TSBASdatabox *SBASdatabox, double *rinexVersio
 				//No data was written in the RINEX H file for the previous day
 				//But we have generated one with the header. We need to erase it.
 				remove(filelist[fdEPHEMERISPREVDAY]);
+			}
+			for(i=0;i<18;i++) {
+				free(filelist[i]);
+				filelist[i]=NULL;
 			}
 		}
 	} else if (fd==NULL) {
@@ -6277,49 +8824,49 @@ int readSBASFile (char *filename, TSBASdatabox *SBASdatabox, double *rinexVersio
  *****************************************************************************/
 int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox, double *rinexVersion, int *prevday, TTime *currentepoch, TOptions  *options) {
 	char           	line[MAX_INPUT_LINE];
-	char           	*lineaux[10];	//String to save previous line until a full message has been read
 	char           	aux[100];
 	char			hexstring[300];
 	char			binarystring[2400];
+	unsigned char  	binarymessage[33];
+	unsigned char	preamble;
 	int            	len = 0;
 	int            	error = 0;
 	static int     	properlyRead = 0;
 	static int     	readingHeader = 1;
 	static int		writingHeader = 1;
+	static int		bufferlen=0;
 	int				GEOpos;
 	int				GEOPRN;
 	int				freeblock=1;
 	int				numberofdatalines;
 	int				numberofcolumns;
 	int				numberofbadmessages=0;
-	int            	i,m;
+	int            	i,j,m;
 	int				decoderesult = 1;
 	int				convergencetime;
 	double			timediff;
-	double         	seconds;
+	double			seconds;
 	int				numMsgLost;
 	int            	row=0;
 	int				endmessage=0;
 	int 			decodedmessagetype=0;
 	int				messagesmissing=0;
+	int				validpreamble;
 	//int			reachedcurrentepoch=-1;
 	int				MessageAheadCurrentEpoch=0;
+	int				invalidDate=0;
 	static int		firstdatalineMJDN=-1;
 	static int		totalmsgmissing=0;
 	static int		nummsgmissingdetected=0;
 	static int		numfilelines=0;
-	static int		*numlinesmissing=NULL;
-	static int		*missingmessagesvector=NULL;
 	static int		writefiles=0;
-	static int		prevnumMsgMissing[MAX_SBAS_PRN];
+	static int		prevnumMsgMissing[NUMPOSFREQSBASMSG][MAX_SBAS_PRN];
 	struct tm    	tm;
-	static int		prevmsgtimeMJDN[MAX_SBAS_PRN];
-	static int		MsgMissingCleared[MAX_SBAS_PRN];
-	static int		msgtimeMJDN[MAX_SBAS_PRN];
-	static double	prevmsgtimeSoD[MAX_SBAS_PRN];
-	static double	msgtimeSoD[MAX_SBAS_PRN];
+	static int		MsgMissingCleared[NUMPOSFREQSBASMSG][MAX_SBAS_PRN];
+	static TTime	msgtime[NUMPOSFREQSBASMSG][MAX_SBAS_PRN];
+	static TTime	prevmsgtime[NUMPOSFREQSBASMSG][MAX_SBAS_PRN];
 	static int		initialized=0;
-	TTime			msgtime,prevmsgtime;
+	static char		bufferstring[MAX_INPUT_LINE];
 	TSBASblock  	*sbasblock;
 	double			CurrentPos;
 	struct stat 	filestat;	//This is to get the file size
@@ -6327,13 +8874,18 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 	double			CurrentPercentage;
 	double			PreviousPercentage=-1;
 
+	sbasblock=SBASdatabox->sbasblock;
+
 	if(initialized==0) {
 		initialized=1;
-		for(i=0;i<MAX_SBAS_PRN;i++) {
-			prevmsgtimeMJDN[i]=msgtimeMJDN[i]=-1;
-			prevmsgtimeSoD[i]=msgtimeSoD[i]=-1;
-			MsgMissingCleared[i]=0;
-			prevnumMsgMissing[i]=0;
+		bufferstring[0]='\0';
+		for(i=0;i<NUMPOSFREQSBASMSG;i++) {
+			for(j=0;j<MAX_SBAS_PRN;j++) {
+				prevmsgtime[i][j].MJDN=msgtime[i][j].MJDN=-1;
+				prevmsgtime[i][j].SoD=msgtime[i][j].SoD=-1.;
+				MsgMissingCleared[i][j]=0;
+				prevnumMsgMissing[i][j]=0;
+			}
 		}
 		//If writefiles is greater than 0, means that one file type has to be written
 		writefiles=options->writeRinexBfile+options->writeEMSfile+options->writePegasusfile;
@@ -6348,36 +8900,46 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 				fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",0.0,"",options->ProgressEndCharac);
 				#if defined (__WIN32__)
 					//In Windows, cursor is not disabled
-					fflush(options->terminalStream);
+					fflush_function(options->terminalStream);
 				#endif
 			}
 		}
 	}
 
-	sbasblock=NULL;
-
-	//Initialize lineaux
-	for(i=0;i<10;i++) {
-		lineaux[i]=malloc(sizeof(char)*MAX_INPUT_LINE);
-		lineaux[i][0]='\0';
+	//Initialize SBASdatabox->bufferlines
+	for(i=0;i<MAX_LINES_BUFFERED_SBAS_MESSAGES;i++) {
+		SBASdatabox->bufferlines[i][0]='\0';
+		SBASdatabox->bufferlineslen[i]=0;
 	}
 
+	//Check for buffered line
+	if (bufferstring[0]!='\0') {
+		//There is a buffered line
+		strcpy(line,bufferstring);
+		bufferstring[0]='\0';
+		len=bufferlen;
+		bufferlen=0;
+		numfilelines--;
+		CurrentPos -= (double)len;
+		if (len<60) line[60]='\0';	//This is to make len initialized in position 60 when checking if new header, as data lines are smaller than 60 and therefore it would compare with unitialized data
+	} else {
+		if (getL(line,&len,fd)==-1) return -1;
+		if (len<60) line[60]='\0';	//This is to make len initialized in position 60 when checking if new header, as data lines are smaller than 60 and therefore it would compare with unitialized data
+	} 
 
-	while(getL(line,&len,fd)!=-1) {
+	do {
 		numfilelines++;
 		CurrentPos += (double)len;
-		if(line[0]=='\n' || line[0]=='\r') continue;	//Skip blank lines
+		if (len<2) continue; //Skip blank lines
 
 		//Alloc memory only when TSBASblock has been freed (once every time a message has been read)
 		if(freeblock==1) {
-			sbasblock=malloc(sizeof(TSBASblock));	//sbasblock is declared as pointer, so at each loop sbasblock structure is freed and allocated again,
-													//so each sbasblock for each message will only occupy the necessary memory
 			initSBASblock (sbasblock);
 		}
 
 		if (readingHeader) {
 			if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
-				getstr(aux,line,0,9);
+				getstr(aux,line,len,0,9);
 				*rinexVersion = atof(aux);
 				if ((int)*rinexVersion>2) {return 0;} 		//Version check
 			} else if (strncmp(&line[60],"REC INDEX/TYPE/VERS",19)==0) {
@@ -6386,13 +8948,7 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 				readingHeader = 0;
 				properlyRead = 1;
 				//If we are going to process data, the first call to this function will be just for opening files and reading header
-				if(currentepoch->MJDN==-1 && options->onlyconvertSBAS==0 && options->onlySBASplots==0) {
-					for(i=0;i<10;i++) {
-						free(lineaux[i]);
-						lineaux[i]=NULL;
-					}
-					free(sbasblock);
-					sbasblock=NULL;
+				if(currentepoch->MJDN==-1 && options->onlyconvertSBAS==0 && options->SBAScorrections<SBASMaps1freqUsed) {
 					return 1;
 				}
 			}
@@ -6400,7 +8956,7 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 			//Check first if there is another header line. Skip new header lines
 			//If a RINEXB, EMS or Pegasus file is being written, header will just be written once
 			if (strncmp(&line[60],"RINEX VERSION / TYPE",20)==0) {
-				getstr(aux,line,0,9);
+				getstr(aux,line,len,0,9);
 				*rinexVersion = atof(aux);
 				if ((int)*rinexVersion>2) {return 0;} 		//Version check
 				row=0;
@@ -6416,47 +8972,73 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 			} else if ((int)*rinexVersion==2) {
 				if (row==0) {
 
-					//Check if message is from L1. If not, ignore it (to be changed when updating to SBAS v3)
-					//If no frequency given, assume its from L1
-					if (len>=45) {
-						getstr(aux,line,26,1);
-						if(atoi(aux)!=1) {
-							//Skip the two following lines of the current message
-							if (getL(line,&len,fd)==-1) return -1;
-							if (getL(line,&len,fd)==-1) return -1;
-							continue;	
-						}
+					getstr(aux,line,len,0,3);
+					sbasblock->PRN = atoi(aux);		//PRN
+					if (sbasblock->PRN<=0||sbasblock->PRN>=MAX_SBAS_PRN) {
+						sprintf(messagestr,"Invalid PRN number '%s' in line number %d in RINEX-B file",aux,numfilelines);
+						printError(messagestr,options);
+					}
+					invalidDate=0;
+					getstr(aux,line,len,4,2);
+					tm.tm_year = atoi(aux);			//Year
+					if (tm.tm_year<=0) invalidDate=1;
+					else if (tm.tm_year <= 70) tm.tm_year += 100;					
+					getstr(aux,line,len,7,2);
+					tm.tm_mon  = atoi(aux);			//Month
+					if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+					tm.tm_mon  -= 1;
+					getstr(aux,line,len,10,2);
+					tm.tm_mday = atoi(aux);			//Day
+					if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+					getstr(aux,line,len,13,2);
+					tm.tm_hour = atoi(aux);			//Hour
+					if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+					getstr(aux,line,len,16,2);
+					tm.tm_min  = atoi(aux);			//Minute
+					if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+					getstr(aux,line,len,18,5);
+					tm.tm_sec  = atoi(aux);       		//Seconds,in time of reception of first bit 
+					if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1; //Seconds can have value 60 when a leap second is inserted
+					if (invalidDate==1) {
+						sprintf(messagestr,"Invalid date '%.23s' in line number %d in RINEX-B file",line,numfilelines);
+						printError(messagestr,options);
 					}
 
-					getstr(aux,line,0,3);
-					sbasblock->PRN = atoi(aux);		//PRN
-					getstr(aux,line,4,2);
-					tm.tm_year = atoi(aux);			//Year
-					if (tm.tm_year <= 70) tm.tm_year += 100;
-					getstr(aux,line,7,2);
-					tm.tm_mon  = atoi(aux)-1;		//Month
-					getstr(aux,line,10,2);
-					tm.tm_mday = atoi(aux);			//Day
-					getstr(aux,line,13,2);
-					tm.tm_hour = atoi(aux);			//Hour
-					getstr(aux,line,16,2);
-					tm.tm_min  = atoi(aux);			//Minute
-					getstr(aux,line,18,5);
-					tm.tm_sec  = atoi(aux);       		//Seconds,in time of reception of first bit 
-					seconds=atof(aux);
 
 					sbasblock->t.MJDN = MJDN(&tm);
-					sbasblock->t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds +1.;	//Seconds in time of applicability (1 second later)
-
-					//Check if RINEXB has the 0.1 second due to flight time. If it isn't, add it
-					if ((double)((int)(sbasblock->t.SoD))==sbasblock->t.SoD) {
-						sbasblock->t.SoD+=.1;
-					}
+					sbasblock->t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + (double)(tm.tm_sec) + options->SBASmsgFlightTime + SBASMSGDURATION;	//Seconds in time of applicability (1 second later)
 
 					if(sbasblock->t.SoD>=86400.) {
 						//After adding 1 one second, we have gone to the next day
 						sbasblock->t.MJDN=sbasblock->t.MJDN+1;
 						sbasblock->t.SoD=sbasblock->t.SoD-86400.;
+					}
+
+					//Some RINEX-B files do not provide the frequency, datalength, receiverindex and source identifier,
+					//even though the RINEX-B standard states it
+					if (len>=45) {
+						sbasblock->bandflag=line[25];				//Band flag
+						getstr(aux,line,len,26,1);
+						sbasblock->frequency=atoi(aux);				//Frequency number
+
+						switch(sbasblock->frequency) {
+							case 1:
+								sbasblock->frequencyPos=SBAS1FFREQPOS;
+								break;
+							case 5:
+								sbasblock->frequencyPos=SBASDFMCFREQPOS;
+								break;
+							default:
+								sbasblock->frequencyPos=UNKNOWNFREQPOS;
+								break;
+						}
+						getstr(aux,line,len,30,3);
+						sbasblock->halfdatalength=atoi(aux);
+						sbasblock->datalength=sbasblock->halfdatalength*2;	//Data message length  (in RINEX-B is number of pair of bytes)
+						getstr(aux,line,len,36,3);
+						sbasblock->receiverindex=atoi(aux);			//Receiver index
+						getstr(aux,line,len,42,3);
+						strcpy(sbasblock->sourceidentifier,aux); 	//Source identifier
 					}
 
 					if(firstdatalineMJDN==-1) {
@@ -6469,7 +9051,7 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 						//gLAB will check the first line of data, if it is greater than hour 22 (this is an arbitrary threshold), we will assume that the file
 						//is from the next day and set the current time to the next day and second. Otherwise, if it is at the beginning of the day, time will be set
 						//at the same time as the one given in the message read.
-						if (options->onlySBASplots==1) {
+						if (options->SBAScorrections>=SBASMaps1freqUsed) {
 							if(sbasblock->t.SoD>=79200.) { //79200 seconds is hour 22, minute 0, second 0
 								currentepoch->MJDN=sbasblock->t.MJDN+1;
 								currentepoch->SoD=0.;
@@ -6503,7 +9085,7 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 						}
 					}
 
-					if (sbasblock->t.MJDN>currentepoch->MJDN || (currentepoch->MJDN==sbasblock->t.MJDN && (sbasblock->t.SoD-currentepoch->SoD)>1E-4)) {
+					if (sbasblock->t.MJDN>currentepoch->MJDN || (currentepoch->MJDN==sbasblock->t.MJDN && (sbasblock->t.SoD-currentepoch->SoD)>DIFFEQTHRESHOLD)) {
 						//The time of applicability of the current message is ahead of the current epoch.
 						MessageAheadCurrentEpoch=1;
 					}
@@ -6512,61 +9094,57 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 					if(options->GEOPRNunsel[sbasblock->PRN]==0) {
 
 						if(currentepoch->MJDN>=0) {
-							//Only check missed messages if we are not only converting SBAS files
-							if (MessageAheadCurrentEpoch==0) {
+							//Only check missed messages if we are not only converting SBAS files and the message corresponds to the frequency we are using
+							if (MessageAheadCurrentEpoch==0 /*&& sbasblock->frequencyPos==options->SBASFreqPosToProcess*/) {
 								//Only update previous message epoch if current message read is usable
-								prevmsgtimeMJDN[0]=msgtimeMJDN[0];
-								prevmsgtimeSoD[0]=msgtimeSoD[0];
-								prevmsgtimeMJDN[sbasblock->PRN]=msgtimeMJDN[sbasblock->PRN];
-								prevmsgtimeSoD[sbasblock->PRN]=msgtimeSoD[sbasblock->PRN];
-							
+								if (prevmsgtime[sbasblock->frequencyPos][sbasblock->PRN].MJDN==-1) {
+									//On first message read, copy to previous message time the current epoch
+									if (prevmsgtime[sbasblock->frequencyPos][0].MJDN==-1) {
+										memcpy(&prevmsgtime[sbasblock->frequencyPos][0],&sbasblock->t,sizeof(TTime));
+									} else {
+										memcpy(&prevmsgtime[sbasblock->frequencyPos][0],&msgtime[sbasblock->frequencyPos][0],sizeof(TTime));
+									}
+									memcpy(&prevmsgtime[sbasblock->frequencyPos][sbasblock->PRN],&sbasblock->t,sizeof(TTime));
+								} else {
+									memcpy(&prevmsgtime[sbasblock->frequencyPos][0],&msgtime[sbasblock->frequencyPos][0],sizeof(TTime));
+									memcpy(&prevmsgtime[sbasblock->frequencyPos][sbasblock->PRN],&msgtime[sbasblock->frequencyPos][sbasblock->PRN],sizeof(TTime));
+								}
 
-								msgtimeMJDN[0]=sbasblock->t.MJDN;
-								msgtimeSoD[0]=sbasblock->t.SoD;
-								msgtimeMJDN[sbasblock->PRN]=sbasblock->t.MJDN;
-								msgtimeSoD[sbasblock->PRN]=sbasblock->t.SoD;
+								memcpy(&msgtime[sbasblock->frequencyPos][0],&sbasblock->t,sizeof(TTime));
+								memcpy(&msgtime[sbasblock->frequencyPos][sbasblock->PRN],&sbasblock->t,sizeof(TTime));
 							
 								//Check time between current epoch and last message received for all GEO
-								msgtime.MJDN=msgtimeMJDN[0];
-								msgtime.SoD=msgtimeSoD[0];
-								prevmsgtime.MJDN=prevmsgtimeMJDN[0];
-								prevmsgtime.SoD=prevmsgtimeSoD[0];
+								numMsgLost=(int)(tdiff(&msgtime[sbasblock->frequencyPos][0],&prevmsgtime[sbasblock->frequencyPos][0])+.00005)-1;
 
-								numMsgLost=(int)(tdiff(&msgtime,&prevmsgtime)+.00005)-1;
-
-								if(numMsgLost>=1 && prevmsgtime.MJDN!=-1) {
+								if(numMsgLost>=1) {
 									//SBAS messages are sent every second. If there is no data to send, we will receive type 62 or 63 messages to provide continuity of signal
-									SBASdatabox->SBASdata[0].missed4msg[0]=SBASdatabox->SBASdata[0].missed4msg[0]+numMsgLost;
-									if (SBASdatabox->SBASdata[0].missed4msg[0]>=4 && MsgMissingCleared[0]==0) {
+									SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][0]+=numMsgLost;
+									if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][0]>=4 && MsgMissingCleared[sbasblock->frequencyPos][0]==0) {
 										//More than 4 messages missed and we have not cleared data
-										SBASMissingMessageClearData(0,SBASdatabox->SBASdata);
-										MsgMissingCleared[0]=1;
+										SBASMissingMessageClearData(0,sbasblock->frequencyPos,currentepoch,SBASdatabox->SBASdata,options);
+										MsgMissingCleared[sbasblock->frequencyPos][0]=1;
 									}
 								} else {
 									//A new message has been received. Reset the and missed4msg counter and MsgMissingCleared flag
-									SBASdatabox->SBASdata[0].missed4msg[0]=0;
-									MsgMissingCleared[0]=0;
+									SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][0]=0;
+									MsgMissingCleared[sbasblock->frequencyPos][0]=0;
 								}
 
 								//Check time between current epoch and last message received for current GEO
-								msgtime.MJDN=msgtimeMJDN[sbasblock->PRN];
-								msgtime.SoD=msgtimeSoD[sbasblock->PRN];
-								prevmsgtime.MJDN=prevmsgtimeMJDN[sbasblock->PRN];
-								prevmsgtime.SoD=prevmsgtimeSoD[sbasblock->PRN];
-								numMsgLost=(int)(tdiff(&msgtime,&prevmsgtime)+.00005)-1;
-								if(numMsgLost>=1 && prevmsgtime.MJDN!=-1) {
-									if ( (tdiff(currentepoch,&msgtime)-.9)>1E-4) {
-										SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]=SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]+numMsgLost-prevnumMsgMissing[sbasblock->PRN];
+								numMsgLost=(int)(tdiff(&msgtime[sbasblock->frequencyPos][sbasblock->PRN],&prevmsgtime[sbasblock->frequencyPos][sbasblock->PRN])+.00005)-1;
+								if(numMsgLost>=1) {
+									if ( (tdiff(currentepoch,&msgtime[sbasblock->frequencyPos][sbasblock->PRN])-options->SBASmsg1MinusFlightTime)>DIFFEQTHRESHOLD) {
+										SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]+=numMsgLost-prevnumMsgMissing[sbasblock->frequencyPos][sbasblock->PRN];
 										//Print Info message when a SBAS message is missing, except when last message received is
 										//the last one we have to read for the current epoch, due to this message will be shown
 										//in the missing message check at the end of this function.
 										//It has to be considered that this check of missing messages is for the case when for example, the observation file
 										//has a data rate of 30 seconds, and there has been a data gap in between this 30 seconds
 										if (options->workMode == wmDOPROCESSING) {
-											if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]==1) {
-												sprintf(messagestr,"SBAS message missing for GEO PRN %3d at epoch %17s (1 missing message)",sbasblock->PRN,t2doystr(&msgtime));
-											} else if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]>1) {
-												sprintf(messagestr,"SBAS messages missing for GEO PRN %3d at epoch %17s (%d consecutive missing messages)",sbasblock->PRN,t2doystr(&msgtime),SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]);
+											if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]==1) {
+												sprintf(messagestr,"SBAS message missing for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f (1 missing message)",sbasblock->PRN,sbasblock->frequency,t2doystr(&msgtime[sbasblock->frequencyPos][sbasblock->PRN]),tm.tm_hour,tm.tm_min,(double)(tm.tm_sec) + options->SBASmsgFlightTime + SBASMSGDURATION);
+											} else if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]>1) {
+												sprintf(messagestr,"SBAS messages missing for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f (%d consecutive missing messages)",sbasblock->PRN,sbasblock->frequency,t2doystr(&msgtime[sbasblock->frequencyPos][sbasblock->PRN]),tm.tm_hour,tm.tm_min,(double)(tm.tm_sec) + options->SBASmsgFlightTime + SBASMSGDURATION,SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]);
 											}
 											printInfo(messagestr,options);
 										}
@@ -6574,28 +9152,28 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 										//In this case, when computing the number of messages missed, after reaching the previous epoch and entering this function again, the first
 										//message read vs the last one will be the hole gap (for example 21 messages missing), but the first 20 were alredy counted on the previous call
 										//to this function, so they will be counted twice. prevnumMsgMissing variable stores the last number of messages missing 
-										prevnumMsgMissing[sbasblock->PRN]=0;
+										prevnumMsgMissing[sbasblock->frequencyPos][sbasblock->PRN]=0;
 									}
-									if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]>=4 && MsgMissingCleared[sbasblock->PRN]==0) {
+									if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]>=4 && MsgMissingCleared[sbasblock->frequencyPos][sbasblock->PRN]==0) {
 										//More than 4 messages missed and we have not cleared data
 										if (SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN]!=-1) { //This is for the case that all received messages were wrong, so no data was saved
-											SBASMissingMessageClearData(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN],SBASdatabox->SBASdata);
+											SBASMissingMessageClearData(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN],sbasblock->frequencyPos,currentepoch,SBASdatabox->SBASdata,options);
 										}
-										MsgMissingCleared[sbasblock->PRN]=1;
+										MsgMissingCleared[sbasblock->frequencyPos][sbasblock->PRN]=1;
 									}
 								}
 								//If we had a gap greater than 4 messages, set first message received to current message epoch minus 1 minute. 
 								//This is to set the GEO in acqusition time (except for the current GEO, so the condition of acquisition does not block switching GEO)
-								if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]>=4) {
+								if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]>=4) {
 									GEOpos=SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN];
 									if (options->GEOindex>=0 && options->GEOindex!=GEOpos) {
-										memcpy(&SBASdatabox->SBASdata[GEOpos].firstmessage,&sbasblock->t,sizeof(TTime));
-										tdadd(&SBASdatabox->SBASdata[GEOpos].firstmessage,-60.);
+										memcpy(&SBASdatabox->SBASdata[GEOpos].firstmessage[sbasblock->frequencyPos],&sbasblock->t,sizeof(TTime));
+										SBASdatabox->SBASdata[GEOpos].firstmessage[sbasblock->frequencyPos]=tdadd(&SBASdatabox->SBASdata[GEOpos].firstmessage[sbasblock->frequencyPos],-60.);
 									}
 								}
 								//A new message has been received. Reset the and missed4msg counter and MsgMissingCleared flag
-								SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]=0;
-								MsgMissingCleared[sbasblock->PRN]=0;
+								SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]=0;
+								MsgMissingCleared[sbasblock->frequencyPos][sbasblock->PRN]=0;
 								
 							} //End if (MessageAheadCurrentEpoch==0)
 						}//End if(currentepoch->MJDN>=0) 
@@ -6606,62 +9184,39 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 						//If it is not -1, means that we read until we reach the current epoch
 						if(MessageAheadCurrentEpoch==1) {
 							//The time of applicability of the current message is ahead of the current epoch.
-							//The following commented lines were to check if file was from previous day or next day, but this check is not used
-							/*if(firstdatalineMJDN>currentepoch->MJDN) {
-								//The first line of the file is from days ahead of the observation one. We have no data for the current day
-								reachedcurrentepoch=0;
-							} else if(tdiff(&sbasblock->t,currentepoch)>=86400.0) {
-								//The message read is more than one day ahead, so we have no data for the current day
-								reachedcurrentepoch=0;
-							} else {
-								reachedcurrentepoch=1;
-							}*/
-							//Stop reading, go one line back (if we have not reached end of file) and exit function
-							if(feof(fd)==0) {
-								getLback(line,&len,fd);
+							//Stop reading, save the current line (if we have not reached end of file) and exit function
+							if(feof_function(fd)==0) {
+								//Copy line to buffer, so it is read in the next function call
+								strcpy(bufferstring,line);
+								bufferlen=len;
 							}
-							free(sbasblock);
-							sbasblock=NULL;
 							break;
 						}
 					}
 
-					//Some RINEX-B files do not provide the frequency, datalength, receiverindex and source identifier,
-					//even though the RINEX-B standard states it
-					if (len>=45) {
-						getstr(aux,line,26,1);
-						sbasblock->frequency=atoi(aux);				//Frequency number
-						getstr(aux,line,30,3);
-						sbasblock->datalength=atoi(aux);			//Data message length 
-						getstr(aux,line,36,3);
-						sbasblock->receiverindex=atoi(aux);			//Receiver index
-						getstr(aux,line,42,3);
-						strcpy(sbasblock->sourceidentifier,aux); 	//Source identifier
-					}
-
 					//Compute the number of data lines (there are 18 bytes of message per line)
-					numberofdatalines=(int)sbasblock->datalength/18;
-					if(sbasblock->datalength%18!=0) numberofdatalines++;
+					numberofdatalines=(int)sbasblock->halfdatalength/18;
+					if(sbasblock->halfdatalength%18!=0) numberofdatalines++;
 
 					row++;
 					endmessage=0;
 					freeblock=0;
 				} else {
 					if (row==1) {
-						getstr(aux,line,1,2);
+						getstr(aux,line,len,1,2);
 						sbasblock->messagetype=atoi(aux);	//Message type
 					}
 
 					//Compute the number of records (columns) in the current line (normally the last one is not full)
 					if(row==numberofdatalines) {
-						numberofcolumns=sbasblock->datalength%18;
+						numberofcolumns=(sbasblock->halfdatalength)%18;
 					} else {
 						numberofcolumns=18;
 					}
 
 					//Read data
 					for(i=0;i<numberofcolumns;i++) {
-						getstr(&hexstring[18*2*(row-1)+2*i],line,7+3*i,2);
+						getstr(&hexstring[18*2*(row-1)+2*i],line,len,7+3*i,2);
 					}
 					row++;
 			
@@ -6673,66 +9228,73 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 								if (options->ProgressEndCharac=='\r') {
 									//Printing to a terminal
 									fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",CurrentPercentage,"",options->ProgressEndCharac);
-									fflush(options->terminalStream);
+									fflush_function(options->terminalStream);
 								} else {
 									//Printing for the GUI. Only print if the integer of the percentage have changed (to avoid message spamming)
 									if ((int)CurrentPercentage!=(int)PreviousPercentage) {
 										fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",CurrentPercentage,"",options->ProgressEndCharac);
-										fflush(options->terminalStream);
+										fflush_function(options->terminalStream);
 									}
 								}
 								PreviousPercentage=CurrentPercentage;
 							}
 						}
 						//Convert the hexadecimal string to a binary string (1 bit per byte)
-						strhextostrbin(hexstring,binarystring);
+						strhextostrbin(hexstring,sbasblock->datalength,binarystring);
+
+						//Convert the binary string (one bit per byte) to one string where each bit is one value of the message
+						strbintobinstr(binarystring,sbasblock->datalength*4,binarymessage,sizeof(binarymessage));	
+
+						//Read preable to uniquely identify message frequency
+						preamble=binarymessage[0];
+						validpreamble=readSBASmessagePreamble(&preamble,sbasblock);
 
 						//Decode message
-						decoderesult=readSBASmessage(binarystring,sbasblock->messagetype,&decodedmessagetype,sbasblock,&messagesmissing,options);
+						decoderesult=readSBASmessage(binarystring,binarymessage,preamble,validpreamble,&decodedmessagetype,sbasblock,&messagesmissing,options);
 						if(messagesmissing!=0) {
 							//Increase counter for missing messages
 							totalmsgmissing+=messagesmissing;
 							nummsgmissingdetected++;
 							//Increase size of vectors for logging missed messages
-							numlinesmissing=realloc(numlinesmissing,sizeof(int)*nummsgmissingdetected);
-							missingmessagesvector=realloc(missingmessagesvector,sizeof(int)*nummsgmissingdetected);
+							SBASdatabox->numlinesmissing=realloc(SBASdatabox->numlinesmissing,sizeof(int)*nummsgmissingdetected);
+							SBASdatabox->missingmessagesvector=realloc(SBASdatabox->missingmessagesvector,sizeof(int)*nummsgmissingdetected);
 							//Save the line where missing message has been detected and what number has been lost
-							numlinesmissing[nummsgmissingdetected-1]=numfilelines-2;
-							missingmessagesvector[nummsgmissingdetected-1]=messagesmissing;
+							SBASdatabox->numlinesmissing[nummsgmissingdetected-1]=numfilelines-2;
+							SBASdatabox->missingmessagesvector[nummsgmissingdetected-1]=messagesmissing;
 						}
 
 						if(decoderesult<0) {
 							//Error decoding message. Update failed messages only if GEO is not unselected
 							numberofbadmessages++;	
 							if(options->GEOPRNunsel[sbasblock->PRN]==0) {
-								SBASdatabox->SBASdata[0].failedmessages[0]=SBASdatabox->SBASdata[0].failedmessages[0]+1;
-								SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]=SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]+1;
+								SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][0]+=1;
+								SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]+=1;
 							}
 							//Print Info message when a SBAS message is missing only for GEO in use
 							if (currentepoch->MJDN>=0) {
 								if (options->workMode == wmDOPROCESSING) {
-									if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]==1) {
-										sprintf(messagestr,"Invalid SBAS message for GEO PRN %3d at epoch %17s (1 invalid message)",sbasblock->PRN,t2doystr(&msgtime));
+									if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]==1) {
+										sprintf(messagestr,"Invalid SBAS message for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f  (1 invalid message)",sbasblock->PRN,sbasblock->frequency,t2doystr(&msgtime[sbasblock->frequencyPos][sbasblock->PRN]),tm.tm_hour,tm.tm_min,(double)(tm.tm_sec) + options->SBASmsgFlightTime + SBASMSGDURATION);
 									} else {
-										sprintf(messagestr,"Invalid SBAS messages for GEO PRN %3d at epoch %17s (%d consecutive invalid messages)",sbasblock->PRN,t2doystr(&msgtime),SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]);
+										sprintf(messagestr,"Invalid SBAS messages for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f (%d consecutive invalid messages)",sbasblock->PRN,sbasblock->frequency,t2doystr(&msgtime[sbasblock->frequencyPos][sbasblock->PRN]),tm.tm_hour,tm.tm_min,(double)(tm.tm_sec) + options->SBASmsgFlightTime + SBASMSGDURATION,SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]);
 									}								
 									printInfo(messagestr,options);
 								}
 								//When 4 consecutive invalid messages arrive, the GEO has to be disabled for ranging and all fast corrections must timeout
-								if (SBASdatabox->SBASdata[0].failedmessages[0]==4) {
-									SBASErrorMessageTimeoutFastCorr(0,currentepoch,SBASdatabox->SBASdata,options);
+								if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][0]==4) {
+									SBASErrorMessageTimeoutFastCorr(0,sbasblock->frequencyPos,currentepoch,SBASdatabox->SBASdata,options);
 								}
-								if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]==4) {
+								if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]==4) {
 									if (SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN]!=-1) {//This is for the case that all received messages were wrong, so no data was saved
-										SBASErrorMessageTimeoutFastCorr(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN],currentepoch,SBASdatabox->SBASdata,options);
+										SBASErrorMessageTimeoutFastCorr(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN],sbasblock->frequencyPos,currentepoch,SBASdatabox->SBASdata,options);
 									}
 								}
 							}
 						} else if(currentepoch->MJDN>=0){
 							//Message decoded correctly. Update SBAS data only if we are processing data and the GEO is not unselected
 							if(options->GEOPRNunsel[sbasblock->PRN]==0) {
-								SBASdatabox->SBASdata[0].failedmessages[0]=0;
-								SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]=0;
+								SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][0]=0;
+								SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]=0;
 								//Message decoded correctly. Update SBAS data only if we are processing data
 								if(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN]==-1) {
 									//Current PRN not found before. 
@@ -6748,7 +9310,7 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 									SBASdatabox->SBASdata[SBASdatabox->SBASdata[0].numSBASsatellites].PRN=sbasblock->PRN;
 								}
 
-								updateSBASdata(SBASdatabox->SBASdata,sbasblock,*currentepoch,messagesmissing,options);
+								updateSBASdata(SBASdatabox,SBASdatabox->SBASdata,sbasblock,options);
 							}
 						}
 						row=0;
@@ -6762,15 +9324,22 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 		//Print SBAS data file if necessary
 		if(writefiles) {
 			//Copy current line to buffer
-			if(writingHeader==1) strcpy(lineaux[row],line);
-			else if (endmessage==1) strcpy(lineaux[numberofdatalines],line); //We cannot use row here because when finishing a message row value is set back to 0
-			else strcpy(lineaux[row-1],line);
+			if(writingHeader==1) {
+				strcpy(SBASdatabox->bufferlines[row],line);
+				SBASdatabox->bufferlineslen[row]=len;
+			} else if (endmessage==1) {
+				strcpy(SBASdatabox->bufferlines[numberofdatalines],line); //We cannot use row here because when finishing a message row value is set back to 0
+				SBASdatabox->bufferlineslen[numberofdatalines]=len;
+			} else {
+				strcpy(SBASdatabox->bufferlines[row-1],line);
+				SBASdatabox->bufferlineslen[row-1]=len;
+			}
 
 			//Call function to write to files. It must be called only when we are writing header lines or when we have read a full message
 			if(writingHeader==1) {
-				writeSBASfiles(fdlist, fd, filelist, lineaux, 1, writingHeader, 0, decoderesult, decodedmessagetype, prevday, sbasblock, options);
+				writeSBASfiles(fdlist, fd, filelist, SBASdatabox->bufferlines, SBASdatabox->bufferlineslen, 1, writingHeader, 0, decoderesult, decodedmessagetype, prevday, sbasblock, options);
 			} else if (endmessage==1) {
-				writeSBASfiles(fdlist, fd, filelist, lineaux, numberofdatalines+1, writingHeader, 0, decoderesult, decodedmessagetype, prevday, sbasblock, options);
+				writeSBASfiles(fdlist, fd, filelist, SBASdatabox->bufferlines, SBASdatabox->bufferlineslen, numberofdatalines+1, writingHeader, 0, decoderesult, decodedmessagetype, prevday, sbasblock, options);
 
 			}
 
@@ -6779,80 +9348,72 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
 		}
 
 		if(freeblock==1) {	//Free sbasblock only when necessary
-			if (decoderesult>0 || decoderesult<-3) {
-				//Only free sbasblock messagetype memory if we have allocated memory
-				freeSBASblock(sbasblock->messagetype,sbasblock,options);
-			}
-
 			//Handle special events if it is not the current epoch of the RINEX observation file
-			if(currentepoch->MJDN>=0 && tdiff(currentepoch,&sbasblock->t)>1.) {
-				SBAShandlespecialevents(*currentepoch,SBASdatabox->SBASdata,options);
+			if(currentepoch->MJDN>=0 && tdiff(currentepoch,&sbasblock->t)>SBASMSGDURATION) {
+				SBAShandlespecialevents(currentepoch,SBASdatabox->SBASdata,options);
 			}
-
-			free(sbasblock);
-			sbasblock=NULL;
-
 		}
-	} //End while getLine
+	} while(getL(line,&len,fd)!=-1);
 
     //Check for missing messages or error messages in all GEOs 
     //It can occur the case that we have not received any message for a tracked  PRN in the current interval read,
     //therefore it is necessary to check if there has been a data gap
     for(m=1;m<=SBASdatabox->SBASdata[0].numSBASsatellites;m++) {
-        //Only check satellites that have not been cleared
-        GEOPRN=SBASdatabox->SBASdata[m].PRN;
-		msgtime.MJDN=msgtimeMJDN[GEOPRN];
-		msgtime.SoD=msgtimeSoD[GEOPRN];
-		timediff=tdiff(currentepoch,&msgtime);
-		numMsgLost=0;
-		if (timediff>=1.) {
-			numMsgLost=(int)(timediff);
-		}
-		//The numMsgLost!= SBASdatabox->SBASdata[0].missed4msg[GEOPRN] is to avoid printing the missing message due when we read the first message after a gap,
-		//the prevmsgtime has not still been updated until the next message read
-        if (prevmsgtime.MJDN!=-1 && numMsgLost!= SBASdatabox->SBASdata[0].missed4msg[GEOPRN]) {
-            SBASdatabox->SBASdata[0].missed4msg[GEOPRN]=numMsgLost;
-            if(numMsgLost>=4) {
-                //Print Info message when a SBAS message is missing only for GEO in use
-				if (options->workMode == wmDOPROCESSING) {
-               		sprintf(messagestr,"SBAS messages missing for GEO PRN %3d at epoch %17s (%d consecutive missing messages)",GEOPRN,t2doystr(currentepoch),numMsgLost);
-            	    printInfo(messagestr,options);
-				}
-                if (MsgMissingCleared[GEOPRN]==0) {
-                    SBASMissingMessageClearData(m,SBASdatabox->SBASdata);
-                    MsgMissingCleared[GEOPRN]=1;
-                }
-				prevnumMsgMissing[GEOPRN]=numMsgLost;
-            } else if(numMsgLost>=2) {
-				if (options->workMode == wmDOPROCESSING) {
-                	sprintf(messagestr,"SBAS messages missing for GEO PRN %3d at epoch %17s (%d consecutive missing messages)",GEOPRN,t2doystr(currentepoch),numMsgLost);
-	                printInfo(messagestr,options);
-				}
-				prevnumMsgMissing[GEOPRN]=numMsgLost;
-            } else if(numMsgLost==1) {
-				if (options->workMode == wmDOPROCESSING) {
-                	sprintf(messagestr,"SBAS message missing for GEO PRN %3d at epoch %17s (1 missing message)",GEOPRN,t2doystr(currentepoch));
-	                printInfo(messagestr,options);
-				}
-				prevnumMsgMissing[GEOPRN]=numMsgLost;
+		GEOPRN=SBASdatabox->SBASdata[m].PRN;
+		for(i=0;i<(NUMPOSFREQSBASMSG-1);i++) { //Skip last frequency which is for not known frequencies
+			//Only check satellites that have not been cleared
+			if (msgtime[i][GEOPRN].MJDN==-1) {
+				numMsgLost=0;
 			} else {
-				prevnumMsgMissing[GEOPRN]=0;
-            }
-        }
+				timediff=tdiff(currentepoch,&msgtime[i][GEOPRN]);
+				numMsgLost=0;
+				if (timediff>=1.) {
+				numMsgLost=(int)(timediff);
+				}
+			}
+			//The numMsgLost!= SBASdatabox->SBASdata[0].missed4msg[i][GEOPRN] is to avoid printing the missing message due when we read the first message after a gap,
+			//the prevmsgtime has not still been updated until the next message read
+			if (prevmsgtime[i][GEOPRN].MJDN!=-1 && numMsgLost!= SBASdatabox->SBASdata[0].missed4msg[i][GEOPRN]) {
+				SBASdatabox->SBASdata[0].missed4msg[i][GEOPRN]=numMsgLost;
+				if(numMsgLost>=4) {
+					//Print Info message when a SBAS message is missing only for GEO in use
+					if (options->workMode == wmDOPROCESSING) {
+						t2tmnolocal(currentepoch,&tm,&seconds);
+						sprintf(messagestr,"SBAS messages missing for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f (%d consecutive missing messages)",GEOPRN,SBASfreqPos2freqNum[i],t2doystr(currentepoch),tm.tm_hour,tm.tm_min,seconds,numMsgLost);
+						printInfo(messagestr,options);
+					}
+					if (MsgMissingCleared[i][GEOPRN]==0) {
+						SBASMissingMessageClearData(m,i,currentepoch,SBASdatabox->SBASdata,options);
+						MsgMissingCleared[i][GEOPRN]=1;
+					}
+					prevnumMsgMissing[i][GEOPRN]=numMsgLost;
+				} else if(numMsgLost>=2) {
+					if (options->workMode == wmDOPROCESSING) {
+						t2tmnolocal(currentepoch,&tm,&seconds);
+						sprintf(messagestr,"SBAS messages missing for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f (%d consecutive missing messages)",GEOPRN,SBASfreqPos2freqNum[i],t2doystr(currentepoch),tm.tm_hour,tm.tm_min,seconds,numMsgLost);
+						printInfo(messagestr,options);
+					}
+					prevnumMsgMissing[i][GEOPRN]=numMsgLost;
+				} else if(numMsgLost==1) {
+					if (options->workMode == wmDOPROCESSING) {
+						t2tmnolocal(currentepoch,&tm,&seconds);
+						sprintf(messagestr,"SBAS message missing for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f (1 missing message)",GEOPRN,SBASfreqPos2freqNum[i],t2doystr(currentepoch),tm.tm_hour,tm.tm_min,seconds);
+						printInfo(messagestr,options);
+					}
+					prevnumMsgMissing[i][GEOPRN]=numMsgLost;
+				} else {
+					prevnumMsgMissing[i][GEOPRN]=0;
+				}
+			}
+		}
     }
 
-	if(feof(fd)>0) {
+	if(feof_function(fd)>0) {
 		//Print message decoding summary
 		if(writefiles) {
-			writeSBASdecodesummary(fdlist, fd, filelist[fdLOGFILE], numberofbadmessages, totalmsgmissing, nummsgmissingdetected, numlinesmissing, missingmessagesvector, options);
+			writeSBASdecodesummary(fdlist, fd, filelist[fdLOGFILE], numberofbadmessages, totalmsgmissing, nummsgmissingdetected, SBASdatabox->numlinesmissing, SBASdatabox->missingmessagesvector, options);
 		}
 	} 
-
-	//Free memory
-	for(i=0;i<10;i++) {
-		free(lineaux[i]);
-		lineaux[i]=NULL;
-	}
 
 	return (properlyRead && !error); // properly read AND no error
 }
@@ -6872,47 +9433,47 @@ int readRINEXB (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdata
  * TTime *currentepoch			   I  N/A  Current epoch
  * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of the function
- *                                         1  => Properly read
- *                                         0  => Error
+ *                                          1 => Properly read
+ *                                          0 => Error
  *                                         -2 => Reached end of file before
  *                                               getting to current epoch
  *****************************************************************************/
 int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox, int *prevday, TTime *currentepoch, TOptions  *options) {
 	char            	line[MAX_INPUT_LINE];
-	char            	*lineaux[1];   //String to save previous line until a full message has been read
 	char            	aux[100];
 	char            	hexstring[300];
 	char            	binarystring[2400];
+	char				freqText[100];
+	unsigned char  		binarymessage[33];
+	unsigned char		preamble;
 	int             	len = 0;
-	int             	i,m;
+	int             	i,j,m;
 	int					GEOpos;
 	int					GEOPRN;
 	int             	decoderesult = 1;
-	double          	seconds;
 	double				timediff;
+	double				seconds;
 	int					numMsgLost;
 	int 				decodedmessagetype=0;
 	int             	messagesmissing=0;
-	//int					reachedcurrentepoch=-1;
 	int					MessageAheadCurrentEpoch=0;
 	int					convergencetime;
+	int					validpreamble;
+	int					invalidDate=0;
 	static int			firstdatalineMJDN=-1;
 	static int			totalmsgmissing=0;
 	static int      	numberofbadmessages=0;
 	static int			numfilelines=0;
 	static int			nummsgmissingdetected=0;
-	static int			*numlinesmissing=NULL;
-	static int			*missingmessagesvector=NULL;
 	static int         	writefiles=0;
-	static int			prevnumMsgMissing[MAX_SBAS_PRN];
+	static int			bufferlen=0;
+	static int			prevnumMsgMissing[NUMPOSFREQSBASMSG][MAX_SBAS_PRN];
 	struct tm       	tm;
-	static int			MsgMissingCleared[MAX_SBAS_PRN];
-	static int			prevmsgtimeMJDN[MAX_SBAS_PRN];
-	static int			msgtimeMJDN[MAX_SBAS_PRN];
-	static double		prevmsgtimeSoD[MAX_SBAS_PRN];
-	static double		msgtimeSoD[MAX_SBAS_PRN];
+	static int			MsgMissingCleared[NUMPOSFREQSBASMSG][MAX_SBAS_PRN];
+	static TTime		msgtime[NUMPOSFREQSBASMSG][MAX_SBAS_PRN];
+	static TTime		prevmsgtime[NUMPOSFREQSBASMSG][MAX_SBAS_PRN];
 	static int			initialized=0;
-	TTime				msgtime,prevmsgtime;
+	static char			bufferstring[MAX_INPUT_LINE];
 	TSBASblock  	   	*sbasblock;
 	double				CurrentPos;
 	struct stat	 		filestat;	//This is to get the file size
@@ -6920,14 +9481,18 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
 	double				CurrentPercentage;
 	double				PreviousPercentage=-1;
 
+	sbasblock=SBASdatabox->sbasblock;
 
 	if(initialized==0) {
 		initialized=1;
-		for(i=0;i<MAX_SBAS_PRN;i++) {
-			prevmsgtimeMJDN[i]=msgtimeMJDN[i]=-1;
-			prevmsgtimeSoD[i]=msgtimeSoD[i]=-1;
-			MsgMissingCleared[i]=0;
-			prevnumMsgMissing[i]=0;
+		bufferstring[0]='\0';		
+		for(i=0;i<NUMPOSFREQSBASMSG;i++) {
+			for(j=0;j<MAX_SBAS_PRN;j++) {
+				prevmsgtime[i][j].MJDN=msgtime[i][j].MJDN=-1;
+				prevmsgtime[i][j].SoD=msgtime[i][j].SoD=-1.;
+				MsgMissingCleared[i][j]=0;
+				prevnumMsgMissing[i][j]=0;
+			}
 		}
 		//If writefiles is greater than 0, means that one file type has to be written
 		writefiles=options->writeRinexBfile+options->writeEMSfile+options->writePegasusfile;
@@ -6939,55 +9504,147 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
 			//Print position 0 
 			if (options->ProgressEndCharac=='\r') {
 				//Printing to a terminal
-				fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",0.0,"",options->ProgressEndCharac);
+				fprintf(options->terminalStream,"Percentage converted: %5.1f%%%60s%c",0.0,"",options->ProgressEndCharac);
 				#if defined (__WIN32__)
 					//In Windows, cursor is not disabled
-					fflush(options->terminalStream);
+					fflush_function(options->terminalStream);
 				#endif
 			}
 		}
 	}
 
-	sbasblock=NULL;
-
-	//Initialize lineaux
+	//Initialize SBASdatabox->bufferlines
 	for(i=0;i<1;i++) {
-			lineaux[i]=malloc(sizeof(char)*MAX_INPUT_LINE);
-			lineaux[i][0]='\0';
+		SBASdatabox->bufferlines[i][0]='\0';
+		SBASdatabox->bufferlineslen[i]=0;
 	}
 
+	//Check for buffered line
+	if (bufferstring[0]!='\0') {
+		//There is a buffered line
+		strcpy(line,bufferstring);
+		len=bufferlen;
+		bufferlen=0;
+		numfilelines--;
+		CurrentPos -= (double)len;
+	} else {
+		if (getL(line,&len,fd)==-1) return -1;
+	} 
 
-	while(getL(line,&len,fd)!=-1) {
 
+	do {
 		numfilelines++;
 		CurrentPos += (double)len;
 
-		if(len<88 && line[0]!='\n') return 0;	//Data line too short (and are not blank lines)
-		else if (line[0]=='\n') continue;	//Skip blank lines
+		if (len<2) continue; //Skip blank lines
 
-		sbasblock=malloc(sizeof(TSBASblock));	//sbasblock is declared as pointer, so at each loop sbasblock structure is freed and allocated again,
-							//so each sbasblock for each message will only occupy the necessary memory
-		initSBASblock (sbasblock);
+		initSBASblock(sbasblock);
 
-		getstr(aux,line,0,3);
+		getstr(aux,line,len,0,3);
 		sbasblock->PRN = atoi(aux);		//PRN
-		getstr(aux,line,4,2);
+		if (sbasblock->PRN<=0||sbasblock->PRN>=MAX_SBAS_PRN) {
+			sprintf(messagestr,"Invalid PRN number '%s' in line %d in EMS file",aux,numfilelines);
+			printError(messagestr,options);
+		}
+		invalidDate=0;
+		getstr(aux,line,len,4,2);
 		tm.tm_year = atoi(aux);			//Year
-		if (tm.tm_year <= 70) tm.tm_year += 100;
-		getstr(aux,line,7,2);
-		tm.tm_mon  = atoi(aux)-1;		//Month
-		getstr(aux,line,10,2);
+		if (tm.tm_year<=0) invalidDate=1;
+		else if (tm.tm_year <= 70) tm.tm_year += 100;
+		getstr(aux,line,len,7,2);
+		tm.tm_mon  = atoi(aux);			//Month
+		if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+		tm.tm_mon  -= 1;
+		getstr(aux,line,len,10,2);
 		tm.tm_mday = atoi(aux);			//Day
-		getstr(aux,line,13,2);
+		if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+		getstr(aux,line,len,13,2);
 		tm.tm_hour = atoi(aux);			//Hour
-		getstr(aux,line,16,2);
+		if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+		getstr(aux,line,len,16,2);
 		tm.tm_min  = atoi(aux);			//Minute
-		getstr(aux,line,19,2);
+		if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+		getstr(aux,line,len,19,2);
 		tm.tm_sec  = atoi(aux);       	//Seconds,in time of applicability 
-		seconds=atof(aux);
+		if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1; //Seconds can have value 60 when a leap second is inserted
+		if (invalidDate==1) {
+			sprintf(messagestr,"Invalid date '%.23s' in line %d in EMS file",line,numfilelines);
+			printError(messagestr,options);
+		}
+		getstr(aux,line,len,30,2);
+
+
 
 		sbasblock->t.MJDN = MJDN(&tm);
-		sbasblock->t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds + 0.1;	//Seconds in time of applicability (0.1 seconds corresponds to travel time)
+		sbasblock->t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + (double)(tm.tm_sec) + options->SBASmsgFlightTime;	//Seconds in time of applicability (0.1 seconds corresponds to travel time)
+
+		//QZSS extension: EMS files with GPS,GLONASS,Galileo,BeiDou,QZSS navigation messages
+		if (sbasblock->PRN<100) {
+			//GPS,GLONASS,Galileo,BeiDou navigation messages. Skip line
+			continue;
+		} else if (sbasblock->PRN>=MINQZSSOBSPRN && sbasblock->PRN<=MAXQZSSOBSPRN) {
+			//QZSS navigation messages. Skip line
+			continue;
+		} else {
+			if(len<88 && line[0]!='\n') return 0;	//Data line too short (and are not blank lines)
+		}
+
+		if (line[21]=='.') {
+			//New EMS format, seconds with 6 decimal places (plus the decimal dot), plus the band flag, frequency and message length
+			//Band flag
+			sbasblock->bandflag=line[29];
+
+			//Frequency number
+			getstr(aux,line,len,30,1);
+			sbasblock->frequency=atoi(aux);
+
+			getstr(aux,line,len,37,2);
+			sbasblock->messagetype=atoi(aux);	//Message type
+
+			//Message length (with padding), computed using characters read until end of line
+			sbasblock->datalength=len-40;
+
+			getstr(hexstring,line,len,40,sbasblock->datalength);
+		} else {
+			getstr(aux,line,len,22,2);
+			sbasblock->messagetype=atoi(aux);	//Message type
+
+			//Set a default invalid frequency number. If frequency cannot be determined by the preambled, it will be unchanged. If successfully detect, it will be changed to the right value
+			sbasblock->frequency=2;
+
+			if(sbasblock->messagetype<10) {	
+				if (line[24]==' ') {
+					//QZSS extension: message type always has two characters instead of just one (formatted with a extra blank space)
+
+					//Message length (with padding), computed using characters read until end of line
+					sbasblock->datalength=len-25;
+
+					getstr(hexstring,line,len,25,sbasblock->datalength);
+				} else {
+					//Message length (with padding), computed using characters read until end of line
+					sbasblock->datalength=len-24;
+
+					getstr(hexstring,line,len,24,sbasblock->datalength);
+				}
+			} else {
+				//Message length (with padding), computed using characters read until end of line
+				sbasblock->datalength=len-25;
+
+				getstr(hexstring,line,len,25,sbasblock->datalength);
+			}
+		}
+
+		//Convert the hexadecimal string to a binary string (1 bit per byte)
+		strhextostrbin(hexstring,sbasblock->datalength, binarystring);
+
+		//Convert the binary string (one bit per byte) to one string where each bit is one value of the message
+		strbintobinstr(binarystring,sbasblock->datalength*4,binarymessage,sizeof(binarymessage));	
+
+
+		//Read preable to uniquely identify message frequency
+		preamble=binarymessage[0];
+		validpreamble=readSBASmessagePreamble(&preamble,sbasblock);
+
 
 		if(sbasblock->t.SoD>=86400.) {
 			//After adding 0.1 seconds, we have gone to the next day
@@ -6995,6 +9652,7 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
 			sbasblock->t.SoD=sbasblock->t.SoD-86400.;
 		}
 					
+
 		if(firstdatalineMJDN==-1) {
 			//Save the MJDN of the first line of data
 			firstdatalineMJDN=sbasblock->t.MJDN;
@@ -7005,7 +9663,7 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
 			//gLAB will check the first line of data, if it is greater than hour 22 (this is an arbitrary threshold), we will assume that the file
 			//is from the next day and set the current time to the next day and second. Otherwise, if it is at the beginning of the day, time will be set
 			//at the same time as the one given in the message read.
-			if (options->onlySBASplots==1) {
+			if (options->SBAScorrections>=SBASMaps1freqUsed) {
 				if(sbasblock->t.SoD>=79200.) { //79200 seconds is hour 22, minute 0, second 0
 					currentepoch->MJDN=sbasblock->t.MJDN+1;
 					currentepoch->SoD=0;
@@ -7048,59 +9706,62 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
 		if(options->GEOPRNunsel[sbasblock->PRN]==0) {
 
 			if(currentepoch->MJDN>=0) {
-				//Only check missed messages if we are not only converting SBAS files
-				if (MessageAheadCurrentEpoch==0) {
+				//Only check missed messages if we are not only converting SBAS files and the message corresponds to the frequency we are using
+				if (MessageAheadCurrentEpoch==0 /*&& sbasblock->frequencyPos==options->SBASFreqPosToProcess*/) {
 					//Only update previous message epoch if current message read is usable
-					prevmsgtimeMJDN[0]=msgtimeMJDN[0];
-					prevmsgtimeSoD[0]=msgtimeSoD[0];
-					prevmsgtimeMJDN[sbasblock->PRN]=msgtimeMJDN[sbasblock->PRN];
-					prevmsgtimeSoD[sbasblock->PRN]=msgtimeSoD[sbasblock->PRN];
+					if (msgtime[sbasblock->frequencyPos][sbasblock->PRN].MJDN==-1) {
+						//On first message read, copy to previous message time the current epoch
+						if (msgtime[sbasblock->frequencyPos][0].MJDN==-1) {
+							memcpy(&prevmsgtime[sbasblock->frequencyPos][0],&sbasblock->t,sizeof(TTime));
+						} else {
+							memcpy(&prevmsgtime[sbasblock->frequencyPos][0],&msgtime[sbasblock->frequencyPos][0],sizeof(TTime));
+						}
+						memcpy(&prevmsgtime[sbasblock->frequencyPos][sbasblock->PRN],&sbasblock->t,sizeof(TTime));
+					} else {
+						memcpy(&prevmsgtime[sbasblock->frequencyPos][0],&msgtime[sbasblock->frequencyPos][0],sizeof(TTime));
+						memcpy(&prevmsgtime[sbasblock->frequencyPos][sbasblock->PRN],&msgtime[sbasblock->frequencyPos][sbasblock->PRN],sizeof(TTime));
+					}
 
-					msgtimeMJDN[0]=sbasblock->t.MJDN;
-					msgtimeSoD[0]=sbasblock->t.SoD;
-					msgtimeMJDN[sbasblock->PRN]=sbasblock->t.MJDN;
-					msgtimeSoD[sbasblock->PRN]=sbasblock->t.SoD;
+					memcpy(&msgtime[sbasblock->frequencyPos][0],&sbasblock->t,sizeof(TTime));
+					memcpy(&msgtime[sbasblock->frequencyPos][sbasblock->PRN],&sbasblock->t,sizeof(TTime));
 					
 					//Check time between current epoch and last message received for all GEO
-					msgtime.MJDN=msgtimeMJDN[0];
-					msgtime.SoD=msgtimeSoD[0];
-					prevmsgtime.MJDN=prevmsgtimeMJDN[0];
-					prevmsgtime.SoD=prevmsgtimeSoD[0];
-
-					numMsgLost=(int)(tdiff(&msgtime,&prevmsgtime)+.00005)-1;
-					if(numMsgLost>=1 && prevmsgtime.MJDN!=-1) {
+					numMsgLost=(int)(tdiff(&msgtime[sbasblock->frequencyPos][0],&prevmsgtime[sbasblock->frequencyPos][0])+.00005)-1;
+					if(numMsgLost>=1) {
 						//SBAS messages are sent every second. If there is no data to send, we will receive type 62 or 63 messages to provide continuity of signal
-						SBASdatabox->SBASdata[0].missed4msg[0]=SBASdatabox->SBASdata[0].missed4msg[0]+numMsgLost;
-						if (SBASdatabox->SBASdata[0].missed4msg[0]>=4 && MsgMissingCleared[0]==0) {
+						SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][0]+=numMsgLost;
+						if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][0]>=4 && MsgMissingCleared[sbasblock->frequencyPos][0]==0) {
 							//More than 4 messages missed and we have not cleared data
-							SBASMissingMessageClearData(0,SBASdatabox->SBASdata);
-							MsgMissingCleared[0]=1;
+							SBASMissingMessageClearData(0,sbasblock->frequencyPos,currentepoch,SBASdatabox->SBASdata,options);
+							MsgMissingCleared[sbasblock->frequencyPos][0]=1;
 						}
 					} else {
 						//A new message has been received. Reset the and missed4msg counter and MsgMissingCleared flag
-						SBASdatabox->SBASdata[0].missed4msg[0]=0;
-						MsgMissingCleared[0]=0;
+						SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][0]=0;
+						MsgMissingCleared[sbasblock->frequencyPos][0]=0;
 					}
 
 					//Check time between current epoch and last message received for current GEO
-					msgtime.MJDN=msgtimeMJDN[sbasblock->PRN];
-					msgtime.SoD=msgtimeSoD[sbasblock->PRN];
-					prevmsgtime.MJDN=prevmsgtimeMJDN[sbasblock->PRN];
-					prevmsgtime.SoD=prevmsgtimeSoD[sbasblock->PRN];
-					numMsgLost=(int)(tdiff(&msgtime,&prevmsgtime)+.00005)-1;
-					if(numMsgLost>=1 && prevmsgtime.MJDN!=-1) {
-						if ( (tdiff(currentepoch,&msgtime)-.9)>1E-4) {
-							SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]=SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]+numMsgLost-prevnumMsgMissing[sbasblock->PRN];
+					numMsgLost=(int)(tdiff(&msgtime[sbasblock->frequencyPos][sbasblock->PRN],&prevmsgtime[sbasblock->frequencyPos][sbasblock->PRN])+.00005)-1;
+					if(numMsgLost>=1) {
+						if ( (tdiff(currentepoch,&msgtime[sbasblock->frequencyPos][sbasblock->PRN])-options->SBASmsg1MinusFlightTime)>DIFFEQTHRESHOLD) {
+							SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]+=numMsgLost-prevnumMsgMissing[sbasblock->frequencyPos][sbasblock->PRN];
 							//Print Info message when a SBAS message is missing, except when last message received is
 							//the last one we have to read for the current epoch, due to this message will be shown
 							//in the missing message check at the end of this function.
 							//It has to be considered that this check of missing messages is for the case when for example, the observation file
 							//has a data rate of 30 seconds, and there has been a data gap in between this 30 seconds
 							if (options->workMode == wmDOPROCESSING) {
-								if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]==1) {
-									sprintf(messagestr,"SBAS message missing for GEO PRN %3d at epoch %17s (1 missing message)",sbasblock->PRN,t2doystr(&msgtime));
-								} else if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]>1) {
-									sprintf(messagestr,"SBAS messages missing for GEO PRN %3d at epoch %17s (%d consecutive missing messages)",sbasblock->PRN,t2doystr(&msgtime),SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]);
+								if (sbasblock->frequencyPos==UNKNOWNFREQPOS && line[21]!='.') {
+									//Unknown frequency and it is not new EMS format, which provides frequency number
+									strcpy(freqText,"in unknown frequency");
+								} else {
+									sprintf(freqText,"and frequency %d",sbasblock->frequency);
+								}
+								if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]==1) {
+									sprintf(messagestr,"SBAS message missing for GEO PRN %3d %s at epoch %17s / %02d:%02d:%05.2f (1 missing message)",sbasblock->PRN,freqText,t2doystr(&msgtime[sbasblock->frequencyPos][sbasblock->PRN]),tm.tm_hour,tm.tm_min,(double)(tm.tm_sec) + options->SBASmsgFlightTime);
+								} else if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]>1) {
+									sprintf(messagestr,"SBAS messages missing for GEO PRN %3d %s at epoch %17s / %02d:%02d:%05.2f (%d consecutive missing messages)",sbasblock->PRN,freqText,t2doystr(&msgtime[sbasblock->frequencyPos][sbasblock->PRN]),tm.tm_hour,tm.tm_min,(double)(tm.tm_sec) + options->SBASmsgFlightTime,SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]);
 								}
 								printInfo(messagestr,options);
 							}
@@ -7108,29 +9769,29 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
 							//In this case, when computing the number of messages missed, after reaching the previous epoch and entering this function again, the first
 							//message read vs the last one will be the hole gap (for example 21 messages missing), but the first 20 were alredy counted on the previous call
 							//to this function, so they will be counted twice. prevnumMsgMissing variable stores the last number of messages missing 
-							prevnumMsgMissing[sbasblock->PRN]=0;
+							prevnumMsgMissing[sbasblock->frequencyPos][sbasblock->PRN]=0;
 						}
-						if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]>=4 && MsgMissingCleared[sbasblock->PRN]==0) {
+						if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]>=4 && MsgMissingCleared[sbasblock->frequencyPos][sbasblock->PRN]==0) {
 							//More than 4 messages missed and we have not cleared data
 							if (SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN]!=-1) {//This is for the case that all received messages were wrong, so no data was saved
-								SBASMissingMessageClearData(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN],SBASdatabox->SBASdata);
+								SBASMissingMessageClearData(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN],sbasblock->frequencyPos,currentepoch,SBASdatabox->SBASdata,options);
 							}
-							MsgMissingCleared[sbasblock->PRN]=1;
+							MsgMissingCleared[sbasblock->frequencyPos][sbasblock->PRN]=1;
 						}
 					}
 					//If we had a gap greater than 4 messages, set first message received to current message epoch minus 1 minute. 
 					//This is to set the GEO in acqusition time (except for the current GEO, so the condition of acquisition does not block switching GEO)
-					if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]>=4) {
+					if (SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]>=4) {
 						GEOpos=SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN];
 						if (options->GEOindex>=0 && options->GEOindex!=GEOpos) {
-							memcpy(&SBASdatabox->SBASdata[GEOpos].firstmessage,&sbasblock->t,sizeof(TTime));
-							tdadd(&SBASdatabox->SBASdata[GEOpos].firstmessage,-60.);
+							memcpy(&SBASdatabox->SBASdata[GEOpos].firstmessage[sbasblock->frequencyPos],&sbasblock->t,sizeof(TTime));
+							SBASdatabox->SBASdata[GEOpos].firstmessage[sbasblock->frequencyPos]=tdadd(&SBASdatabox->SBASdata[GEOpos].firstmessage[sbasblock->frequencyPos],-60.);
 						}
 					}
 					//A new message has been received. Reset the and missed4msg counter and MsgMissingCleared flag
-					SBASdatabox->SBASdata[0].missed4msg[sbasblock->PRN]=0;
-					MsgMissingCleared[sbasblock->PRN]=0;
-					prevnumMsgMissing[sbasblock->PRN]=0;
+					SBASdatabox->SBASdata[0].missed4msg[sbasblock->frequencyPos][sbasblock->PRN]=0;
+					MsgMissingCleared[sbasblock->frequencyPos][sbasblock->PRN]=0;
+					prevnumMsgMissing[sbasblock->frequencyPos][sbasblock->PRN]=0;
 
 				} //End if (MessageAheadCurrentEpoch==0)
 			}//End if(currentepoch->MJDN>=0) 
@@ -7138,25 +9799,14 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
 
 		if(currentepoch->MJDN>=0) {
 			//If it is not -1, means that we have to read until we reach the current epoch
-			//if(sbasblock->t.MJDN>currentepoch->MJDN || (currentepoch->MJDN==sbasblock->t.MJDN && sbasblock->t.SoD>currentepoch->SoD)  ) {
 			if(MessageAheadCurrentEpoch==1) {
 				//The time of applicability of the current message is ahead of the current epoch.
-				//The following commented lines were to check if file was from previous day or next day, but this check is not used
-				/*if(firstdatalineMJDN>currentepoch->MJDN) {
-					//The first line of the file is from days ahead of the observation one. We have no data for the current day
-					reachedcurrentepoch=0;
-				} else if(tdiff(&sbasblock->t,currentepoch)>=86400.0) {
-					//The message read is more than one day ahead, so we have no data for the current day
-					reachedcurrentepoch=0;
-				} else {
-					reachedcurrentepoch=1;
-				}*/
-				//Stop reading, go one line back (if we have not reached end of file) and exit function
-				if(feof(fd)==0) {
-					getLback(line,&len,fd);
+				//Stop reading, save the current line (if we have not reached end of file) and exit function
+				if(feof_function(fd)==0) {
+					//Copy line to buffer, so it is read in the next function call
+					strcpy(bufferstring,line);
+					bufferlen=len;
 				}
-				free(sbasblock);
-				sbasblock=NULL;
 				break;
 			}
 		}
@@ -7166,79 +9816,72 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
 			if ((CurrentPercentage-PreviousPercentage)>=0.1) { //This is to avoid to many prints when percentages changed less than 0.1
 				if (options->ProgressEndCharac=='\r') {
 					//Printing to a terminal
-					fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",CurrentPercentage,"",options->ProgressEndCharac);
+					fprintf(options->terminalStream,"Percentage converted: %5.1f%%%60s%c",CurrentPercentage,"",options->ProgressEndCharac);
 					//In Windows, cursor is not disabled
-					fflush(options->terminalStream);
+					fflush_function(options->terminalStream);
 				} else {
 					//Printing for the GUI. Only print if the integer of the percentage have changed (to avoid message spamming)
 					if ((int)CurrentPercentage!=(int)PreviousPercentage) {
-						fprintf(options->terminalStream,"Percentage converted: %5.1f%%%10s%c",CurrentPercentage,"",options->ProgressEndCharac);
-						fflush(options->terminalStream);
+						fprintf(options->terminalStream,"Percentage converted: %5.1f%%%60s%c",CurrentPercentage,"",options->ProgressEndCharac);
+						fflush_function(options->terminalStream);
 					}
 				}
 				PreviousPercentage=CurrentPercentage;
 			}
 		}
 
-		getstr(aux,line,22,2);
-		sbasblock->messagetype=atoi(aux);	//Message type
-
-		//Hexadecimal message
-		if(sbasblock->messagetype<10) {	
-			getstr(hexstring,line,24,64);	
-		} else {
-			getstr(hexstring,line,25,64);
-		}
-
-		//Convert the hexadecimal string to a binary string (1 bit per byte)
-		strhextostrbin(hexstring,binarystring);
-
 		//Decode message
-		decoderesult=readSBASmessage(binarystring,sbasblock->messagetype,&decodedmessagetype,sbasblock,&messagesmissing,options);
+		decoderesult=readSBASmessage(binarystring,binarymessage,preamble,validpreamble,&decodedmessagetype,sbasblock,&messagesmissing,options);
 		if(messagesmissing!=0) {
 			//Increase counter for missing messages
 			totalmsgmissing+=messagesmissing;
 			nummsgmissingdetected++;
 			//Increase size of vectors for logging missed messages
-			numlinesmissing=realloc(numlinesmissing,sizeof(int)*nummsgmissingdetected);
-			missingmessagesvector=realloc(missingmessagesvector,sizeof(int)*nummsgmissingdetected);
+			SBASdatabox->numlinesmissing=realloc(SBASdatabox->numlinesmissing,sizeof(int)*nummsgmissingdetected);
+			SBASdatabox->missingmessagesvector=realloc(SBASdatabox->missingmessagesvector,sizeof(int)*nummsgmissingdetected);
 			//Save the line where missing message has been detected and what number has been lost
-			numlinesmissing[nummsgmissingdetected-1]=numfilelines;
-			missingmessagesvector[nummsgmissingdetected-1]=messagesmissing;
+			SBASdatabox->numlinesmissing[nummsgmissingdetected-1]=numfilelines;
+			SBASdatabox->missingmessagesvector[nummsgmissingdetected-1]=messagesmissing;
 		}					
 
 		if(decoderesult<0) {
 			//Error decoding message. Update failed messages only if GEO is not unselected
 			numberofbadmessages++;
 			if(options->GEOPRNunsel[sbasblock->PRN]==0) {
-				SBASdatabox->SBASdata[0].failedmessages[0]=SBASdatabox->SBASdata[0].failedmessages[0]+1; //failed messages for all GEO
-				SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]=SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]+1; //failed messages for a single GEO
+				SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][0]+=1; //failed messages for all GEO
+				SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]+=1; //failed messages for a single GEO
 			}
 			//Print Info message when a SBAS message is missing only for GEO in use
 			if (currentepoch->MJDN>=0) {
 				if (options->workMode == wmDOPROCESSING) {
-					if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]==1) {
-						sprintf(messagestr,"Invalid SBAS message for GEO PRN %3d at epoch %17s (1 invalid message)",sbasblock->PRN,t2doystr(&msgtime));
+					if (sbasblock->frequencyPos==UNKNOWNFREQPOS && line[21]!='.') {
+						//Unknown frequency and it is not new EMS format, which provides frequency number
+						strcpy(freqText,"in unknown frequency");
 					} else {
-						sprintf(messagestr,"Invalid SBAS messages for GEO PRN %3d at epoch %17s (%d consecutive invalid messages)",sbasblock->PRN,t2doystr(&msgtime),SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]);
+						sprintf(freqText,"and frequency %d",sbasblock->frequency);
+					}
+					if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]==1) {
+						sprintf(messagestr,"Invalid SBAS message for GEO PRN %3d %s at epoch %17s / %02d:%02d:%05.2f (1 invalid message)",sbasblock->PRN,freqText,t2doystr(&msgtime[sbasblock->frequencyPos][sbasblock->PRN]),tm.tm_hour,tm.tm_min,(double)(tm.tm_sec) + options->SBASmsgFlightTime);
+					} else {
+						sprintf(messagestr,"Invalid SBAS messages for GEO PRN %3d %s at epoch %17s / %02d:%02d:%05.2f (%d consecutive invalid messages)",sbasblock->PRN,freqText,t2doystr(&msgtime[sbasblock->frequencyPos][sbasblock->PRN]),tm.tm_hour,tm.tm_min,(double)(tm.tm_sec) + options->SBASmsgFlightTime,SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]);
 					}
 					printInfo(messagestr,options);
 				}
 				//When 4 consecutive invalid messages arrive, the GEO has to be disabled for ranging and all fast corrections must timeout
-				if (SBASdatabox->SBASdata[0].failedmessages[0]==4) {
-					SBASErrorMessageTimeoutFastCorr(0,currentepoch,SBASdatabox->SBASdata,options);
+				if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][0]==4) {
+					SBASErrorMessageTimeoutFastCorr(0,sbasblock->frequencyPos,currentepoch,SBASdatabox->SBASdata,options);
 				}
-				if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]==4) {
+				if (SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]==4) {
 					if (SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN]!=-1) {//This is for the case that all received messages were wrong, so no data was saved
-						SBASErrorMessageTimeoutFastCorr(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN],currentepoch,SBASdatabox->SBASdata,options);
+						SBASErrorMessageTimeoutFastCorr(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN],sbasblock->frequencyPos,currentepoch,SBASdatabox->SBASdata,options);
 					}
 				}
 			}
 		} else if(currentepoch->MJDN>=0){
 			//Message decoded correctly. Update SBAS data only if we are processing data and the GEO is not unselected
 			if(options->GEOPRNunsel[sbasblock->PRN]==0) {
-				SBASdatabox->SBASdata[0].failedmessages[0]=0;
-				SBASdatabox->SBASdata[0].failedmessages[sbasblock->PRN]=0;
+				SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][0]=0;
+				SBASdatabox->SBASdata[0].failedmessages[sbasblock->frequencyPos][sbasblock->PRN]=0;
 				if(SBASdatabox->SBASdata[0].GEOPRN2pos[sbasblock->PRN]==-1) {
 					//Current PRN not found before. 
 					//Add 1 to the number of satellites
@@ -7253,118 +9896,213 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
 					SBASdatabox->SBASdata[SBASdatabox->SBASdata[0].numSBASsatellites].PRN=sbasblock->PRN;
 				}
 				
-				updateSBASdata(SBASdatabox->SBASdata,sbasblock,*currentepoch,messagesmissing,options);
+				updateSBASdata(SBASdatabox,SBASdatabox->SBASdata,sbasblock,options);
 			}
 		}
 
 
 		if(writefiles) {
 			//Copy current line to buffer
-			strcpy(lineaux[0],line);
+			strcpy(SBASdatabox->bufferlines[0],line);
+			SBASdatabox->bufferlineslen[0]=len;
 			//Write message to file
-			writeSBASfiles(fdlist, fd, filelist, lineaux, 1, 0, 1, decoderesult, decodedmessagetype, prevday, sbasblock, options);
+			writeSBASfiles(fdlist, fd, filelist, SBASdatabox->bufferlines, SBASdatabox->bufferlineslen, 1, 0, 1, decoderesult, decodedmessagetype, prevday, sbasblock, options);
 		}
 
-		if (decoderesult>0 || decoderesult<-3) {
-			//Only free sbasblock messagetype memory if we have allocated memory
-			freeSBASblock(sbasblock->messagetype,sbasblock,options);
+		//Handle special events if it is not the current epoch of the RINEX observation file	
+		if(currentepoch->MJDN>=0 && tdiff(currentepoch,&sbasblock->t)>SBASMSGDURATION) {
+			SBAShandlespecialevents(currentepoch,SBASdatabox->SBASdata,options);
 		}
-
-		//Handle special events if it is not the current epoch of the RINEX observation file
-		if(currentepoch->MJDN>=0 && tdiff(currentepoch,&sbasblock->t)>1.) {
-			SBAShandlespecialevents(*currentepoch,SBASdatabox->SBASdata,options);
-		}
-
-		free(sbasblock);
-		sbasblock=NULL;
-	} //End while(getL(line,&len,fd)!=-1) {
+	} while(getL(line,&len,fd)!=-1);
 
 	//Check for missing messages or error messages in all GEOs 
 	//It can occur the case that we have not received any message for a tracked  PRN in the current interval read,
 	//therefore it is necessary to check if there has been a data gap
     for(m=1;m<=SBASdatabox->SBASdata[0].numSBASsatellites;m++) {
-		//Only check satellites that have not been cleared
 		GEOPRN=SBASdatabox->SBASdata[m].PRN;
-		msgtime.MJDN=msgtimeMJDN[GEOPRN];
-		msgtime.SoD=msgtimeSoD[GEOPRN];
-		timediff=tdiff(currentepoch,&msgtime);
-		numMsgLost=0;
-		if (timediff>=1.) {
-			numMsgLost=(int)(timediff);
-		}
-		//The numMsgLost!= SBASdatabox->SBASdata[0].missed4msg[GEOPRN] is to avoid printing the missing message due when we read the first message after a gap,
-		//the prevmsgtime has not still been updated until the next message read
-		if (prevmsgtime.MJDN!=-1 && numMsgLost!= SBASdatabox->SBASdata[0].missed4msg[GEOPRN]) {
-			SBASdatabox->SBASdata[0].missed4msg[GEOPRN]=numMsgLost;
-			if(numMsgLost>=4) {
-				//Print Info message when a SBAS message is missing only for GEO in use
-				if (options->workMode == wmDOPROCESSING) {
-					sprintf(messagestr,"SBAS messages missing for GEO PRN %3d at epoch %17s (%d consecutive missing messages)",GEOPRN,t2doystr(currentepoch),numMsgLost);
-					printInfo(messagestr,options);
-				}
-				if (MsgMissingCleared[GEOPRN]==0) {
-					SBASMissingMessageClearData(m,SBASdatabox->SBASdata);
-					MsgMissingCleared[GEOPRN]=1;
-				}
-				prevnumMsgMissing[GEOPRN]=numMsgLost;
-			} else if(numMsgLost>=2) {
-				if (options->workMode == wmDOPROCESSING) {
-					sprintf(messagestr,"SBAS messages missing for GEO PRN %3d at epoch %17s (%d consecutive missing messages)",GEOPRN,t2doystr(currentepoch),numMsgLost);
-					printInfo(messagestr,options);
-				}
-				prevnumMsgMissing[GEOPRN]=numMsgLost;
-			} else if(numMsgLost==1) {
-				if (options->workMode == wmDOPROCESSING) {
-					sprintf(messagestr,"SBAS message missing for GEO PRN %3d at epoch %17s (1 missing message)",GEOPRN,t2doystr(currentepoch));
-					printInfo(messagestr,options);
-				}
-				prevnumMsgMissing[GEOPRN]=numMsgLost;
+		for(i=0;i<(NUMPOSFREQSBASMSG-1);i++) { //Skip last frequency which is for not known frequencies
+			//Only check satellites that have not been cleared
+			if (msgtime[i][GEOPRN].MJDN==-1) {
+				numMsgLost=0;
 			} else {
-				prevnumMsgMissing[GEOPRN]=0;
+				timediff=tdiff(currentepoch,&msgtime[i][GEOPRN]);
+				numMsgLost=0;
+				if (timediff>=1.) {
+					numMsgLost=(int)(timediff);
+				}
+			}
+			//The numMsgLost!= SBASdatabox->SBASdata[0].missed4msg[i][GEOPRN] is to avoid printing the missing message due when we read the first message after a gap,
+			//the prevmsgtime has not still been updated until the next message read
+			if (prevmsgtime[i][GEOPRN].MJDN!=-1 && numMsgLost!= SBASdatabox->SBASdata[0].missed4msg[i][GEOPRN]) {
+				SBASdatabox->SBASdata[0].missed4msg[i][GEOPRN]=numMsgLost;
+				if(numMsgLost>=4) {
+					//Print Info message when a SBAS message is missing only for GEO in use
+					if (options->workMode == wmDOPROCESSING) {
+						t2tmnolocal(currentepoch,&tm,&seconds);
+						sprintf(messagestr,"SBAS messages missing for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f (%d consecutive missing messages)",GEOPRN,SBASfreqPos2freqNum[i],t2doystr(currentepoch),tm.tm_hour,tm.tm_min,seconds,numMsgLost);
+						printInfo(messagestr,options);
+					}
+					if (MsgMissingCleared[i][GEOPRN]==0) {
+						SBASMissingMessageClearData(m,i,currentepoch,SBASdatabox->SBASdata,options);
+						MsgMissingCleared[i][GEOPRN]=1;
+					}
+					prevnumMsgMissing[i][GEOPRN]=numMsgLost;
+				} else if(numMsgLost>=2) {
+					if (options->workMode == wmDOPROCESSING) {
+						t2tmnolocal(currentepoch,&tm,&seconds);
+						sprintf(messagestr,"SBAS messages missing for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f (%d consecutive missing messages)",GEOPRN,SBASfreqPos2freqNum[i],t2doystr(currentepoch),tm.tm_hour,tm.tm_min,seconds,numMsgLost);
+						printInfo(messagestr,options);
+					}
+					prevnumMsgMissing[i][GEOPRN]=numMsgLost;
+				} else if(numMsgLost==1) {
+					if (options->workMode == wmDOPROCESSING) {
+						t2tmnolocal(currentepoch,&tm,&seconds);
+						sprintf(messagestr,"SBAS message missing for GEO PRN %3d and frequency %d at epoch %17s / %02d:%02d:%05.2f (1 missing message)",GEOPRN,SBASfreqPos2freqNum[i],t2doystr(currentepoch),tm.tm_hour,tm.tm_min,seconds);
+						printInfo(messagestr,options);
+					}
+					prevnumMsgMissing[i][GEOPRN]=numMsgLost;
+				} else {
+					prevnumMsgMissing[i][GEOPRN]=0;
+				}
 			}
 		}
 	}
 		
 	//Print message decoding summary
-	if(feof(fd)>0) {
+	if(feof_function(fd)>0) {
 		//Print message decoding summary
 		if(writefiles) {
-			writeSBASdecodesummary(fdlist, fd, filelist[fdLOGFILE], numberofbadmessages, totalmsgmissing, nummsgmissingdetected, numlinesmissing, missingmessagesvector, options);
+			writeSBASdecodesummary(fdlist, fd, filelist[fdLOGFILE], numberofbadmessages, totalmsgmissing, nummsgmissingdetected, SBASdatabox->numlinesmissing, SBASdatabox->missingmessagesvector, options);
 		}
-
 	} 
-
-
-	//Free memory
-	free(lineaux[0]);
-	lineaux[0]=NULL;
 
 	return 1;
 }
+
+/*****************************************************************************
+ * Name        : readSBASmessagePreamble
+ * Description : Check if there is a valid SBAS message preamble.
+ *                It is necessary to read preamble before decoding the message, and
+ *                 as the preamble uniquely identifies from what where the message
+ *                 was sent from (the preambles are different for L1 and L5)
+ * Parameters  :
+ * Name                           |Da|Unit|Description
+ * unsigned char *preamble         I  N/A  Preamble (first 8 bits of message)
+ * TSBASblock  *sbasblock          O  N/A  TSBASblock structure
+ * Returned value (int)            O  N/A  Status of function
+ *                                          0 => Invalid preamble
+ *                                          1 => Valid preamble
+ *****************************************************************************/
+int readSBASmessagePreamble (unsigned char *preamble, TSBASblock *sbasblock) {
+
+	////Check preamble. Valid preambles are 
+	//For SBAS 1F
+	//01010011 (0x53) 10011010 (0x9A) 11000110 (0xC6)
+	//For SBAS DFMC
+	//0101 (0x5) 1100 (0xC) 0110 (0x6) 1001 (0x9) 0011 (0x3) 1010 (0xA)
+	//Note that in SBAS 1F there are three preambles with eight bits each (two bytes), in SBAS DFMC there are six preambles with 4 bits each (1 byte)
+
+	switch(sbasblock->messagetype) {
+		case SATMASKASIGNMENTS: case CLOCKEPHEMERISCOVARIANCEMATRIXDFMC:
+		case OBADDFREIPARAMETERS: case SBASEPHEMERISDFMC: case SBASEPHEMERISCOVARIANCEDFMC:
+		case SBASNETWORKTIMEPARAMETERSDFMC: case SBASALMANACSDFMC:
+		case SERVICEAREADFMC: case SERVICEAREADFMCTESTBED:
+			//All SBAS DFMC messages only. Preamble is only 4 bits, so set last 4 bits to 0
+			*preamble&=0xF0;
+			break;
+		case INTEGRITYINFODFMC34:
+			//Integrity SBAS DFMC messages only. Preamble is only 4 bits, so set last 4 bits to 0
+			*preamble&=0xF0;
+			sbasblock->msg0type=1;
+			break;
+		case INTEGRITYINFODFMC35:
+			//Integrity SBAS DFMC messages only. Preamble is only 4 bits, so set last 4 bits to 0
+			*preamble&=0xF0;
+			sbasblock->msg0type=2;
+			break;
+		case INTEGRITYINFODFMC36:
+			//Integrity SBAS DFMC messages only. Preamble is only 4 bits, so set last 4 bits to 0
+			*preamble&=0xF0;
+			sbasblock->msg0type=3;
+			break;
+		default:
+			//For SBAS 1F messages or for both (types 0, 62, and 63), use the 8 bits. For the cases
+			//of messages 0, 62 and 63, the possible preamble values in SBAS 1F and SBAS DFMC will
+			//never match, so it is safe to check the preamble for both types
+			break;
+	}
+	switch(*preamble) {
+		//"01010011","10011010", "11000110"
+		case 0x53: case 0x9A: case 0xC6:
+			//SBAS 1F preambles.
+			sbasblock->frequencyPos=SBAS1FFREQPOS;
+			sbasblock->frequency=1;
+			return 1;
+			break;
+		case 0x50: case 0x5F: case 0xC0: case 0xCF: case 0x60: case 0x6F:
+		case 0x90: case 0x9F: case 0x30: case 0x3F: case 0xA0: case 0xAF:
+		//"0101 0000", "0101 1111", "1100 0000", "1100 1111", "0110 0000", "0110 1111" 
+		//"1001 0000", "1001 1111", "0011 0000", "0011 1111", "1010 0000", "1010 1111" 
+		//Each preamble has to be tested twice in SBAS DFMC due to the second four bits will
+		//correspond to the first four bits of message number, which will be 0 for message 0 and
+		// 1111 for messages 62 and 63
+			//SBAS DFMC preambles
+			sbasblock->frequencyPos=SBASDFMCFREQPOS;
+			sbasblock->frequency=5;
+			return 1;
+			break;
+		default:
+			//Incorrect preamble or unknown message type
+			sbasblock->frequencyPos=UNKNOWNFREQPOS;
+			//The frequency will be left to the default value or the one provided in the file
+			return 0;
+			break;
+	}
+
+	return 0;
+}
+
 
 /*****************************************************************************
  * Name        : readSBASmessage
  * Description : Decode SBAS message from a binary string
  * Parameters  :
  * Name                           |Da|Unit|Description
- * char *binarystring              I  N/A  String with the binary message
- * int  messagetype                I  N/A  Message type identifier number
+ * char *binarystring              I  N/A  String with the binary message (1 bit per byte)
+ * unsigned char *binarymessage    I  N/A  String with the binary message (8 bit per byte)
+ * unsigned char preamble          I  N/A  Preamble (first 8 bits of message). For SBAS DFMC
+ *                                           messages, the last 4 bits are zeroed as preamble
+ *                                           only has 4 bits  
+ * int  validpreamble              I  N/A  Flag to indicate if a valid preamble was found
+ *                                             1 => Valid preamble found
+ *                                             0 => No valid preamble found
  * int *decodedmessagetype         O  N/A  Message type decoded from hexadecimal message
  * TSBASblock  *sbasblock          O  N/A  TSBASblock structure
  * int *messagesmissing            O  N/A  Indicates the number of messages missing due to the 
- *                                          preamble does not follow the cycle (can be 0,1,2)
+ *                                          preamble does not follow the cycle (can be 0,1,2
+ *                                          for SBAS 1F and 0,1,2,3,4,5 for SBAS DFMC)
  * TOptions  *options              I  N/A  TOptions structure
  * Returned value (int)            O  N/A  Status of function
+ *                                        -14 => PRN in almanac slot in MT47 with broadcast indicator enabled
+ *                                                does not match with GEO broadcasting the message [DFMC only]
+ *                                        -13 => PRN in MT39 does not match with GEO broadcasting the message [DFMC only]
+ *                                        -12 => Satellite slot delta is greater than 39 [DFMC only]
+ *                                        -11 => Satellite slot delta is 0 [DFMC only]
+ *                                        -10 => Satellite slot number is greater than 214 [DFMC only]
+ *                                         -9 => Too many satellites with corrections
+ *                                                (only for message type 31, if there
+ *                                                are more than 92 satellites with
+ *                                                corrections) [DFMC only]
  *                                         -8 => Unknown message type
- *                                         -7 => PRN Mask number is greater than 51
+ *                                         -7 => PRN Mask number is greater than 51 [SBAS 1F only]
  *                                         -6 => Time of Week is greater than maximum value
- *                                               (only for message 12)
+ *                                               (only for messages 12 [SBAS 1F] and 42 [DFMC])
  *                                         -5 => Time of Day is greater than maximum value 
- *                                               (only for messages 24,25,9,17)
+ *                                               (only for messages 24,25,9,17 [SBAS 1F] 32,40,47 [DFMC])
  *                                         -4 => Too many satellites with corrections
  *                                                (only for message type 1, if there
  *                                                are more than 51 satellites with
- *                                                corrections)
+ *                                                corrections) [SBAS 1F only]
  *                                         -3 => Message identifier does not match
  *                                               (decoded binary value does not
  *                                               match the value given in file)
@@ -7373,121 +10111,323 @@ int readEMS (FILE *fd, FILE **fdlist, char **filelist, TSBASdatabox *SBASdatabox
  *                                          0 => Message type with no data
  *                                          1 => Message correctly decoded
  *****************************************************************************/
-int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetype, TSBASblock *sbasblock, int *messagesmissing, TOptions  *options) {
+int readSBASmessage (char *binarystring, unsigned char *binarymessage, unsigned char preamble, int validpreamble, int *decodedmessagetype, TSBASblock *sbasblock, int *messagesmissing, TOptions  *options) {
 
-	char			   *endptr;                //This is just for strtol function
-	char 				aux[300];
-	unsigned char  		binarymessage[33];
-	int					i,j;
-	int					lengthmessage;
-	int 				checksum;
-	int					ret;
-	int					start;
-
-	static char			previouspreamble[MAX_SBAS_PRN][9];
-	static int			badpreamble=0;
-	static int          initialized=0;
+	char				   *endptr;                //This is just for strtol function
+	char 					aux[300];
+	int						i,j;
+	int						lengthmessage;
+	int 					checksum;
+	int						ret;
+	int						start;
+	double					scalefactor;
+	static unsigned char	previouspreamble[3][MAX_SBAS_PRN]; //Pos 0 is for frequency 1, pos 1 is for frequency 5, pos 2 is for other messages
+	static int      	    initialized=0;
 
 	if (initialized==0) {
 		for(i=0;i<MAX_SBAS_PRN;i++) {
-			strcpy(previouspreamble[i],"00000000");
+			previouspreamble[0][i]=0;
+			previouspreamble[1][i]=0;
 		}
 		initialized=1;
 	}
 
 	//Table values for messages 2,3,4,5 and 24
-	const double 	udreimeterslist[16]={0.75,1.0,1.25,1.75,2.25,3.0,3.75,4.5,5.25,6.0,7.5,15.0,50.0,150.0,-1,-2}; //UDRE (meters)
-	const double   udreivariancelist[16]={0.0520,0.0924,0.1444,0.2830,0.4678,0.8315,1.2992,1.8709,2.5465,3.3260,5.1968,20.7870,230.9661,2078.695,-1,-2}; //variance (sigma^2) UDRE (meters^2)
+	const double	udreimeterslist[16]={0.75,1.0,1.25,1.75,2.25,3.0,3.75,4.5,5.25,6.0,7.5,15.0,50.0,150.0,-1,-2}; //UDRE (metres)
+	const double	udreivariancelist[16]={0.0520,0.0924,0.1444,0.2830,0.4678,0.8315,1.2992,1.8709,2.5465,3.3260,5.1968,20.7870,230.9661,2078.695,-1,-2}; //variance (sigma^2) UDRE (metres^2)
 
 	//Table values for message 7
-	const double	fastcorrdegfactorlist[16]={0.00000,0.00005,0.00009,0.00012,0.00015,0.00020,0.00030,0.00045,0.00060,0.00090,0.00150,0.00210,0.00270,0.00330,0.00460,0.00580}; //Fast Correction degradation factor (meters/seconds^2)
+	const double	fastcorrdegfactorlist[16]={0.00000,0.00005,0.00009,0.00012,0.00015,0.00020,0.00030,0.00045,0.00060,0.00090,0.00150,0.00210,0.00270,0.00330,0.00460,0.00580}; //Fast Correction degradation factor (metres/seconds^2)
 	const int 		timeoutintervalnonpreciselist[16]={180,180,153,135,135,117,99,81,63,45,45,27,27,27,18,18};//User Time-Out Interval for fast corrections (seconds). En Route through Nonprecision approach
 	const int		timeoutintervalpreciselist[16]={120,120,102,90,90,78,66,54,42,30,30,18,18,18,12,12}; //User Time-Out Interval for fast corrections (seconds). Precision approach mode
-	const int  	maxfastcorrupdateintervallist[16]={60,60,51,45,45,39,33,27,21,15,15,9,9,9,6,6}; //Maximum fast correction update interval (seconds)
+	const int 	 	maxfastcorrupdateintervallist[16]={60,60,51,45,45,39,33,27,21,15,15,9,9,9,6,6}; //Maximum fast correction update interval (seconds)
 
 	//Table values for URA index in message 9
-	const double	minurarangelist[16]={0.00,2.40,3.40,4.85,6.85,9.65,13.65,24.00,48.00,96.00,192.00,384.00,768.00,1536.00,3072.00,6144.00}; //Minimun URA range (meters)
-	const double	maxurarangelist[16]={2.40,3.40,4.85,6.85,9.65,13.65,24.00,48.00,96.00,192.00,384.00,768.00,1536.00,3072.00,6144.00,-1};	  //Maximum URA range (meters). -1 means no limit (no accuracy)
-	const double   uranominalvaluelist[16]={2,2.8,4,5.7,8,11.3,16,32,64,128,256,512,1024,2048,4096,-1}; //URA nominal values. -1 means no accuracy value
+	const double	minurarangelist[16]={0.00,2.40,3.40,4.85,6.85,9.65,13.65,24.00,48.00,96.00,192.00,384.00,768.00,1536.00,3072.00,6144.00}; //Minimun URA range (metres)
+	const double	maxurarangelist[16]={2.40,3.40,4.85,6.85,9.65,13.65,24.00,48.00,96.00,192.00,384.00,768.00,1536.00,3072.00,6144.00,-1};	  //Maximum URA range (metres). -1 means no limit (no accuracy)
+	const double	uranominalvaluelist[16]={2,2.8,4,5.7,8,11.3,16,32,64,128,256,512,1024,2048,4096,-1}; //URA nominal values. -1 means no accuracy value
 
 	//Table values for Delta UDRE Indicators in message 27
 	const double	deltaudrevaluelist[16]={1,1.1,1.25,1.5,2,3,4,5,6,8,10,20,30,40,50,100};	//Delta UDRE values which multiply the UDRE standard deviation in type 2,3,4,5,6 and 24 messages
 
 	//Table values for GIVE in message 26
-	const double	givemeterslist[16]={0.3,0.6,0.9,1.20,1.5,1.8,2.1,2.4,2.7,3.0,3.6,4.5,6.0,15.0,45.0,-1}; //GIVE (meters)
-	const double	givevariancelist[16]={0.0084,0.0333,0.0749,0.1331,0.2079,0.2994,0.4075,0.5322,0.6735,0.8315,1.1974,1.8709,3.3260,20.7870,187.0826,-1}; //variance (sigma^2) GIVE (meters^2)
+	const double	givemeterslist[16]={0.3,0.6,0.9,1.20,1.5,1.8,2.1,2.4,2.7,3.0,3.6,4.5,6.0,15.0,45.0,-1}; //GIVE (metres)
+	const double	givevariancelist[16]={0.0084,0.0333,0.0749,0.1331,0.2079,0.2994,0.4075,0.5322,0.6735,0.8315,1.1974,1.8709,3.3260,20.7870,187.0826,-1}; //variance (sigma^2) GIVE (metres^2)
+
+	//Constellation order for SBAS DFMC MT37 OBAD parameters
+	const enum GNSSystem 	constOBADorder[5]={GPS,GLONASS,Galileo,BDS,GEO};
+	const double			DFREIminvalues[15]={0.125,0.25,0.375,0.5,0.625,0.75,1,1.25,1.5,1.75,2.,2.5,3.,4.,10.};	//DFREI minimum values (in metres)
 
 	////Checksum for SBAS messages
 	
-	//Convert the binary string (one bit per byte) to one string where each bit is one value of the message
-	lengthmessage=strlen(binarystring);		//Compute message length
-	strbintobinstr(binarystring,lengthmessage,binarymessage,sizeof(binarymessage));	
-	//Compute checksum from the binary message
-	ret=checksumSBAS((unsigned char *)binarymessage);
+
+	lengthmessage=sbasblock->datalength*4;		//Compute message length
+	//Computechecksum from the binary message
+	ret=checksumSBAS(binarymessage);
 
 	//Extract the checksum from the message
-	getstr(aux,binarystring,226,24); 		//Parity bits are from bit 227 to 250
-	checksum=strtol(aux,&endptr,2);			//Convert parity bits to a decimal number to obtain the message checksum
+	getstr(aux,binarystring,lengthmessage,226,24); 		//Parity bits are from bit 227 to 250
+	checksum=strtol(aux,&endptr,2);						//Convert parity bits to a decimal number to obtain the message checksum
 
-
-	////Check preamble. Valid preambles are 
-	//01010011 (0x53) 10011010 (0x9A) 11000110 (0xC6)
-	getstr(aux,binarystring,0,8);			//Extract preamble bits
 	*messagesmissing=0;
-	if(strcmp(aux,"01010011")!=0 && strcmp(aux,"10011010")!=0 && strcmp(aux,"11000110")!=0) {
-		badpreamble=1;
+
+	//Message types which occur in both SBAS 1F and SBAS DFMC
+	//Preambles are different length in each SBAS mode, so it is needed to check both to
+	//find out from which frequency was found
+	//Check first with SBAS 1F preambles, as they are longer
+	if (validpreamble==1) {
+		//We can only check for lost messages if preamble is valid
+		switch(preamble) {
+			case 0x53:
+				//SBAS 1F
+				////Check that message type given in file matches the one decoded from the binary string
+				getstr(aux,binarystring,lengthmessage,8,6);		//Extract message type identifier bits
+				*decodedmessagetype=strtol(aux,&endptr,2);		//Convert the binary string to decimal	
+				switch(previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]) {
+					case 0:
+						//This is the first message read in the file, set previouspreamble and continue
+						previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble;
+						break;
+					case 0x9A:
+						*messagesmissing=1;
+						break;
+					case 0x53:
+						*messagesmissing=2;
+						break;
+					default:
+						break;
+				}
+				break;
+			case 0x9A:
+				//SBAS 1F
+				////Check that message type given in file matches the one decoded from the binary string
+				getstr(aux,binarystring,lengthmessage,8,6);		//Extract message type identifier bits
+				*decodedmessagetype=strtol(aux,&endptr,2);		//Convert the binary string to decimal	
+				switch(previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]) {
+					case 0:
+						//This is the first message read in the file, set previouspreamble and continue
+						previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble;
+						break;
+					case 0xC6:
+						*messagesmissing=1;
+						break;
+					case 0x9A:
+						*messagesmissing=2;
+						break;
+					default:
+						break;
+				}
+				break;
+			case 0xC6:
+				//SBAS 1F
+				////Check that message type given in file matches the one decoded from the binary string
+				getstr(aux,binarystring,lengthmessage,8,6);		//Extract message type identifier bits
+				*decodedmessagetype=strtol(aux,&endptr,2);		//Convert the binary string to decimal	
+				switch(previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]) {
+					case 0:
+						//This is the first message read in the file, set previouspreamble and continue
+						previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble;
+						break;
+					case 0x53:
+						*messagesmissing=1;
+						break;
+					case 0xC6:
+						*messagesmissing=2;
+						break;
+					default:
+						break;
+				}
+				break;
+			case 0x50: case 0x5F:
+				//SBAS DFMC
+				////Check that message type given in file matches the one decoded from the binary string
+				getstr(aux,binarystring,lengthmessage,4,6);		//Extract message type identifier bits
+				*decodedmessagetype=strtol(aux,&endptr,2);		//Convert the binary string to decimal	
+				switch(previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]) {
+					case 0:
+						//This is the first message read in the file, set previouspreamble and continue
+						previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble;
+						break;
+					case 0x30: case 0x3F:
+						*messagesmissing=1;
+						break;
+					case 0x90: case 0x9F:
+						*messagesmissing=2;
+						break;
+					case 0x60: case 0x6F:
+						*messagesmissing=3;
+						break;
+					case 0xC0: case 0xCF:
+						*messagesmissing=4;
+						break;
+					case 0x50: case 0x5F:
+						*messagesmissing=5;
+						break;
+					default:
+						break;
+				}
+				break;
+			case 0xC0: case 0xCF:
+				//SBAS DFMC
+				////Check that message type given in file matches the one decoded from the binary string
+				getstr(aux,binarystring,lengthmessage,4,6);		//Extract message type identifier bits
+				*decodedmessagetype=strtol(aux,&endptr,2);		//Convert the binary string to decimal	
+				switch(previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]) {
+					case 0:
+						//This is the first message read in the file, set previouspreamble and continue
+						previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble;
+						break;
+					case 0xA0: case 0xAF:
+						*messagesmissing=1;
+						break;
+					case 0x30: case 0x3F:
+						*messagesmissing=2;
+						break;
+					case 0x90: case 0x9F:
+						*messagesmissing=3;
+						break;
+					case 0x60: case 0x6F:
+						*messagesmissing=4;
+						break;
+					case 0xC0: case 0xCF:
+						*messagesmissing=5;
+						break;
+					default:
+						break;
+				}
+				break;
+			case 0x60: case 0x6F:
+				//SBAS DFMC
+				////Check that message type given in file matches the one decoded from the binary string
+				getstr(aux,binarystring,lengthmessage,4,6);		//Extract message type identifier bits
+				*decodedmessagetype=strtol(aux,&endptr,2);		//Convert the binary string to decimal	
+				switch(previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]) {
+					case 0:
+						//This is the first message read in the file, set previouspreamble and continue
+						previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble;
+						break;
+					case 0x50: case 0x5F:
+						*messagesmissing=1;
+						break;
+					case 0xA0: case 0xAF:
+						*messagesmissing=2;
+						break;
+					case 0x30: case 0x3F:
+						*messagesmissing=3;
+						break;
+					case 0x90: case 0x9F:
+						*messagesmissing=4;
+						break;
+					case 0x60: case 0x6F:
+						*messagesmissing=5;
+						break;
+					default:
+						break;
+				}
+				break;
+			case 0x90: case 0x9F:
+				//SBAS DFMC
+				////Check that message type given in file matches the one decoded from the binary string
+				getstr(aux,binarystring,lengthmessage,4,6);		//Extract message type identifier bits
+				*decodedmessagetype=strtol(aux,&endptr,2);		//Convert the binary string to decimal	
+				switch(previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]) {
+					case 0:
+						//This is the first message read in the file, set previouspreamble and continue
+						previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble;
+						break;
+					case 0xC0: case 0xCF:
+						*messagesmissing=1;
+						break;
+					case 0x50: case 0x5F:
+						*messagesmissing=2;
+						break;
+					case 0xA0: case 0xAF:
+						*messagesmissing=3;
+						break;
+					case 0x30: case 0x3F:
+						*messagesmissing=4;
+						break;
+					case 0x90: case 0x9F:
+						*messagesmissing=5;
+						break;
+					default:
+						break;
+				}
+				break;
+			case 0x30: case 0x3F:
+				//SBAS DFMC
+				////Check that message type given in file matches the one decoded from the binary string
+				getstr(aux,binarystring,lengthmessage,4,6);		//Extract message type identifier bits
+				*decodedmessagetype=strtol(aux,&endptr,2);		//Convert the binary string to decimal	
+				switch(previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]) {
+					case 0:
+						//This is the first message read in the file, set previouspreamble and continue
+						previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble;
+						break;
+					case 0x60: case 0x6F:
+						*messagesmissing=1;
+						break;
+					case 0xC0: case 0xCF:
+						*messagesmissing=2;
+						break;
+					case 0x50: case 0x5F:
+						*messagesmissing=3;
+						break;
+					case 0xA0: case 0xAF:
+						*messagesmissing=4;
+						break;
+					case 0x30: case 0x3F:
+						*messagesmissing=5;
+						break;
+					default:
+						break;
+				}
+				break;
+			case 0xA0: case 0xAF:
+				//SBAS DFMC
+				////Check that message type given in file matches the one decoded from the binary string
+				getstr(aux,binarystring,lengthmessage,4,6);		//Extract message type identifier bits
+				*decodedmessagetype=strtol(aux,&endptr,2);		//Convert the binary string to decimal	
+				switch(previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]) {
+					case 0:
+						//This is the first message read in the file, set previouspreamble and continue
+						previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble;
+						break;
+					case 0x90: case 0x9F:
+						*messagesmissing=1;
+						break;
+					case 0x60: case 0x6F:
+						*messagesmissing=2;
+						break;
+					case 0xC0: case 0xCF:
+						*messagesmissing=3;
+						break;
+					case 0x50: case 0x5F:
+						*messagesmissing=4;
+						break;
+					case 0xA0: case 0xAF:
+						*messagesmissing=5;
+						break;
+					default:
+						break;
+				}
+				break;
+			default:
+				break;
+		}
+		previouspreamble[sbasblock->frequencyPos][sbasblock->PRN]=preamble; //Copy preamble to previouspreamble variable
 	}
-	else {
-		badpreamble=0;			
-	}
-
-	//Check if the preamble received is the next in the cycle, otherwise some messages will are missing in the data file
-	if (badpreamble==1) {
-		//If the previous message had a bad preamble, we cannot say if we have lost any messages
-	} else if(strcmp(previouspreamble[sbasblock->PRN],"00000000")==0) {
-		//This is the first message read in the file, set previouspreamble and continue
-		strcpy(previouspreamble[sbasblock->PRN],aux);
-	} else if (strcmp(aux,"01010011")==0) {
-		//Check preamble
-		if(strcmp(previouspreamble[sbasblock->PRN],"10011010")==0) *messagesmissing=1;
-		else if(strcmp(previouspreamble[sbasblock->PRN],"01010011")==0) *messagesmissing=2;
-	} else if (strcmp(aux,"10011010")==0) {
-		if(strcmp(previouspreamble[sbasblock->PRN],"11000110")==0) *messagesmissing=1;
-		else if(strcmp(previouspreamble[sbasblock->PRN],"10011010")==0) *messagesmissing=2;
-	} else { //if (strcmp(aux,"11000110")==0) {
-		if(strcmp(previouspreamble[sbasblock->PRN],"01010011")==0) *messagesmissing=1;
-		else if(strcmp(previouspreamble[sbasblock->PRN],"11000110")==0) *messagesmissing=2;
-	}
-
-	if(badpreamble==0) strcpy(previouspreamble[sbasblock->PRN],aux); //Copy preamble to previouspreamble variable
-
-	////Check that message type given in file matches the one decoded from the binary string
-	getstr(aux,binarystring,8,6);			//Extract message type identifier bits
-	*decodedmessagetype=strtol(aux,&endptr,2);	//Convert the binary string to decimal	
-
 
 	//Skip read function if CRC, preamble or message type have errors
-	if(checksum!=ret) return -1;						//CRC Invalid
-	if(badpreamble==1) return -2;						//Preamble invalid
-	if(*decodedmessagetype!=messagetype) return -3;		//Message type read does not match the one decoded from the hexadecimal message
-
-
+	if(checksum!=ret) return -1;								//CRC Invalid
+	if(validpreamble==0) return -2;								//Preamble invalid
+	if(*decodedmessagetype!=sbasblock->messagetype) return -3;	//Message type read does not match the one decoded from the hexadecimal message
 
 	////Read messages
-	switch(messagetype) {
-		case(PRNMASKASSIGNMENTS):
-			//Allocate memory for the current message type
-			sbasblock->PRNactive=malloc(MAX_GNSS*sizeof(int*));	//Allocate size of each GNSS system
-			sbasblock->pos2PRN=malloc(51*sizeof(int));          	//SBAS only gives corrections to 51 satellites at once
-			sbasblock->pos2GNSS=malloc(51*sizeof(int)); 		//SBAS only gives corrections to 51 satellites at once
-			sbasblock->PRN2pos=malloc(MAX_GNSS*sizeof(int*));   	//Allocate size of each GNSS system
-
+	switch(sbasblock->messagetype) {
+		case PRNMASKASSIGNMENTS: /*MT 1*/
 			//Initialize blocks
 			for(i=0;i<MAX_GNSS;i++) {
-				sbasblock->PRNactive[i]=NULL;
-				sbasblock->PRN2pos[i]=NULL;
-				sbasblock->PRNactive[i]=malloc(MAX_SBAS_PRN*sizeof(int));
-				sbasblock->PRN2pos[i]=malloc(MAX_SBAS_PRN*sizeof(int));
 				for(j=0;j<MAX_SBAS_PRN;j++) {
 					sbasblock->PRNactive[i][j]=0;		//0 means satellite not active
 					sbasblock->PRN2pos[i][j]=-1;		//-1 means satellite not in mask
@@ -7510,6 +10450,7 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
 					sbasblock->pos2PRN[j]=i-13;		//Save the PRN number in the list
 					sbasblock->pos2GNSS[j]=GPS;		//Save the GNSS type in the list
 					sbasblock->PRN2pos[GPS][i-13]=j;	//Save the position of this PRN
+					sbasblock->constMonitored[GPS]=1;
 					j++;
 				}
 			}
@@ -7523,6 +10464,7 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
 					sbasblock->pos2PRN[j]=i-50;		//Save the PRN number in the list
 					sbasblock->pos2GNSS[j]=GLONASS;	//Save the GNSS type in the list
 					sbasblock->PRN2pos[GLONASS][i-50]=j;	//Save the position of this PRN
+					sbasblock->constMonitored[GLONASS]=1;
 					j++;
 				}
 			}
@@ -7537,94 +10479,122 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
 					sbasblock->pos2PRN[j]=i-13;		//Save the PRN number in the list
 					sbasblock->pos2GNSS[j]=GEO;		//Save the GNSS type in the list
 					sbasblock->PRN2pos[GEO][i-13]=j;	//Save the position of this PRN
+					sbasblock->constMonitored[GEO]=1;
 					j++;
 				}
 			}
 
-			getstr(aux,binarystring,224,2);				//Extract IODP
+			getstr(aux,binarystring,lengthmessage,224,2);				//Extract IODP
 			sbasblock->IODP=strtol(aux,&endptr,2);
 			sbasblock->numsatellites=j-1;				//Save number of satellites monitored
 			break;				
-		case(DONTUSE):
+		case DONTUSE: /*MT 0*/ //SBAS 1F and SBAS DFMC
 			sbasblock->dontuse=1;
 			//Check if the whole message is 0
-			getstr(aux,binarystring,8,218);
+			getstr(aux,binarystring,lengthmessage,8,218);
 			if(strtol(aux,&endptr,2)==0) {				//The message is filled with 0 (except for the preamble and the checksum)
-				sbasblock->problems=1;				//In that case set the flag to indicate there are problems with SBAS
+				sbasblock->problems=1;					//In that case set the flag to indicate there are problems with SBAS
 				break;
 			}
-			//If the message is not filled with 0, then it will contain a type 2 message
-			//A break is not inserted here so it will execute the code of a type 2 message (only if option alarmmessageastype2 is not zero)
-			if(options->alarmmessageastype2==0) break;
+			//If the message is not filled with 0, then it will contain a type 2 message for SBAS 1F and type 34,35,36 for SBAS DFMC
+			//A break is not inserted here so it will execute the code of a type 2 message (only if option useAlarmmessageForCorrections is not zero)
+			if(options->useAlarmmessageForCorrections==0) break;
+			if (sbasblock->frequency==5) {
+				//Get message type for SBAS DFMC
+				getstr(aux,binarystring,lengthmessage,222,2);
+				sbasblock->msg0type=strtol(aux,&endptr,2);
+				if (sbasblock->msg0type==0) break; //If value is 0, no MT34, 35 or 36 is provided in MT0 message
+			}
 			/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
-		case(FASTCORRECTIONS2):case(FASTCORRECTIONS3):case(FASTCORRECTIONS4):case(FASTCORRECTIONS5):
-			//Allocate memory for the current message type
-			sbasblock->IODF=malloc(sizeof(int));			//Messages 2,3,4,5 only have one IODF
-			sbasblock->PRC=malloc(sizeof(double)*13);		//Messages 2,3,4,5 have corrections for 13 satellites (except 5, that has only 12)
-			sbasblock->UDREI=malloc(sizeof(int)*13);		//Messages 2,3,4,5 have corrections for 13 satellites (except 5, that has only 12)
-			sbasblock->UDRE=malloc(sizeof(double)*13);    		//Messages 2,3,4,5 have corrections for 13 satellites (except 5, that has only 12)
-			sbasblock->UDREsigma=malloc(sizeof(double)*13); 	//Messages 2,3,4,5 have corrections for 13 satellites (except 5, that has only 12)
+		case FASTCORRECTIONS2: /*MT 2*/ case FASTCORRECTIONS3: /*MT 3*/ case FASTCORRECTIONS4: /*MT 4*/ case FASTCORRECTIONS5: /*MT 5*/
+			if (sbasblock->frequency==1) {
+				//Reading data
+				getstr(aux,binarystring,lengthmessage,14,2);				//Extract IODF
+				sbasblock->IODF[0]=strtol(aux,&endptr,2);
 
-			//Reading data
-			getstr(aux,binarystring,14,2);				//Extract IODF
-			sbasblock->IODF[0]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,16,2);				//Extract IODP
+				sbasblock->IODP=strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,16,2);				//Extract IODP
-			sbasblock->IODP=strtol(aux,&endptr,2);
+				
+				for(i=0;i<13;i++) {					//Extract PRC Fast corrections (PRC has sign bit)
+					getstr(aux,binarystring,lengthmessage,18+i*12,12);
+					sbasblock->PRC[i]=0.125*(double)twocomplementstrbintointeger(aux,12); //PRC has a resolution of 0.125 metres
+				}
+				
+				for(i=0;i<13;i++) {					//Extract UDREIs
+					getstr(aux,binarystring,lengthmessage,174+i*4,4);
+					sbasblock->UDREI[i]=strtol(aux,&endptr,2);	
+					sbasblock->UDRE[i]=udreimeterslist[sbasblock->UDREI[i]];	//Get the UDRE meter value from the UDREI
+					sbasblock->UDREsigma[i]=udreivariancelist[sbasblock->UDREI[i]];	//Get the UDRE variance value from the UDREI
+				}
 
-			
-			for(i=0;i<13;i++) {					//Extract PRC Fast corrections (PRC has sign bit)
-				getstr(aux,binarystring,18+i*12,12);
-				sbasblock->PRC[i]=0.125*twocomplementstrbintointeger(aux,12); //PRC has a resolution of 0.125 meters
+				break;
 			}
-			
-			for(i=0;i<13;i++) {					//Extract UDREIs
-				getstr(aux,binarystring,174+i*4,4);
-				sbasblock->UDREI[i]=strtol(aux,&endptr,2);	
-				sbasblock->UDRE[i]=udreimeterslist[sbasblock->UDREI[i]];	//Get the UDRE meter value from the UDREI
-				sbasblock->UDREsigma[i]=udreivariancelist[sbasblock->UDREI[i]];	//Get the UDRE variance value from the UDREI
+			/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
+		case INTEGRITYINFODFMC34: /*MT 34*/
+			if (sbasblock->msg0type==1) {
+				for(i=0;i<92;i++) {
+					getstr(aux,binarystring,lengthmessage,10+i*2,2);	//Extract DFRECI
+					sbasblock->DFRECI[i]=strtol(aux,&endptr,2);
+				}
+
+				for(i=0;i<7;i++) {
+					getstr(aux,binarystring,lengthmessage,194+i*4,4);	//Extract DFREI
+					sbasblock->DFREI[i]=strtol(aux,&endptr,2);
+				}
+
+				getstr(aux,binarystring,lengthmessage,224,2);            //Extract IODM
+				sbasblock->IODM=strtol(aux,&endptr,2);
+				break;
+			}
+			/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
+		case INTEGRITYINFODFMC35: /*MT 35*/
+			if (sbasblock->msg0type==2) {
+
+				for(i=0;i<53;i++) {
+					getstr(aux,binarystring,lengthmessage,10+i*4,4);	//Extract DFREI
+					sbasblock->DFREI[i]=strtol(aux,&endptr,2);
+				}
+
+				getstr(aux,binarystring,lengthmessage,224,2);            //Extract IODM
+				sbasblock->IODM=strtol(aux,&endptr,2);
+				break;
+			}
+			/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
+		case INTEGRITYINFODFMC36: /*MT 36*/
+			for(i=0;i<38;i++) {
+				getstr(aux,binarystring,lengthmessage,10+i*4,4);	//Extract DFREI
+				sbasblock->DFREI[i]=strtol(aux,&endptr,2);
 			}
 
+			getstr(aux,binarystring,lengthmessage,224,2);            //Extract IODM
+			sbasblock->IODM=strtol(aux,&endptr,2);
 			break;
-		case(INTEGRITYINFO):
-			//Allocate memory for the current message type
-			sbasblock->IODF=malloc(sizeof(int)*4);			//Message 6 has four IODF (one for each message typ2 2,3,4,5)
-			sbasblock->UDREIacu=malloc(sizeof(int)*51);		//Message 6 has 51 UDREI
-			sbasblock->UDREacu=malloc(sizeof(double)*51);		//Message 6 has 51 UDRE
-			sbasblock->UDREacusigma=malloc(sizeof(double)*51);	//Message 6 has 51 UDRE
-
-
+		case INTEGRITYINFO: /*MT 6*/
 			//Reading data
 			for(i=0;i<4;i++) {
-				getstr(aux,binarystring,14+2*i,2);		//Extract IODFs
+				getstr(aux,binarystring,lengthmessage,14+2*i,2);		//Extract IODFs
 				sbasblock->IODF[i]=strtol(aux,&endptr,2);
 			}
 
 			for(i=0;i<51;i++) {					//Extract UDREIs
-				getstr(aux,binarystring,22+4*i,4);		
+				getstr(aux,binarystring,lengthmessage,22+4*i,4);		
 				sbasblock->UDREIacu[i]=strtol(aux,&endptr,2);
 				sbasblock->UDREacu[i]=udreimeterslist[sbasblock->UDREIacu[i]];	//Get the UDRE meter value from the UDREI
-				sbasblock->UDREacusigma[i]=udreivariancelist[sbasblock->UDREIacu[i]];	//Get the UDRE variance value from the UDREI (meters^2)
+				sbasblock->UDREacusigma[i]=udreivariancelist[sbasblock->UDREIacu[i]];	//Get the UDRE variance value from the UDREI (metres^2)
 			}
 			break;
-		case(FASTCORRECTIONSDEGRADATIONFACTOR):
-			//Allocate memory for the current message type
-			sbasblock->aiind=malloc(sizeof(int)*51);			//Message 7 has 51 ai indicators
-			sbasblock->aifactor=malloc(sizeof(double)*51);			//Message 7 has 51 ai indicators
-			sbasblock->timeoutintervalnonprecise=malloc(sizeof(int)*51);	//Message 7 has 51 ai indicators
-			sbasblock->timeoutintervalprecise=malloc(sizeof(int)*51);	//Message 7 has 51 ai indicators
-			sbasblock->fastcorrupdateinterval=malloc(sizeof(int)*51);	//Message 7 has 51 ai indicators
-				
+		case FASTCORRECTIONSDEGRADATIONFACTOR: /*MT 7*/
 			//Reading data
-			getstr(aux,binarystring,14,4);				//Extract tlat
+			getstr(aux,binarystring,lengthmessage,14,4);				//Extract tlat
 			sbasblock->tlat=strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,18,2);				//Extract IODP
+			getstr(aux,binarystring,lengthmessage,18,2);				//Extract IODP
 			sbasblock->IODP=strtol(aux,&endptr,2);
 
 
 			for(i=0;i<51;i++) {					//Extract ai indicators
-				getstr(aux,binarystring,22+4*i,4);		
+				getstr(aux,binarystring,lengthmessage,22+4*i,4);		
 				sbasblock->aiind[i]=strtol(aux,&endptr,2);
 				sbasblock->aifactor[i]=fastcorrdegfactorlist[sbasblock->aiind[i]];				//Get the fast correction degradation factor
 				sbasblock->timeoutintervalnonprecise[i]=timeoutintervalnonpreciselist[sbasblock->aiind[i]];	//Get the the user timeout interval for non precise approach (seconds)
@@ -7632,63 +10602,60 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
 				sbasblock->fastcorrupdateinterval[i]=maxfastcorrupdateintervallist[sbasblock->aiind[i]];	//Get the maximum fast correction update interval (seconds)
 			}
 			break;
-		case(DEGRADATIONPARAMETERS):
-			//Allocate memory for the current message type		
-			sbasblock->degradationfactors=malloc(sizeof(double)*16);               //Message 10 has 16 degradation factors
-
+		case DEGRADATIONPARAMETERS: /*MT 10*/
 
 			//Reading data
-			getstr(aux,binarystring,14,10);                         //Extract Brrc (in meters)
-			sbasblock->degradationfactors[BRRC]=0.002*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,14,10);                         //Extract Brrc (in metres)
+			sbasblock->degradationfactors[BRRC]=0.002*(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,24,10);                         //Extract Cltc_lsb (in meters)
-			sbasblock->degradationfactors[CLTCLSB]=0.002*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,24,10);                         //Extract Cltc_lsb (in metres)
+			sbasblock->degradationfactors[CLTCLSB]=0.002*(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,34,10);                         //Extract Cltc_v1 (in meters/second)
-			sbasblock->degradationfactors[CLTCV1]=0.00005*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,34,10);                         //Extract Cltc_v1 (in metres/second)
+			sbasblock->degradationfactors[CLTCV1]=0.00005*(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,44,9);				//Extract Iltc_v1 (in seconds)
-			sbasblock->degradationfactors[ILTCV1]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,44,9);				//Extract Iltc_v1 (in seconds)
+			sbasblock->degradationfactors[ILTCV1]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,53,10);                         //Extract Cltc_v0 (in meters)
-			sbasblock->degradationfactors[CLTCV0]=0.002*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,53,10);                         //Extract Cltc_v0 (in metres)
+			sbasblock->degradationfactors[CLTCV0]=0.002*(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,63,9);                          //Extract Iltc_v0 (in seconds)
-			sbasblock->degradationfactors[ILTCV0]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,63,9);                          //Extract Iltc_v0 (in seconds)
+			sbasblock->degradationfactors[ILTCV0]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,72,10);                         //Extract Cgeo_lsb (in meters)
-			sbasblock->degradationfactors[CGEOLSB]=0.0005*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,72,10);                         //Extract Cgeo_lsb (in metres)
+			sbasblock->degradationfactors[CGEOLSB]=0.0005*(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,82,10);                         //Extract Cgeo_v (in meters/second)
-			sbasblock->degradationfactors[CGEOV]=0.00005*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,82,10);                         //Extract Cgeo_v (in metres/second)
+			sbasblock->degradationfactors[CGEOV]=0.00005*(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,92,9);	                        //Extract Igeo (in seconds)
-			sbasblock->degradationfactors[IGEO]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,92,9);	                        //Extract Igeo (in seconds)
+			sbasblock->degradationfactors[IGEO]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,101,6);                         //Extract Cer (in meters)
-			sbasblock->degradationfactors[CER]=0.5*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,101,6);                         //Extract Cer (in metres)
+			sbasblock->degradationfactors[CER]=0.5*(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,107,10);                         //Extract Ciono_step (in meters)
-			sbasblock->degradationfactors[CIONOSTEP]=0.001*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,107,10);                         //Extract Ciono_step (in metres)
+			sbasblock->degradationfactors[CIONOSTEP]=0.001*(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,117,9);	                         //Extract Iiono (in seconds)
-			sbasblock->degradationfactors[IIONO]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,117,9);	                         //Extract Iiono (in seconds)
+			sbasblock->degradationfactors[IIONO]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,126,10);                         //Extract Ciono ramp (in meters/second)
-			sbasblock->degradationfactors[CIONORAMP]=0.000005*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,126,10);                         //Extract Ciono ramp (in metres/second)
+			sbasblock->degradationfactors[CIONORAMP]=0.000005*(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,136,1);                         //Extract RSSudre (unitless)
-			sbasblock->degradationfactors[RSSUDRE]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,136,1);                         //Extract RSSudre (unitless)
+			sbasblock->degradationfactors[RSSUDRE]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,137,1);                         //Extract RSSiono (unitless)
-			sbasblock->degradationfactors[RSSIONO]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,137,1);                         //Extract RSSiono (unitless)
+			sbasblock->degradationfactors[RSSIONO]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,138,7);                         //Extract Ccovariance (unitless)
-			sbasblock->degradationfactors[CCOVARIANCE]=0.1*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,138,7);                         //Extract Ccovariance (unitless)
+			sbasblock->degradationfactors[CCOVARIANCE]=0.1*(double)strtol(aux,&endptr,2);
 
 			break;
 
-		case(LONGTERMSATELLITECORRECTIONS):
+		case LONGTERMSATELLITECORRECTIONS: /*MT 25*/
 			//First we need to check the value of the two velocity code bits in the message, in order to know how many satellites are needed
 			//Initially, we will have, at least, data for two satellites, but we can have data for three of four satellites depending on the velocity code
 			//If velocity code is 0, then each half of the message contains clock offset and position error components estimates for two satellites
@@ -7696,358 +10663,376 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
 			ret=2;					//Initially there will be at least two satellites
 			if(binarystring[14]=='0') ret+=1;	//Check if there are two satellites in the first half of the message
 			if(binarystring[120]=='0') ret+=1;	//Check if there are two satellites in the second half of the message
-			//Allocate memory for the current message type and initialize values to -1
-			sbasblock->longtermsaterrcorrections=malloc(sizeof(double*)*ret);	//One block for each satellite
 			sbasblock->numlongtermsaterrcorrections=ret;				//Save the number of satellites in the block			
 			for(i=0;i<sbasblock->numlongtermsaterrcorrections;i++) {
-				sbasblock->longtermsaterrcorrections[i]=NULL;
-				sbasblock->longtermsaterrcorrections[i]=malloc(sizeof(double)*13);	//With velocity code equal to 1, there are 13 values to save (8 with velocity code equal to 0)
-				for(j=0;j<13;j++) {
+				for(j=0;j<15;j++) {
 					sbasblock->longtermsaterrcorrections[i][j]=9999;		//9999 means value not set. If velocity code is 0, some slots will not be set
 				}
 			}
 
-
 			//Reading first half of message
 
-			getstr(aux,binarystring,14,1);
+			getstr(aux,binarystring,lengthmessage,14,1);
 			if(strtol(aux,&endptr,2)==0) {		//Check if velocity code equal to 0
 				for(i=0;i<2;i++) {							//Loop to read the first two satellites when velocity code equal to 0
-					getstr(aux,binarystring,14,1);							//Velocity code
-					sbasblock->longtermsaterrcorrections[i][VELOCITYCODE]=strtol(aux,&endptr,2);	
+					getstr(aux,binarystring,lengthmessage,14,1);							//Velocity code
+					sbasblock->longtermsaterrcorrections[i][VELOCITYCODE]=(double)strtol(aux,&endptr,2);	
 
-					getstr(aux,binarystring,15+i*51,6);						//PRN Mask Number
-					sbasblock->longtermsaterrcorrections[i][PRNMASKNUMBER]=strtol(aux,&endptr,2);	
+					getstr(aux,binarystring,lengthmessage,15+i*51,6);						//PRN Mask Number
+					sbasblock->longtermsaterrcorrections[i][PRNMASKNUMBER]=(double)strtol(aux,&endptr,2);	
 					if(sbasblock->longtermsaterrcorrections[i][PRNMASKNUMBER]>51) return -7;
 
-					getstr(aux,binarystring,21+i*51,8);						//Issue of Data
-					sbasblock->longtermsaterrcorrections[i][ISSUEOFDATA]=strtol(aux,&endptr,2);	
+					getstr(aux,binarystring,lengthmessage,21+i*51,8);						//Issue of Data
+					sbasblock->longtermsaterrcorrections[i][ISSUEOFDATA]=(double)strtol(aux,&endptr,2);	
 
-					getstr(aux,binarystring,29+i*51,9);						//Delta X
-					sbasblock->longtermsaterrcorrections[i][DELTAX]=0.125*twocomplementstrbintointeger(aux,9); //Delta X has a resolution of 0.125 meters	
+					getstr(aux,binarystring,lengthmessage,29+i*51,9);						//Delta X
+					sbasblock->longtermsaterrcorrections[i][DELTAX]=0.125*(double)twocomplementstrbintointeger(aux,9); //Delta X has a resolution of 0.125 metres	
 				
-					getstr(aux,binarystring,38+i*51,9);						//Delta Y
-					sbasblock->longtermsaterrcorrections[i][DELTAY]=0.125*twocomplementstrbintointeger(aux,9); //Delta Y has a resolution of 0.125 meters
+					getstr(aux,binarystring,lengthmessage,38+i*51,9);						//Delta Y
+					sbasblock->longtermsaterrcorrections[i][DELTAY]=0.125*(double)twocomplementstrbintointeger(aux,9); //Delta Y has a resolution of 0.125 metres
 
-					getstr(aux,binarystring,47+i*51,9);						//Delta Z
-					sbasblock->longtermsaterrcorrections[i][DELTAZ]=0.125*twocomplementstrbintointeger(aux,9); //Delta Z has a resolution of 0.125 meters	
+					getstr(aux,binarystring,lengthmessage,47+i*51,9);						//Delta Z
+					sbasblock->longtermsaterrcorrections[i][DELTAZ]=0.125*(double)twocomplementstrbintointeger(aux,9); //Delta Z has a resolution of 0.125 metres	
 
-					getstr(aux,binarystring,56+i*51,10);						//Delta A f0
-					sbasblock->longtermsaterrcorrections[i][DELTAAF0]=pow(2,-31)*twocomplementstrbintointeger(aux,10); //Delta A f0 has a resolution of 2^-31 seconds
+					getstr(aux,binarystring,lengthmessage,56+i*51,10);						//Delta A f0
+					sbasblock->longtermsaterrcorrections[i][DELTAAF0]=pow(2,-31)*(double)twocomplementstrbintointeger(aux,10); //Delta A f0 has a resolution of 2^-31 seconds
 
-					getstr(aux,binarystring,117,2);							//IODP (common for all satellites)
-					sbasblock->longtermsaterrcorrections[i][IODPPOSITION]=strtol(aux,&endptr,2); 	
+					getstr(aux,binarystring,lengthmessage,117,2);							//IODP (common for all satellites)
+					sbasblock->longtermsaterrcorrections[i][IODPPOSITION]=(double)strtol(aux,&endptr,2); 	
+
+					//GLONASS SDCM terms
+					getstr(aux,binarystring,lengthmessage,21+i*51,3);							//Delay time (for GLONASS satellites only in SDCM)
+					sbasblock->longtermsaterrcorrections[i][GLODELAYTIME]=30.*(double)strtol(aux,&endptr,2);	
+
+					getstr(aux,binarystring,lengthmessage,24+i*51,5);							//Operation time (for GLONASS satellites only in SDCM)
+					sbasblock->longtermsaterrcorrections[i][GLOOPERATIONTIME]=30.*(double)strtol(aux,&endptr,2);	
 				}
 			} else {			//Velocity code equal to 1
-				getstr(aux,binarystring,14,1);							//Velocity code
-				sbasblock->longtermsaterrcorrections[0][VELOCITYCODE]=strtol(aux,&endptr,2);	
+				getstr(aux,binarystring,lengthmessage,14,1);							//Velocity code
+				sbasblock->longtermsaterrcorrections[0][VELOCITYCODE]=(double)strtol(aux,&endptr,2);	
 
-				getstr(aux,binarystring,15,6);							//PRN Mask Number
-				sbasblock->longtermsaterrcorrections[0][PRNMASKNUMBER]=strtol(aux,&endptr,2);	
+				getstr(aux,binarystring,lengthmessage,15,6);							//PRN Mask Number
+				sbasblock->longtermsaterrcorrections[0][PRNMASKNUMBER]=(double)strtol(aux,&endptr,2);	
 				if(sbasblock->longtermsaterrcorrections[0][PRNMASKNUMBER]>51) return -7;
 
-				getstr(aux,binarystring,21,8);							//Issue of Data
-				sbasblock->longtermsaterrcorrections[0][ISSUEOFDATA]=strtol(aux,&endptr,2);	
+				getstr(aux,binarystring,lengthmessage,21,8);							//Issue of Data
+				sbasblock->longtermsaterrcorrections[0][ISSUEOFDATA]=(double)strtol(aux,&endptr,2);	
 
-				getstr(aux,binarystring,29,11);							//Delta X
-				sbasblock->longtermsaterrcorrections[0][DELTAX]=0.125*twocomplementstrbintointeger(aux,11); //Delta X has a resolution of 0.125 meters	
+				getstr(aux,binarystring,lengthmessage,29,11);							//Delta X
+				sbasblock->longtermsaterrcorrections[0][DELTAX]=0.125*(double)twocomplementstrbintointeger(aux,11); //Delta X has a resolution of 0.125 metres	
 			
-				getstr(aux,binarystring,40,11);							//Delta Y
-				sbasblock->longtermsaterrcorrections[0][DELTAY]=0.125*twocomplementstrbintointeger(aux,11); //Delta Y has a resolution of 0.125 meters
+				getstr(aux,binarystring,lengthmessage,40,11);							//Delta Y
+				sbasblock->longtermsaterrcorrections[0][DELTAY]=0.125*(double)twocomplementstrbintointeger(aux,11); //Delta Y has a resolution of 0.125 metres
 
-				getstr(aux,binarystring,51,11);							//Delta Z
-				sbasblock->longtermsaterrcorrections[0][DELTAZ]=0.125*twocomplementstrbintointeger(aux,11); //Delta Z has a resolution of 0.125 meters	
+				getstr(aux,binarystring,lengthmessage,51,11);							//Delta Z
+				sbasblock->longtermsaterrcorrections[0][DELTAZ]=0.125*(double)twocomplementstrbintointeger(aux,11); //Delta Z has a resolution of 0.125 metres	
 
-				getstr(aux,binarystring,62,11);							//Delta A f0
-				sbasblock->longtermsaterrcorrections[0][DELTAAF0]=pow(2,-31)*twocomplementstrbintointeger(aux,11); //Delta A f0 has a resolution of 2^-31 seconds
+				getstr(aux,binarystring,lengthmessage,62,11);							//Delta A f0
+				sbasblock->longtermsaterrcorrections[0][DELTAAF0]=pow(2,-31)*(double)twocomplementstrbintointeger(aux,11); //Delta A f0 has a resolution of 2^-31 seconds
 
-				getstr(aux,binarystring,73,8);							//Delta X Rate of Change
-				sbasblock->longtermsaterrcorrections[0][DELTAXRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta X Rate has a resolution of 2^-11 meters/second
+				getstr(aux,binarystring,lengthmessage,73,8);							//Delta X Rate of Change
+				sbasblock->longtermsaterrcorrections[0][DELTAXRATEOFCHANGE]=pow(2,-11)*(double)twocomplementstrbintointeger(aux,8); //Delta X Rate has a resolution of 2^-11 metres/second
 				
-				getstr(aux,binarystring,81,8);							//Delta Y Rate of Change
-				sbasblock->longtermsaterrcorrections[0][DELTAYRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta Y Rate has a resolution of 2^-11 meters/second
+				getstr(aux,binarystring,lengthmessage,81,8);							//Delta Y Rate of Change
+				sbasblock->longtermsaterrcorrections[0][DELTAYRATEOFCHANGE]=pow(2,-11)*(double)twocomplementstrbintointeger(aux,8); //Delta Y Rate has a resolution of 2^-11 metres/second
 				
-				getstr(aux,binarystring,89,8);							//Delta Z Rate of Change
-				sbasblock->longtermsaterrcorrections[0][DELTAZRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta Z Rate has a resolution of 2^-11 meters/second
+				getstr(aux,binarystring,lengthmessage,89,8);							//Delta Z Rate of Change
+				sbasblock->longtermsaterrcorrections[0][DELTAZRATEOFCHANGE]=pow(2,-11)*(double)twocomplementstrbintointeger(aux,8); //Delta Z Rate has a resolution of 2^-11 metres/second
 
-				getstr(aux,binarystring,97,8);							//Delta A f1
-				sbasblock->longtermsaterrcorrections[0][DELTAAF1]=pow(2,-39)*twocomplementstrbintointeger(aux,8); //Delta A f1 has a resolution of 2^-39 meters/second
+				getstr(aux,binarystring,lengthmessage,97,8);							//Delta A f1
+				sbasblock->longtermsaterrcorrections[0][DELTAAF1]=pow(2,-39)*(double)twocomplementstrbintointeger(aux,8); //Delta A f1 has a resolution of 2^-39 metres/second
 
-				getstr(aux,binarystring,105,13);						//Time of Day Applicability to
-				sbasblock->longtermsaterrcorrections[0][TIMEOFDAYAPPLICABILITY]=16*strtol(aux,&endptr,2); //Time of Day Applicability to has a resolution of 16 seconds
+				getstr(aux,binarystring,lengthmessage,105,13);						//Time of Day Applicability to
+				sbasblock->longtermsaterrcorrections[0][TIMEOFDAYAPPLICABILITY]=16.*(double)strtol(aux,&endptr,2); //Time of Day Applicability to has a resolution of 16 seconds
 				if((int)sbasblock->longtermsaterrcorrections[0][TIMEOFDAYAPPLICABILITY]>86384) return -5;
 				
-				getstr(aux,binarystring,118,2);							//IODP
-				sbasblock->longtermsaterrcorrections[0][IODPPOSITION]=strtol(aux,&endptr,2); 
+				getstr(aux,binarystring,lengthmessage,118,2);							//IODP
+				sbasblock->longtermsaterrcorrections[0][IODPPOSITION]=(double)strtol(aux,&endptr,2); 
+
+				//GLONASS SDCM terms
+				getstr(aux,binarystring,lengthmessage,21,3);							//Delay time (for GLONASS satellites only in SDCM)
+				sbasblock->longtermsaterrcorrections[0][GLODELAYTIME]=30.*(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,24,5);							//Operation time (for GLONASS satellites only in SDCM)
+				sbasblock->longtermsaterrcorrections[0][GLOOPERATIONTIME]=30.*(double)strtol(aux,&endptr,2);	
 			}
 
 			//Reading second half of message
-			ret=sbasblock->longtermsaterrcorrections[0][VELOCITYCODE];	//Save previous velocity code value, to know how many satellites we have read
+			ret=(int)sbasblock->longtermsaterrcorrections[0][VELOCITYCODE];	//Save previous velocity code value, to know how many satellites we have read
 			if(ret==0) ret=2;		//Two satellites read
 			//else if(ret==1)  ret=1;	//One satellite read (the line commented because the action of the else if is useless, due to ret will have the right value
-			getstr(aux,binarystring,120,1);
+			getstr(aux,binarystring,lengthmessage,120,1);
 			if(strtol(aux,&endptr,2)==0) {          //Check if velocity code equal to 0
 				for(i=0;i<2;i++) {                                                      //Loop to read the first two satellites when velocity code equal to 0
-					getstr(aux,binarystring,120,1);                                                  //Velocity code
-					sbasblock->longtermsaterrcorrections[i+ret][VELOCITYCODE]=strtol(aux,&endptr,2);
+					getstr(aux,binarystring,lengthmessage,120,1);                                                  //Velocity code
+					sbasblock->longtermsaterrcorrections[i+ret][VELOCITYCODE]=(double)strtol(aux,&endptr,2);
 
-					getstr(aux,binarystring,121+i*51,6);                                             //PRN Mask Number
-					sbasblock->longtermsaterrcorrections[i+ret][PRNMASKNUMBER]=strtol(aux,&endptr,2);
-					if(sbasblock->longtermsaterrcorrections[i+ret][PRNMASKNUMBER]>51) return -7;
+					getstr(aux,binarystring,lengthmessage,121+i*51,6);                                             //PRN Mask Number
+					sbasblock->longtermsaterrcorrections[i+ret][PRNMASKNUMBER]=(double)strtol(aux,&endptr,2);
+					if((int)sbasblock->longtermsaterrcorrections[i+ret][PRNMASKNUMBER]>51) return -7;
 
-					getstr(aux,binarystring,127+i*51,8);                                             //Issue of Data
-					sbasblock->longtermsaterrcorrections[i+ret][ISSUEOFDATA]=strtol(aux,&endptr,2);
+					getstr(aux,binarystring,lengthmessage,127+i*51,8);                                             //Issue of Data
+					sbasblock->longtermsaterrcorrections[i+ret][ISSUEOFDATA]=(double)strtol(aux,&endptr,2);
 
-					getstr(aux,binarystring,135+i*51,9);                                             //Delta X
-					sbasblock->longtermsaterrcorrections[i+ret][DELTAX]=0.125*twocomplementstrbintointeger(aux,9); //Delta X has a resolution of 0.125 meters  
+					getstr(aux,binarystring,lengthmessage,135+i*51,9);                                             //Delta X
+					sbasblock->longtermsaterrcorrections[i+ret][DELTAX]=0.125*(double)twocomplementstrbintointeger(aux,9); //Delta X has a resolution of 0.125 metres  
 
-					getstr(aux,binarystring,144+i*51,9);                                             //Delta Y
-					sbasblock->longtermsaterrcorrections[i+ret][DELTAY]=0.125*twocomplementstrbintointeger(aux,9); //Delta Y has a resolution of 0.125 meters
+					getstr(aux,binarystring,lengthmessage,144+i*51,9);                                             //Delta Y
+					sbasblock->longtermsaterrcorrections[i+ret][DELTAY]=0.125*(double)twocomplementstrbintointeger(aux,9); //Delta Y has a resolution of 0.125 metres
 
-					getstr(aux,binarystring,153+i*51,9);                                             //Delta Z
-					sbasblock->longtermsaterrcorrections[i+ret][DELTAZ]=0.125*twocomplementstrbintointeger(aux,9); //Delta Z has a resolution of 0.125 meters  
+					getstr(aux,binarystring,lengthmessage,153+i*51,9);                                             //Delta Z
+					sbasblock->longtermsaterrcorrections[i+ret][DELTAZ]=0.125*(double)twocomplementstrbintointeger(aux,9); //Delta Z has a resolution of 0.125 metres  
 
-					getstr(aux,binarystring,162+i*51,10);                                            //Delta A f0
-					sbasblock->longtermsaterrcorrections[i+ret][DELTAAF0]=pow(2,-31)*twocomplementstrbintointeger(aux,10); //Delta A f0 has a resolution of 2^-31 seconds
+					getstr(aux,binarystring,lengthmessage,162+i*51,10);                                            //Delta A f0
+					sbasblock->longtermsaterrcorrections[i+ret][DELTAAF0]=pow(2,-31)*(double)twocomplementstrbintointeger(aux,10); //Delta A f0 has a resolution of 2^-31 seconds
 
-					getstr(aux,binarystring,223,2);                                                 //IODP (common for all satellites)
-					sbasblock->longtermsaterrcorrections[i+ret][IODPPOSITION]=strtol(aux,&endptr,2);
+					getstr(aux,binarystring,lengthmessage,223,2);                                                 //IODP (common for all satellites)
+					sbasblock->longtermsaterrcorrections[i+ret][IODPPOSITION]=(double)strtol(aux,&endptr,2);
+
+					//GLONASS SDCM terms
+					getstr(aux,binarystring,lengthmessage,127+i*51,3);							//Delay time (for GLONASS satellites only in SDCM)
+					sbasblock->longtermsaterrcorrections[i+ret][GLODELAYTIME]=30.*(double)strtol(aux,&endptr,2);	
+
+					getstr(aux,binarystring,lengthmessage,130+i*51,5);							//Operation time (for GLONASS satellites only in SDCM)
+					sbasblock->longtermsaterrcorrections[i+ret][GLOOPERATIONTIME]=30.*(double)strtol(aux,&endptr,2);	
 				}
 			} else {                        //Velocity code equal to 1
-				getstr(aux,binarystring,120,1);                                                  //Velocity code
-				sbasblock->longtermsaterrcorrections[ret][VELOCITYCODE]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,120,1);                                                  //Velocity code
+				sbasblock->longtermsaterrcorrections[ret][VELOCITYCODE]=(double)strtol(aux,&endptr,2);
 
-				getstr(aux,binarystring,121,6);                                                  //PRN Mask Number
-				sbasblock->longtermsaterrcorrections[ret][PRNMASKNUMBER]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,121,6);                                                  //PRN Mask Number
+				sbasblock->longtermsaterrcorrections[ret][PRNMASKNUMBER]=(double)strtol(aux,&endptr,2);
 				if(sbasblock->longtermsaterrcorrections[ret][PRNMASKNUMBER]>51) return -7;
 
-				getstr(aux,binarystring,127,8);                                                  //Issue of Data
-				sbasblock->longtermsaterrcorrections[ret][ISSUEOFDATA]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,127,8);                                                  //Issue of Data
+				sbasblock->longtermsaterrcorrections[ret][ISSUEOFDATA]=(double)strtol(aux,&endptr,2);
 
-				getstr(aux,binarystring,135,11);                                        	 //Delta X
-				sbasblock->longtermsaterrcorrections[ret][DELTAX]=0.125*twocomplementstrbintointeger(aux,11); //Delta X has a resolution of 0.125 meters 
+				getstr(aux,binarystring,lengthmessage,135,11);                                        	 //Delta X
+				sbasblock->longtermsaterrcorrections[ret][DELTAX]=0.125*(double)twocomplementstrbintointeger(aux,11); //Delta X has a resolution of 0.125 metres 
 
-				getstr(aux,binarystring,146,11);                                      		 //Delta Y
-				sbasblock->longtermsaterrcorrections[ret][DELTAY]=0.125*twocomplementstrbintointeger(aux,11); //Delta Y has a resolution of 0.125 meters
+				getstr(aux,binarystring,lengthmessage,146,11);                                      		 //Delta Y
+				sbasblock->longtermsaterrcorrections[ret][DELTAY]=0.125*(double)twocomplementstrbintointeger(aux,11); //Delta Y has a resolution of 0.125 metres
 
-				getstr(aux,binarystring,157,11);                                        	 //Delta Z
-				sbasblock->longtermsaterrcorrections[ret][DELTAZ]=0.125*twocomplementstrbintointeger(aux,11); //Delta Z has a resolution of 0.125 meters 
+				getstr(aux,binarystring,lengthmessage,157,11);                                        	 //Delta Z
+				sbasblock->longtermsaterrcorrections[ret][DELTAZ]=0.125*(double)twocomplementstrbintointeger(aux,11); //Delta Z has a resolution of 0.125 metres 
 
-				getstr(aux,binarystring,168,11);                                      		 //Delta A f0
-				sbasblock->longtermsaterrcorrections[ret][DELTAAF0]=pow(2,-31)*twocomplementstrbintointeger(aux,11); //Delta A f0 has a resolution of 2^-31 seconds
+				getstr(aux,binarystring,lengthmessage,168,11);                                      		 //Delta A f0
+				sbasblock->longtermsaterrcorrections[ret][DELTAAF0]=pow(2,-31)*(double)twocomplementstrbintointeger(aux,11); //Delta A f0 has a resolution of 2^-31 seconds
 
-				getstr(aux,binarystring,179,8);                                          	 //Delta X Rate of Change
-				sbasblock->longtermsaterrcorrections[ret][DELTAXRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta X Rate has a resolution of 2^-11 meters/second
+				getstr(aux,binarystring,lengthmessage,179,8);                                          	 //Delta X Rate of Change
+				sbasblock->longtermsaterrcorrections[ret][DELTAXRATEOFCHANGE]=pow(2,-11)*(double)twocomplementstrbintointeger(aux,8); //Delta X Rate has a resolution of 2^-11 metres/second
 
-				getstr(aux,binarystring,187,8);                                          	 //Delta Y Rate of Change
-				sbasblock->longtermsaterrcorrections[ret][DELTAYRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta Y Rate has a resolution of 2^-11 meters/second
+				getstr(aux,binarystring,lengthmessage,187,8);                                          	 //Delta Y Rate of Change
+				sbasblock->longtermsaterrcorrections[ret][DELTAYRATEOFCHANGE]=pow(2,-11)*(double)twocomplementstrbintointeger(aux,8); //Delta Y Rate has a resolution of 2^-11 metres/second
 
-				getstr(aux,binarystring,195,8);                                          	 //Delta Z Rate of Change
-				sbasblock->longtermsaterrcorrections[ret][DELTAZRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta Z Rate has a resolution of 2^-11 meters/second
+				getstr(aux,binarystring,lengthmessage,195,8);                                          	 //Delta Z Rate of Change
+				sbasblock->longtermsaterrcorrections[ret][DELTAZRATEOFCHANGE]=pow(2,-11)*(double)twocomplementstrbintointeger(aux,8); //Delta Z Rate has a resolution of 2^-11 metres/second
 
-				getstr(aux,binarystring,203,8);                                          	 //Delta A f1
-				sbasblock->longtermsaterrcorrections[ret][DELTAAF1]=pow(2,-39)*twocomplementstrbintointeger(aux,8); //Delta A f1 has a resolution of 2^-39 meters/second
+				getstr(aux,binarystring,lengthmessage,203,8);                                          	 //Delta A f1
+				sbasblock->longtermsaterrcorrections[ret][DELTAAF1]=pow(2,-39)*(double)twocomplementstrbintointeger(aux,8); //Delta A f1 has a resolution of 2^-39 metres/second
 
-				getstr(aux,binarystring,211,13);                                        	 //Time of Day Applicability to
-				sbasblock->longtermsaterrcorrections[ret][TIMEOFDAYAPPLICABILITY]=16*strtol(aux,&endptr,2); //Time of Day Applicability to has a resolution of 16 seconds
+				getstr(aux,binarystring,lengthmessage,211,13);                                        	 //Time of Day Applicability to
+				sbasblock->longtermsaterrcorrections[ret][TIMEOFDAYAPPLICABILITY]=16.*(double)strtol(aux,&endptr,2); //Time of Day Applicability to has a resolution of 16 seconds
 				if((int)sbasblock->longtermsaterrcorrections[ret][TIMEOFDAYAPPLICABILITY]>86384) return -5;
 
-				getstr(aux,binarystring,224,2);                                         	 //IODP
-				sbasblock->longtermsaterrcorrections[ret][IODPPOSITION]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,224,2);                                         	 //IODP
+				sbasblock->longtermsaterrcorrections[ret][IODPPOSITION]=(double)strtol(aux,&endptr,2);
+
+				//GLONASS SDCM terms
+				getstr(aux,binarystring,lengthmessage,127,3);							//Delay time (for GLONASS satellites only in SDCM)
+				sbasblock->longtermsaterrcorrections[ret][GLODELAYTIME]=30.*(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,130,5);							//Operation time (for GLONASS satellites only in SDCM)
+				sbasblock->longtermsaterrcorrections[ret][GLOOPERATIONTIME]=30.*(double)strtol(aux,&endptr,2);	
 			}
 			break;
 
-		case(MIXEDFASTLONGTERMCORRECTIONS):
-			//Allocate memory for fast corrections
-			sbasblock->IODF=malloc(sizeof(int));			//Message 24 only have one IODF
-			sbasblock->PRC=malloc(sizeof(double)*6);		//Message 24 has corrections for 6 satellites 
-			sbasblock->UDREI=malloc(sizeof(int)*6);		//Message 24 hascorrections for 6 satellites
-			sbasblock->UDRE=malloc(sizeof(double)*6);    		//Message 24 has corrections for 6 satellites
-			sbasblock->UDREsigma=malloc(sizeof(double)*6); 		//Message 24 has corrections for 6 satellites
-			
-			//Allocate memory for long term satellite error corrections
+		case MIXEDFASTLONGTERMCORRECTIONS: /*MT 24*/
 			ret=1;					//Initially there will be at least two satellites
 			if(binarystring[120]=='0') ret+=1;	//Check if there are two satellites in the half of the message
-			sbasblock->longtermsaterrcorrections=malloc(sizeof(double*)*ret);	//One block for each satellite
 			sbasblock->numlongtermsaterrcorrections=ret;				//Save the number of satellites in the block			
 			for(i=0;i<sbasblock->numlongtermsaterrcorrections;i++) {
-				sbasblock->longtermsaterrcorrections[i]=NULL;
-				sbasblock->longtermsaterrcorrections[i]=malloc(sizeof(double)*13);	//With velocity code equal to 1, there are 13 values to save (8 with velocity code equal to 0)
-				for(j=0;j<13;j++) {
+				for(j=0;j<15;j++) {
 					sbasblock->longtermsaterrcorrections[i][j]=9999;		//9999 means value not set. If velocity code is 0, some slots will not be set
 				}
 			}
 
 			//Read fast corrections
 			for(i=0;i<6;i++) {					//Extract PRC Fast corrections (PRC has sign bit)
-				getstr(aux,binarystring,14+i*12,12);
-				sbasblock->PRC[i]=0.125*twocomplementstrbintointeger(aux,12); //PRC has a resolution of 0.125 meters
+				getstr(aux,binarystring,lengthmessage,14+i*12,12);
+				sbasblock->PRC[i]=0.125*(double)twocomplementstrbintointeger(aux,12); //PRC has a resolution of 0.125 metres
 			}
 			
 			for(i=0;i<6;i++) {					//Extract UDREIs
-				getstr(aux,binarystring,86+i*4,4);
+				getstr(aux,binarystring,lengthmessage,86+i*4,4);
 				sbasblock->UDREI[i]=strtol(aux,&endptr,2);	
 				sbasblock->UDRE[i]=udreimeterslist[sbasblock->UDREI[i]];	//Get the UDRE meter value from the UDREI
 				sbasblock->UDREsigma[i]=udreivariancelist[sbasblock->UDREI[i]];	//Get the UDRE variance value from the UDREI
 			}
 
-			getstr(aux,binarystring,110,2);				//Extract IODP
+			getstr(aux,binarystring,lengthmessage,110,2);				//Extract IODP
 			sbasblock->IODP=strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,112,2);				//Extract Block ID
+			getstr(aux,binarystring,lengthmessage,112,2);				//Extract Block ID
 			sbasblock->BlockID=strtol(aux,&endptr,2)+2;		//Block ID need to be added two because with 2 bits we have the range 0-3, but messages type are in range 2-5
 
-			getstr(aux,binarystring,114,2);				//Extract IODF
+			getstr(aux,binarystring,lengthmessage,114,2);				//Extract IODF
 			sbasblock->IODF[0]=strtol(aux,&endptr,2);
 
 
 			//Read long term satellite error corrections
-			getstr(aux,binarystring,120,1);
+			getstr(aux,binarystring,lengthmessage,120,1);
 			if(strtol(aux,&endptr,2)==0) {          //Check if velocity code equal to 0
 				for(i=0;i<2;i++) {                                                      //Loop to read the first two satellites when velocity code equal to 0
-					getstr(aux,binarystring,120,1);                                                  //Velocity code
-					sbasblock->longtermsaterrcorrections[i][VELOCITYCODE]=strtol(aux,&endptr,2);
+					getstr(aux,binarystring,lengthmessage,120,1);                                                  //Velocity code
+					sbasblock->longtermsaterrcorrections[i][VELOCITYCODE]=(double)strtol(aux,&endptr,2);
 
-					getstr(aux,binarystring,121+i*51,6);                                             //PRN Mask Number
-					sbasblock->longtermsaterrcorrections[i][PRNMASKNUMBER]=strtol(aux,&endptr,2);
-					if(sbasblock->longtermsaterrcorrections[i][PRNMASKNUMBER]>51) return -7;
+					getstr(aux,binarystring,lengthmessage,121+i*51,6);                                             //PRN Mask Number
+					sbasblock->longtermsaterrcorrections[i][PRNMASKNUMBER]=(double)strtol(aux,&endptr,2);
+					if((int)sbasblock->longtermsaterrcorrections[i][PRNMASKNUMBER]>51) return -7;
 
-					getstr(aux,binarystring,127+i*51,8);                                             //Issue of Data
-					sbasblock->longtermsaterrcorrections[i][ISSUEOFDATA]=strtol(aux,&endptr,2);
+					getstr(aux,binarystring,lengthmessage,127+i*51,8);                                             //Issue of Data
+					sbasblock->longtermsaterrcorrections[i][ISSUEOFDATA]=(double)strtol(aux,&endptr,2);
 
-					getstr(aux,binarystring,135+i*51,9);                                             //Delta X
-					sbasblock->longtermsaterrcorrections[i][DELTAX]=0.125*twocomplementstrbintointeger(aux,9); //Delta X has a resolution of 0.125 meters  
+					getstr(aux,binarystring,lengthmessage,135+i*51,9);                                             //Delta X
+					sbasblock->longtermsaterrcorrections[i][DELTAX]=0.125*(double)twocomplementstrbintointeger(aux,9); //Delta X has a resolution of 0.125 metres  
 
-					getstr(aux,binarystring,144+i*51,9);                                             //Delta Y
-					sbasblock->longtermsaterrcorrections[i][DELTAY]=0.125*twocomplementstrbintointeger(aux,9); //Delta Y has a resolution of 0.125 meters
+					getstr(aux,binarystring,lengthmessage,144+i*51,9);                                             //Delta Y
+					sbasblock->longtermsaterrcorrections[i][DELTAY]=0.125*(double)twocomplementstrbintointeger(aux,9); //Delta Y has a resolution of 0.125 metres
 
-					getstr(aux,binarystring,153+i*51,9);                                             //Delta Z
-					sbasblock->longtermsaterrcorrections[i][DELTAZ]=0.125*twocomplementstrbintointeger(aux,9); //Delta Z has a resolution of 0.125 meters  
+					getstr(aux,binarystring,lengthmessage,153+i*51,9);                                             //Delta Z
+					sbasblock->longtermsaterrcorrections[i][DELTAZ]=0.125*(double)twocomplementstrbintointeger(aux,9); //Delta Z has a resolution of 0.125 metres  
 
-					getstr(aux,binarystring,162+i*51,10);                                            //Delta A f0
-					sbasblock->longtermsaterrcorrections[i][DELTAAF0]=pow(2,-31)*twocomplementstrbintointeger(aux,10); //Delta A f0 has a resolution of 2^-31 seconds
+					getstr(aux,binarystring,lengthmessage,162+i*51,10);                                            //Delta A f0
+					sbasblock->longtermsaterrcorrections[i][DELTAAF0]=pow(2,-31)*(double)twocomplementstrbintointeger(aux,10); //Delta A f0 has a resolution of 2^-31 seconds
 
-					getstr(aux,binarystring,223,2);                                                 //IODP (common for all satellites)
-					sbasblock->longtermsaterrcorrections[i][IODPPOSITION]=strtol(aux,&endptr,2);
+					getstr(aux,binarystring,lengthmessage,223,2);                                                 //IODP (common for all satellites)
+					sbasblock->longtermsaterrcorrections[i][IODPPOSITION]=(double)strtol(aux,&endptr,2);
+
+					//GLONASS SDCM terms
+					getstr(aux,binarystring,lengthmessage,127+i*51,3);							//Delay time (for GLONASS satellites only in SDCM)
+					sbasblock->longtermsaterrcorrections[i+ret][GLODELAYTIME]=30.*(double)strtol(aux,&endptr,2);	
+
+					getstr(aux,binarystring,lengthmessage,130+i*51,5);							//Operation time (for GLONASS satellites only in SDCM)
+					sbasblock->longtermsaterrcorrections[i+ret][GLOOPERATIONTIME]=30.*(double)strtol(aux,&endptr,2);	
 				}
 			} else {                        //Velocity code equal to 1
-				getstr(aux,binarystring,120,1);                                                  //Velocity code
-				sbasblock->longtermsaterrcorrections[0][VELOCITYCODE]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,120,1);                                                  //Velocity code
+				sbasblock->longtermsaterrcorrections[0][VELOCITYCODE]=(double)strtol(aux,&endptr,2);
 
-				getstr(aux,binarystring,121,6);                                                  //PRN Mask Number
-				sbasblock->longtermsaterrcorrections[0][PRNMASKNUMBER]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,121,6);                                                  //PRN Mask Number
+				sbasblock->longtermsaterrcorrections[0][PRNMASKNUMBER]=(double)strtol(aux,&endptr,2);
 				if(sbasblock->longtermsaterrcorrections[0][PRNMASKNUMBER]>51) return -7;
 
-				getstr(aux,binarystring,127,8);                                                  //Issue of Data
-				sbasblock->longtermsaterrcorrections[0][ISSUEOFDATA]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,127,8);                                                  //Issue of Data
+				sbasblock->longtermsaterrcorrections[0][ISSUEOFDATA]=(double)strtol(aux,&endptr,2);
 
-				getstr(aux,binarystring,135,11);                                        	 //Delta X
-				sbasblock->longtermsaterrcorrections[0][DELTAX]=0.125*twocomplementstrbintointeger(aux,11); //Delta X has a resolution of 0.125 meters 
+				getstr(aux,binarystring,lengthmessage,135,11);                                        	 //Delta X
+				sbasblock->longtermsaterrcorrections[0][DELTAX]=0.125*(double)twocomplementstrbintointeger(aux,11); //Delta X has a resolution of 0.125 metres 
 
-				getstr(aux,binarystring,146,11);                                      		 //Delta Y
-				sbasblock->longtermsaterrcorrections[0][DELTAY]=0.125*twocomplementstrbintointeger(aux,11); //Delta Y has a resolution of 0.125 meters
+				getstr(aux,binarystring,lengthmessage,146,11);                                      		 //Delta Y
+				sbasblock->longtermsaterrcorrections[0][DELTAY]=0.125*(double)twocomplementstrbintointeger(aux,11); //Delta Y has a resolution of 0.125 metres
 
-				getstr(aux,binarystring,157,11);                                        	 //Delta Z
-				sbasblock->longtermsaterrcorrections[0][DELTAZ]=0.125*twocomplementstrbintointeger(aux,11); //Delta Z has a resolution of 0.125 meters 
+				getstr(aux,binarystring,lengthmessage,157,11);                                        	 //Delta Z
+				sbasblock->longtermsaterrcorrections[0][DELTAZ]=0.125*(double)twocomplementstrbintointeger(aux,11); //Delta Z has a resolution of 0.125 metres 
 
-				getstr(aux,binarystring,168,11);                                      		 //Delta A f0
-				sbasblock->longtermsaterrcorrections[0][DELTAAF0]=pow(2,-31)*twocomplementstrbintointeger(aux,11); //Delta A f0 has a resolution of 2^-31 seconds
+				getstr(aux,binarystring,lengthmessage,168,11);                                      		 //Delta A f0
+				sbasblock->longtermsaterrcorrections[0][DELTAAF0]=pow(2,-31)*(double)twocomplementstrbintointeger(aux,11); //Delta A f0 has a resolution of 2^-31 seconds
 
-				getstr(aux,binarystring,179,8);                                          	 //Delta X Rate of Change
-				sbasblock->longtermsaterrcorrections[0][DELTAXRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta X Rate has a resolution of 2^-11 meters/second
+				getstr(aux,binarystring,lengthmessage,179,8);                                          	 //Delta X Rate of Change
+				sbasblock->longtermsaterrcorrections[0][DELTAXRATEOFCHANGE]=pow(2,-11)*(double)twocomplementstrbintointeger(aux,8); //Delta X Rate has a resolution of 2^-11 metres/second
 
-				getstr(aux,binarystring,187,8);                                          	 //Delta Y Rate of Change
-				sbasblock->longtermsaterrcorrections[0][DELTAYRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta Y Rate has a resolution of 2^-11 meters/second
+				getstr(aux,binarystring,lengthmessage,187,8);                                          	 //Delta Y Rate of Change
+				sbasblock->longtermsaterrcorrections[0][DELTAYRATEOFCHANGE]=pow(2,-11)*(double)twocomplementstrbintointeger(aux,8); //Delta Y Rate has a resolution of 2^-11 metres/second
 
-				getstr(aux,binarystring,195,8);                                          	 //Delta Z Rate of Change
-				sbasblock->longtermsaterrcorrections[0][DELTAZRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta Z Rate has a resolution of 2^-11 meters/second
+				getstr(aux,binarystring,lengthmessage,195,8);                                          	 //Delta Z Rate of Change
+				sbasblock->longtermsaterrcorrections[0][DELTAZRATEOFCHANGE]=pow(2,-11)*(double)twocomplementstrbintointeger(aux,8); //Delta Z Rate has a resolution of 2^-11 metres/second
 
-				getstr(aux,binarystring,203,8);                                          	 //Delta A f1
-				sbasblock->longtermsaterrcorrections[0][DELTAAF1]=pow(2,-39)*twocomplementstrbintointeger(aux,8); //Delta A f1 has a resolution of 2^-39 meters/second
+				getstr(aux,binarystring,lengthmessage,203,8);                                          	 //Delta A f1
+				sbasblock->longtermsaterrcorrections[0][DELTAAF1]=pow(2,-39)*(double)twocomplementstrbintointeger(aux,8); //Delta A f1 has a resolution of 2^-39 metres/second
 
-				getstr(aux,binarystring,211,13);                                        	 //Time of Day Applicability to
-				sbasblock->longtermsaterrcorrections[0][TIMEOFDAYAPPLICABILITY]=16*strtol(aux,&endptr,2); //Time of Day Applicability to has a resolution of 16 seconds
+				getstr(aux,binarystring,lengthmessage,211,13);                                        	 //Time of Day Applicability to
+				sbasblock->longtermsaterrcorrections[0][TIMEOFDAYAPPLICABILITY]=16.*(double)strtol(aux,&endptr,2); //Time of Day Applicability to has a resolution of 16 seconds
 				if((int)sbasblock->longtermsaterrcorrections[0][TIMEOFDAYAPPLICABILITY]>86384) return -5;
 
-				getstr(aux,binarystring,224,2);                                         	 //IODP
-				sbasblock->longtermsaterrcorrections[0][IODPPOSITION]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,224,2);                                         	 //IODP
+				sbasblock->longtermsaterrcorrections[0][IODPPOSITION]=(double)strtol(aux,&endptr,2);
+
+				//GLONASS SDCM terms
+				getstr(aux,binarystring,lengthmessage,127,3);							//Delay time (for GLONASS satellites only in SDCM)
+				sbasblock->longtermsaterrcorrections[0][GLODELAYTIME]=30.*(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,130,5);							//Operation time (for GLONASS satellites only in SDCM)
+				sbasblock->longtermsaterrcorrections[0][GLOOPERATIONTIME]=30.*(double)strtol(aux,&endptr,2);	
 			}
 			break;
-		case(GEONAVIGATIONMESSAGE):
-			//Allocate memory for GEO Navigation message
-			sbasblock->geonavigationmessage=malloc(sizeof(double)*17);	//Message 9 has 17 parameters
-			//sbasblock->URAvalues=malloc(sizeof(double)*3);		//URA values will contain the minimum and maximum values for the range index and a nominal URA value for the given index
-
+		case GEONAVIGATIONMESSAGE: /*MT 9*/
 			//Read message
-			getstr(aux,binarystring,14,8);				//Extract IODN (In MOPS this bits are set as spare). According to RINEX v2.11, this spare bits are the IODN
-			sbasblock->geonavigationmessage[IODN]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,14,8);				//Extract IODN (In MOPS this bits are set as spare). According to RINEX v2.11, this spare bits are the IODN
+			sbasblock->geonavigationmessage[IODNPOS]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,22,13);				//Extract t0 (seconds)
-			sbasblock->geonavigationmessage[T0NAV]=16*strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,22,13);				//Extract t0 (seconds)
+			sbasblock->geonavigationmessage[T0NAV]=16.*(double)strtol(aux,&endptr,2);
 			if((int)sbasblock->geonavigationmessage[T0NAV]>86384) return -5;
 
-			getstr(aux,binarystring,35,4);				//Extract URA index
-			sbasblock->geonavigationmessage[URAINDEX]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,35,4);				//Extract URA index
+			sbasblock->geonavigationmessage[URAINDEX]=(double)strtol(aux,&endptr,2);
 			sbasblock->geonavigationmessage[URAMINRANGE]=minurarangelist[(int)sbasblock->geonavigationmessage[URAINDEX]];
 			sbasblock->geonavigationmessage[URAMAXRANGE]=maxurarangelist[(int)sbasblock->geonavigationmessage[URAINDEX]];
 			sbasblock->geonavigationmessage[URANOMINALVALUE]=uranominalvaluelist[(int)sbasblock->geonavigationmessage[URAINDEX]];
 
-			getstr(aux,binarystring,39,30);				//Extract Xg 
-			sbasblock->geonavigationmessage[XG]=0.08*twocomplementstrbintointeger(aux,30);	//Xg has a resolution of 0.08 meters
+			getstr(aux,binarystring,lengthmessage,39,30);				//Extract Xg 
+			sbasblock->geonavigationmessage[XG]=0.08*(double)twocomplementstrbintointeger(aux,30);	//Xg has a resolution of 0.08 metres
 
-			getstr(aux,binarystring,69,30);				//Extract Yg
-			sbasblock->geonavigationmessage[YG]=0.08*twocomplementstrbintointeger(aux,30);	//Yg has a resolution of 0.08 meters
+			getstr(aux,binarystring,lengthmessage,69,30);				//Extract Yg
+			sbasblock->geonavigationmessage[YG]=0.08*(double)twocomplementstrbintointeger(aux,30);	//Yg has a resolution of 0.08 metres
 
-			getstr(aux,binarystring,99,25);				//Extract Zg
-			sbasblock->geonavigationmessage[ZG]=0.4*twocomplementstrbintointeger(aux,25);	//Zg has a resolution of 0.4 meters
+			getstr(aux,binarystring,lengthmessage,99,25);				//Extract Zg
+			sbasblock->geonavigationmessage[ZG]=0.4*(double)twocomplementstrbintointeger(aux,25);	//Zg has a resolution of 0.4 metres
 
-			getstr(aux,binarystring,124,17);			//Extract Xg Rate of Change
-			sbasblock->geonavigationmessage[XGRATEOFCHANGE]=0.000625*twocomplementstrbintointeger(aux,17);	//Xg Rate of Change has a resolution of 0.000625 meters/second
+			getstr(aux,binarystring,lengthmessage,124,17);			//Extract Xg Rate of Change
+			sbasblock->geonavigationmessage[XGRATEOFCHANGE]=0.000625*(double)twocomplementstrbintointeger(aux,17);	//Xg Rate of Change has a resolution of 0.000625 metres/second
 
-			getstr(aux,binarystring,141,17);			//Extract Yg Rate of Change
-			sbasblock->geonavigationmessage[YGRATEOFCHANGE]=0.000625*twocomplementstrbintointeger(aux,17);	//Yg Rate of Change has a resolution of 0.000625 meters/second
+			getstr(aux,binarystring,lengthmessage,141,17);			//Extract Yg Rate of Change
+			sbasblock->geonavigationmessage[YGRATEOFCHANGE]=0.000625*(double)twocomplementstrbintointeger(aux,17);	//Yg Rate of Change has a resolution of 0.000625 metres/second
 
-			getstr(aux,binarystring,158,18);			//Extract Zg Rate of Change
-			sbasblock->geonavigationmessage[ZGRATEOFCHANGE]=0.004*twocomplementstrbintointeger(aux,18);	//Zg Rate of Change has a resolution of 0.004 meters/second
+			getstr(aux,binarystring,lengthmessage,158,18);			//Extract Zg Rate of Change
+			sbasblock->geonavigationmessage[ZGRATEOFCHANGE]=0.004*(double)twocomplementstrbintointeger(aux,18);	//Zg Rate of Change has a resolution of 0.004 metres/second
 
-			getstr(aux,binarystring,176,10);			//Extract Xg acceleration
-			sbasblock->geonavigationmessage[XGACCELERATION]=0.0000125*twocomplementstrbintointeger(aux,10);//Xg acceleration has a resolution of 0.0000125 meters/second^2
+			getstr(aux,binarystring,lengthmessage,176,10);			//Extract Xg acceleration
+			sbasblock->geonavigationmessage[XGACCELERATION]=0.0000125*(double)twocomplementstrbintointeger(aux,10);//Xg acceleration has a resolution of 0.0000125 metres/second^2
 
-			getstr(aux,binarystring,186,10);			//Extract Yg acceleration
-			sbasblock->geonavigationmessage[YGACCELERATION]=0.0000125*twocomplementstrbintointeger(aux,10);//Yg acceleration has a resolution of 0.0000125 meters/second^2
+			getstr(aux,binarystring,lengthmessage,186,10);			//Extract Yg acceleration
+			sbasblock->geonavigationmessage[YGACCELERATION]=0.0000125*(double)twocomplementstrbintointeger(aux,10);//Yg acceleration has a resolution of 0.0000125 metres/second^2
 
-			getstr(aux,binarystring,196,10);			//Extract Zg acceleration
-			sbasblock->geonavigationmessage[ZGACCELERATION]=0.0000625*twocomplementstrbintointeger(aux,10);//Zg acceleration has a resolution of 0.0000625 meters/second^2
+			getstr(aux,binarystring,lengthmessage,196,10);			//Extract Zg acceleration
+			sbasblock->geonavigationmessage[ZGACCELERATION]=0.0000625*(double)twocomplementstrbintointeger(aux,10);//Zg acceleration has a resolution of 0.0000625 metres/second^2
 
-			getstr(aux,binarystring,206,12);			//Extract aGf0
-			sbasblock->geonavigationmessage[AGF0]=pow(2,-31)*twocomplementstrbintointeger(aux,12);	//aGf0 has a resolution of 2^-31 seconds
+			getstr(aux,binarystring,lengthmessage,206,12);			//Extract aGf0
+			sbasblock->geonavigationmessage[AGF0]=pow(2,-31)*(double)twocomplementstrbintointeger(aux,12);	//aGf0 has a resolution of 2^-31 seconds
 
-			getstr(aux,binarystring,218,8);				//Extract aGf1
-			sbasblock->geonavigationmessage[AGF1]=pow(2,-40)*twocomplementstrbintointeger(aux,8);	//aGf1 has a resolution of 2^-40 seconds/second
+			getstr(aux,binarystring,lengthmessage,218,8);				//Extract aGf1
+			sbasblock->geonavigationmessage[AGF1]=pow(2,-40)*(double)twocomplementstrbintointeger(aux,8);	//aGf1 has a resolution of 2^-40 seconds/second
 
 			break;
 
-		case(GEOSATELLITEALMANACS):
+		case GEOSATELLITEALMANACS: /*MT 17*/
 			//First we need to check how many almanacs are given
 			ret=0;
-			getstr(aux,binarystring,150,8);
+			getstr(aux,binarystring,lengthmessage,150,8);
 			if(strtol(aux,&endptr,2)!=0) ret=3;
 			else {
-				getstr(aux,binarystring,83,8);
+				getstr(aux,binarystring,lengthmessage,83,8);
 				if(strtol(aux,&endptr,2)!=0) ret=2;
 				else {
-					getstr(aux,binarystring,16,8);
+					getstr(aux,binarystring,lengthmessage,16,8);
 					if(strtol(aux,&endptr,2)!=0) ret=1;
 				}
 			}
 			sbasblock->numgeoalmanacs=ret;
 			if(ret==0) ret=1;	//If there are no satellites we put one slot to avoid memory problems
 
-			//Allocate memory for GEO Almanacs message
-			sbasblock->geoalmanacsmessage=malloc(sizeof(double*)*ret);    		 //Message 17 has data for three satellites
 			for(i=0;i<ret;i++) {
-				sbasblock->geoalmanacsmessage[i]=NULL;
-				sbasblock->geoalmanacsmessage[i]=malloc(sizeof(double)*12);     //Message 17 has 12 parameters for each satellite
 				for(j=0;j<12;j++) {
 					sbasblock->geoalmanacsmessage[i][j]=-1.;
 				}
@@ -8055,102 +11040,97 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
 
 			//Read message
 			for(i=0;i<sbasblock->numgeoalmanacs;i++) {
-				getstr(aux,binarystring,14+i*67,2);				//Extract Data ID
-				sbasblock->geoalmanacsmessage[i][DATAID]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,14+i*67,2);				//Extract Data ID
+				sbasblock->geoalmanacsmessage[i][DATAID]=(double)strtol(aux,&endptr,2);
 
-				getstr(aux,binarystring,16+i*67,8);				//Extract PRN Number
-				sbasblock->geoalmanacsmessage[i][PRNNUMBER]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,16+i*67,8);				//Extract PRN Number
+				sbasblock->geoalmanacsmessage[i][PRNNUMBER]=(double)strtol(aux,&endptr,2);
 
-				getstr(aux,binarystring,24+i*67,8);				//Extract Health and Service provider (the eight bits of Health and status)
-				sbasblock->geoalmanacsmessage[i][HEALTHPROVIDER]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,24+i*67,8);				//Extract Health and Service provider (the eight bits of Health and status)
+				sbasblock->geoalmanacsmessage[i][HEALTHPROVIDER]=(double)strtol(aux,&endptr,2);
 
-				getstr(aux,binarystring,24+i*67,4);				//Extract Service provider (only the first four bits)
-				sbasblock->geoalmanacsmessage[i][SERVICEPROVIDER]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,24+i*67,4);				//Extract Service provider (only the first four bits)
+				sbasblock->geoalmanacsmessage[i][SERVICEPROVIDER]=(double)strtol(aux,&endptr,2);
 
-				getstr(aux,binarystring,28+i*67,4);				//Extract Health status (only the last four bits)
-				sbasblock->geoalmanacsmessage[i][HEALTHSTATUS]=strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,28+i*67,4);				//Extract Health status (only the last four bits)
+				sbasblock->geoalmanacsmessage[i][HEALTHSTATUS]=(double)strtol(aux,&endptr,2);
 
-				getstr(aux,binarystring,32+i*67,15);				//Extract Xg
-				sbasblock->geoalmanacsmessage[i][XGALMANAC]=2600*twocomplementstrbintointeger(aux,15);	//Xg has a resolution of 2,600 meters
+				getstr(aux,binarystring,lengthmessage,32+i*67,15);				//Extract Xg
+				sbasblock->geoalmanacsmessage[i][XGALMANAC]=2600.*(double)twocomplementstrbintointeger(aux,15);	//Xg has a resolution of 2,600 metres
 
-				getstr(aux,binarystring,47+i*67,15);				//Extract Yg
-				sbasblock->geoalmanacsmessage[i][YGALMANAC]=2600*twocomplementstrbintointeger(aux,15);	//Yg has a resolution of 2,600 meters
+				getstr(aux,binarystring,lengthmessage,47+i*67,15);				//Extract Yg
+				sbasblock->geoalmanacsmessage[i][YGALMANAC]=2600.*(double)twocomplementstrbintointeger(aux,15);	//Yg has a resolution of 2,600 metres
 
-				getstr(aux,binarystring,62+i*67,9);				//Extract Zg
-				sbasblock->geoalmanacsmessage[i][ZGALMANAC]=26000*twocomplementstrbintointeger(aux,9);	//Zg has a resolution of 26,000 meters
+				getstr(aux,binarystring,lengthmessage,62+i*67,9);				//Extract Zg
+				sbasblock->geoalmanacsmessage[i][ZGALMANAC]=26000.*(double)twocomplementstrbintointeger(aux,9);	//Zg has a resolution of 26,000 metres
 
-				getstr(aux,binarystring,71+i*67,3);				//Extract Xg Rate of Change
-				sbasblock->geoalmanacsmessage[i][XGALMANACRATEOFCHANGE]=10*twocomplementstrbintointeger(aux,3);	//Xg Rate of Change has a resolution of 10 meters/second
+				getstr(aux,binarystring,lengthmessage,71+i*67,3);				//Extract Xg Rate of Change
+				sbasblock->geoalmanacsmessage[i][XGALMANACRATEOFCHANGE]=10.*(double)twocomplementstrbintointeger(aux,3);	//Xg Rate of Change has a resolution of 10 metres/second
 
-				getstr(aux,binarystring,74+i*67,3);				//Extract Yg Rate of Change
-				sbasblock->geoalmanacsmessage[i][YGALMANACRATEOFCHANGE]=10*twocomplementstrbintointeger(aux,3);	//Yg Rate of Change has a resolution of 10 meters/second
+				getstr(aux,binarystring,lengthmessage,74+i*67,3);				//Extract Yg Rate of Change
+				sbasblock->geoalmanacsmessage[i][YGALMANACRATEOFCHANGE]=10.*(double)twocomplementstrbintointeger(aux,3);	//Yg Rate of Change has a resolution of 10 metres/second
 
-				getstr(aux,binarystring,77+i*67,4);				//Extract Zg Rate of Change
-				sbasblock->geoalmanacsmessage[i][ZGALMANACRATEOFCHANGE]=60*twocomplementstrbintointeger(aux,4);	//Zg Rate of Change has a resolution of 60 meters/second
+				getstr(aux,binarystring,lengthmessage,77+i*67,4);				//Extract Zg Rate of Change
+				sbasblock->geoalmanacsmessage[i][ZGALMANACRATEOFCHANGE]=60.*(double)twocomplementstrbintointeger(aux,4);	//Zg Rate of Change has a resolution of 60 metres/second
 
-				getstr(aux,binarystring,215,11);				//Extract t0 or Time of Day (seconds)
-				sbasblock->geoalmanacsmessage[i][T0ALMANAC]=64*strtol(aux,&endptr,2);
+				getstr(aux,binarystring,lengthmessage,215,11);				//Extract t0 or Time of Day (seconds)
+				sbasblock->geoalmanacsmessage[i][T0ALMANAC]=64.*(double)strtol(aux,&endptr,2);
 				if((int)sbasblock->geoalmanacsmessage[i][T0ALMANAC]>86336) return -5;
 			}
 			break;
-		case(SBASSERVICEMESSAGE):
+		case SBASSERVICEMESSAGE: /*MT 27*/
 			//Read number of regions given
-			getstr(aux,binarystring,23,3);	
+			getstr(aux,binarystring,lengthmessage,23,3);	
 			ret=strtol(aux,&endptr,2);
 
-			//Allocate memory for SBAS service message
-			sbasblock->servicemessage=malloc(sizeof(double)*9);   		//Message 27 has 7 parameters + 2 for the Delta UDRE values
 			sbasblock->numregioncoordinates=ret;
 			if(ret==0) ret=1;						//If the number of regions is 0, set the size to 1 to avoid possible memory issues	
-			sbasblock->regioncoordinates=malloc(sizeof(int*)*ret);	
 			for(i=0;i<ret;i++) {
-				sbasblock->regioncoordinates[i]=NULL;
-				sbasblock->regioncoordinates[i]=malloc(sizeof(int)*12);	//Each region will need 12 parameters
 				for(j=0;j<12;j++) {
 					sbasblock->regioncoordinates[i][j]=9999;		//9999 means value not set
 				}
 			}
 	
 			//Read message
-			getstr(aux,binarystring,14,3);				//Extract Issue of Data Service (IODS)
-			sbasblock->servicemessage[IODSPOS]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,14,3);				//Extract Issue of Data Service (IODS)
+			sbasblock->servicemessage[IODSPOS]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,17,3);				//Extract Number of Service Messages
-			sbasblock->servicemessage[NUMBERSERVICEMESSAGES]=strtol(aux,&endptr,2)+1;	//This value has an offset of 1
+			getstr(aux,binarystring,lengthmessage,17,3);				//Extract Number of Service Messages
+			sbasblock->servicemessage[NUMBERSERVICEMESSAGES]=(double)strtol(aux,&endptr,2)+1;	//This value has an offset of 1
 
-			getstr(aux,binarystring,20,3);				//Extract Service Message Number
-			sbasblock->servicemessage[SERVICEMESSAGENUMBER]=strtol(aux,&endptr,2)+1;	//This value has an offset of 1
+			getstr(aux,binarystring,lengthmessage,20,3);				//Extract Service Message Number
+			sbasblock->servicemessage[SERVICEMESSAGENUMBER]=(double)strtol(aux,&endptr,2)+1;	//This value has an offset of 1
 			
-			getstr(aux,binarystring,23,3);				//Extract Number of Regions
-			sbasblock->servicemessage[NUMBEROFREGIONS]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,23,3);				//Extract Number of Regions
+			sbasblock->servicemessage[NUMBEROFREGIONS]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,26,2);				//Extract Priority Code
-			sbasblock->servicemessage[PRIORITYCODE]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,26,2);				//Extract Priority Code
+			sbasblock->servicemessage[PRIORITYCODE]=(double)strtol(aux,&endptr,2);
 
-			getstr(aux,binarystring,28,4);				//Extract Delta UDRE Indicator Inside
-			sbasblock->servicemessage[UDREINSIDEIND]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,28,4);				//Extract Delta UDRE Indicator Inside
+			sbasblock->servicemessage[UDREINSIDEIND]=(double)strtol(aux,&endptr,2);
 			sbasblock->servicemessage[UDREINSIDEVALUE]=deltaudrevaluelist[(int)sbasblock->servicemessage[UDREINSIDEIND]];	//Get Delta UDRE Indicator Inside value
 
-			getstr(aux,binarystring,32,4);				//Extract Delta UDRE Indicator Outside
-			sbasblock->servicemessage[UDREOUTSIDEIND]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,32,4);				//Extract Delta UDRE Indicator Outside
+			sbasblock->servicemessage[UDREOUTSIDEIND]=(double)strtol(aux,&endptr,2);
 			sbasblock->servicemessage[UDREOUTSIDEVALUE]=deltaudrevaluelist[(int)sbasblock->servicemessage[UDREOUTSIDEIND]]; //Get Delta UDRE Indicator Outside value
 
 			for(i=0;i<(int)sbasblock->servicemessage[NUMBEROFREGIONS];i++) {
 				//Read all the regions given in the message
 				//Positive values denote North latitude or East longitude
-				getstr(aux,binarystring,36+i*35,8);				//Extract Coordinate 1 Latitude (degrees)
+				getstr(aux,binarystring,lengthmessage,36+i*35,8);				//Extract Coordinate 1 Latitude (degrees)
 				sbasblock->regioncoordinates[i][COORD1LAT]=twocomplementstrbintointeger(aux,8);
 
-				getstr(aux,binarystring,44+i*35,9);				//Extract Coordinate 1 Longitude (degrees)
+				getstr(aux,binarystring,lengthmessage,44+i*35,9);				//Extract Coordinate 1 Longitude (degrees)
 				sbasblock->regioncoordinates[i][COORD1LON]=twocomplementstrbintointeger(aux,9);
 
-				getstr(aux,binarystring,53+i*35,8);				//Extract Coordinate 2 Latitude (degrees)
+				getstr(aux,binarystring,lengthmessage,53+i*35,8);				//Extract Coordinate 2 Latitude (degrees)
 				sbasblock->regioncoordinates[i][COORD2LAT]=twocomplementstrbintointeger(aux,8);
 
-				getstr(aux,binarystring,61+i*35,9);				//Extract Coordinate 2 Longitude (degrees)
+				getstr(aux,binarystring,lengthmessage,61+i*35,9);				//Extract Coordinate 2 Longitude (degrees)
 				sbasblock->regioncoordinates[i][COORD2LON]=twocomplementstrbintointeger(aux,9);
 
-				getstr(aux,binarystring,70+i*35,1);				//Extract Region Shape (0=> Tringular 1=>Square)
+				getstr(aux,binarystring,lengthmessage,70+i*35,1);				//Extract Region Shape (0=> Tringular 1=>Square)
 				sbasblock->regioncoordinates[i][REGIONSHAPE]=strtol(aux,&endptr,2);
 
 				//Coordinate 3 takes Coordinate 1 latitude and Coordinate 2 longitude
@@ -8164,67 +11144,67 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
 				}
 
 				//Copy UDRE values to region coordinates block
-				sbasblock->regioncoordinates[i][UDREINSIDEVALUE]=sbasblock->servicemessage[UDREINSIDEVALUE];
-				sbasblock->regioncoordinates[i][UDREOUTSIDEVALUE]=sbasblock->servicemessage[UDREOUTSIDEVALUE];
+				sbasblock->regioncoordinates[i][UDREINSIDEVALUE]=(int)sbasblock->servicemessage[UDREINSIDEVALUE];
+				sbasblock->regioncoordinates[i][UDREOUTSIDEVALUE]=(int)sbasblock->servicemessage[UDREOUTSIDEVALUE];
 				//Copy number of service messages
-				sbasblock->regioncoordinates[i][NUMBERSERVICEMESSAGES]=sbasblock->servicemessage[NUMBERSERVICEMESSAGES];
+				sbasblock->regioncoordinates[i][NUMBERSERVICEMESSAGES]=(int)sbasblock->servicemessage[NUMBERSERVICEMESSAGES];
 
 			}
 			break;
-		case(SBASNETWORKTIMEPARAMETERS):
-			//Allocate memory for Network Time/UTC parameters
-			sbasblock->networktimemessage=malloc(sizeof(double)*12);     		//Message 12 has 12 parameters
-
+		case SBASNETWORKTIMEPARAMETERS: /*MT 12*/
 			//Read message
-			getstr(aux,binarystring,14,24);				//Extract A1wnt
-			sbasblock->networktimemessage[A1WNT]=pow(2,-50)*twocomplementstrbintointeger(aux,24);	//A1wnt has a resolution of 2^-50 seconds/second
+			getstr(aux,binarystring,lengthmessage,14,24);				//Extract A1snt
+			sbasblock->networktimemessage[A1SNT]=pow(2,-50)*(double)twocomplementstrbintointeger(aux,24);	//A1wnt has a resolution of 2^-50 seconds/second
 
-			getstr(aux,binarystring,38,32);				//Extract A0wnt
-			sbasblock->networktimemessage[A0WNT]=pow(2,-30)*twocomplementstrbintointeger(aux,32);	//A0wnt has a resolution of 2^-30 seconds
+			getstr(aux,binarystring,lengthmessage,38,32);				//Extract A0snt
+			sbasblock->networktimemessage[A0SNT]=pow(2,-30)*(double)twocomplementstrbintolonglonginteger(aux,32);	//A0wnt has a resolution of 2^-30 seconds
 
-			getstr(aux,binarystring,70,8);				//Extract t0t
-			sbasblock->networktimemessage[T0T]=pow(2,12)*strtol(aux,&endptr,2);			//t0t has a resolution of 2^12 seconds
+			getstr(aux,binarystring,lengthmessage,70,8);				//Extract t0t
+			sbasblock->networktimemessage[T0T]=pow(2,12)*(double)strtol(aux,&endptr,2);			//t0t has a resolution of 2^12 seconds
 
-			getstr(aux,binarystring,78,8);				//Extract WNt
-			sbasblock->networktimemessage[WNT]=strtol(aux,&endptr,2);				//In weeks
+			getstr(aux,binarystring,lengthmessage,78,8);				//Extract WNt
+			sbasblock->networktimemessage[WNT]=(double)strtol(aux,&endptr,2);				//In weeks
 			
-			getstr(aux,binarystring,86,8);				//Extract Delta tLS
-			sbasblock->networktimemessage[DELTATLS]=twocomplementstrbintointeger(aux,8);		//Delta tLS has a resolution of 1 second
+			getstr(aux,binarystring,lengthmessage,86,8);				//Extract Delta tLS
+			sbasblock->networktimemessage[DELTATLS]=(double)twocomplementstrbintointeger(aux,8);		//Delta tLS has a resolution of 1 second
 
-			getstr(aux,binarystring,94,8);				//Extract WNlsf
-			sbasblock->networktimemessage[WNLSF]=strtol(aux,&endptr,2);				//In weeks
+			getstr(aux,binarystring,lengthmessage,94,8);				//Extract WNlsf
+			sbasblock->networktimemessage[WNLSF]=(double)strtol(aux,&endptr,2);				//In weeks
 
-			getstr(aux,binarystring,102,8);				//Extract DN
-			sbasblock->networktimemessage[DNDAY]=strtol(aux,&endptr,2);				//In days
+			getstr(aux,binarystring,lengthmessage,102,8);				//Extract DN
+			sbasblock->networktimemessage[DNDAY]=(double)strtol(aux,&endptr,2);				//In days
 			
-			getstr(aux,binarystring,110,8);				//Extract Delta tLSF 
-			sbasblock->networktimemessage[DELTATLSF]=twocomplementstrbintointeger(aux,8);		//Delta tLSF has a resolution of 1 second
+			getstr(aux,binarystring,lengthmessage,110,8);				//Extract Delta tLSF 
+			sbasblock->networktimemessage[DELTATLSF]=(double)twocomplementstrbintointeger(aux,8);		//Delta tLSF has a resolution of 1 second
 
-			getstr(aux,binarystring,118,3);				//Extract UTC Standard Identifier
-			sbasblock->networktimemessage[UTCIDENTIFIER]=strtol(aux,&endptr,2);
+			getstr(aux,binarystring,lengthmessage,118,3);				//Extract UTC Standard Identifier
+			sbasblock->networktimemessage[UTCIDENTIFIER]=(double)strtol(aux,&endptr,2);
 			
-			getstr(aux,binarystring,121,20);			//Extract GPS Time of Week
-			sbasblock->networktimemessage[GPSTOW]=strtol(aux,&endptr,2);				//In seconds
+			getstr(aux,binarystring,lengthmessage,121,20);			//Extract GPS Time of Week
+			sbasblock->networktimemessage[GPSTOW]=(double)strtol(aux,&endptr,2);				//In seconds
 			if((int)sbasblock->networktimemessage[GPSTOW]>604799) return -6;
 			
-			getstr(aux,binarystring,141,10);			//Extract GPS Week Number
-			sbasblock->networktimemessage[GPSWEEKNUMBER]=strtol(aux,&endptr,2);			//In weeks
+			getstr(aux,binarystring,lengthmessage,141,10);			//Extract GPS Week Number
+			sbasblock->networktimemessage[GPSWEEKNUMBER]=(double)strtol(aux,&endptr,2);			//In weeks
 			
-			getstr(aux,binarystring,151,1);				//Extract GLONASS Indicator
-			sbasblock->networktimemessage[GLONASSINDICATOR]=strtol(aux,&endptr,2);			
+			getstr(aux,binarystring,lengthmessage,151,1);				//Extract GLONASS Indicator
+			sbasblock->networktimemessage[GLONASSINDICATOR]=(double)strtol(aux,&endptr,2);			
+
+			getstr(aux,binarystring,lengthmessage,152,32);				//Extract GLONASS ai clock offset (in SDCM only)
+			sbasblock->networktimemessage[GLONASSAIOFFSSET]=pow(2,-30)*(double)strtoll(aux,&endptr,2);			
 			break;
-		case(CLOCKEPHEMERISCOVARIANCEMATRIX):
+		case CLOCKEPHEMERISCOVARIANCEMATRIX: /*MT 28*/
 			//Read number of satellites
 			ret=0;
 			start=0;	//This is for the case we only have data in the second satellite
 			//Check PRN Number first satellite
-			getstr(aux,binarystring,16,6);
+			getstr(aux,binarystring,lengthmessage,16,6);
 			if(strtol(aux,&endptr,2)!=0) {
 				ret++;
 				start=0;
 			}
 			//Check PRN Number second satellite
-			getstr(aux,binarystring,121,6);
+			getstr(aux,binarystring,lengthmessage,121,6);
 			if(strtol(aux,&endptr,2)!=0) {
 				ret++;
 				if(ret==1) start=1;
@@ -8233,86 +11213,78 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
 			sbasblock->numclockephemeriscovariance=ret;    //Save number of satellites
 			if(ret==0) ret=1;       //If there are no satellites, put ret equal to 1 to give size to numclockephemeriscovariance in order to avoid memory problems
 
-			//Allocate memory for Clock Ephemeris Covariance matrix parameters
-			sbasblock->clockephemeriscovariance=malloc(sizeof(int*)*ret);		//Message 28 may have 1 or 2 satellites covariance matrix
-
 			for(i=0;i<ret;i++) {
-				sbasblock->clockephemeriscovariance[i]=NULL;
-				sbasblock->clockephemeriscovariance[i]=malloc(sizeof(int)*13);	//Each satellite will have 13 parameters
-				for(j=0;j<13;j++) {
+				for(j=0;j<14;j++) {
 					sbasblock->clockephemeriscovariance[i][j]=-1;		//-1 means value not set
 				}
 			}
 
 			//Read message
 			for(i=start;i<sbasblock->numclockephemeriscovariance+start;i++) {
-				getstr(aux,binarystring,14,2);				//Extract IODP
-				sbasblock->clockephemeriscovariance[i-start][IODPPOSITION]=strtol(aux,&endptr,2);	
+				getstr(aux,binarystring,lengthmessage,14,2);				//Extract IODP
+				sbasblock->clockephemeriscovariance[i-start][IODPPOSITION]=(double)strtol(aux,&endptr,2);	
 
-				getstr(aux,binarystring,16+i*105,6);			//Extract PRN Mask Number
-				sbasblock->clockephemeriscovariance[i-start][PRNMASKNUMBER]=strtol(aux,&endptr,2);	
+				getstr(aux,binarystring,lengthmessage,16+i*105,6);			//Extract PRN Mask Number
+				sbasblock->clockephemeriscovariance[i-start][PRNMASKNUMBER]=(double)strtol(aux,&endptr,2);	
 				if(sbasblock->clockephemeriscovariance[i-start][PRNMASKNUMBER]>51) return -7;
 
-				getstr(aux,binarystring,22+i*105,3);			//Extract Scale Exponent
-				sbasblock->clockephemeriscovariance[i-start][SCALEEXPONENT]=strtol(aux,&endptr,2);	
+				getstr(aux,binarystring,lengthmessage,22+i*105,3);			//Extract Scale Exponent
+				sbasblock->clockephemeriscovariance[i-start][SCALEEXPONENT]=(double)strtol(aux,&endptr,2);	
 
-				getstr(aux,binarystring,25+i*105,9);			//Extract E1,1
-				sbasblock->clockephemeriscovariance[i-start][E11]=strtol(aux,&endptr,2);	
+				scalefactor=pow(2,sbasblock->clockephemeriscovariance[i-start][SCALEEXPONENT]-5.);
 
-				getstr(aux,binarystring,34+i*105,9);			//Extract E2,2
-				sbasblock->clockephemeriscovariance[i-start][E22]=strtol(aux,&endptr,2);	
+				sbasblock->clockephemeriscovariance[i-start][SCALEFACTOR]=scalefactor;
 
-				getstr(aux,binarystring,43+i*105,9);			//Extract E3,3
-				sbasblock->clockephemeriscovariance[i-start][E33]=strtol(aux,&endptr,2);	
+				getstr(aux,binarystring,lengthmessage,25+i*105,9);			//Extract E1,1
+				sbasblock->clockephemeriscovariance[i-start][E11]=scalefactor*(double)strtol(aux,&endptr,2);	
 
-				getstr(aux,binarystring,52+i*105,9);			//Extract E4,4
-				sbasblock->clockephemeriscovariance[i-start][E44]=strtol(aux,&endptr,2);	
+				getstr(aux,binarystring,lengthmessage,34+i*105,9);			//Extract E2,2
+				sbasblock->clockephemeriscovariance[i-start][E22]=scalefactor*(double)strtol(aux,&endptr,2);	
 
-				getstr(aux,binarystring,61+i*105,10);			//Extract E1,2
-				sbasblock->clockephemeriscovariance[i-start][E12]=twocomplementstrbintointeger(aux,10);
+				getstr(aux,binarystring,lengthmessage,43+i*105,9);			//Extract E3,3
+				sbasblock->clockephemeriscovariance[i-start][E33]=scalefactor*(double)strtol(aux,&endptr,2);	
 
-				getstr(aux,binarystring,71+i*105,10);			//Extract E1,3
-				sbasblock->clockephemeriscovariance[i-start][E13]=twocomplementstrbintointeger(aux,10);
+				getstr(aux,binarystring,lengthmessage,52+i*105,9);			//Extract E4,4
+				sbasblock->clockephemeriscovariance[i-start][E44]=scalefactor*(double)strtol(aux,&endptr,2);	
 
-				getstr(aux,binarystring,81+i*105,10);			//Extract E1,4
-				sbasblock->clockephemeriscovariance[i-start][E14]=twocomplementstrbintointeger(aux,10);
+				getstr(aux,binarystring,lengthmessage,61+i*105,10);			//Extract E1,2
+				sbasblock->clockephemeriscovariance[i-start][E12]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
 
-				getstr(aux,binarystring,91+i*105,10);			//Extract E2,3
-				sbasblock->clockephemeriscovariance[i-start][E23]=twocomplementstrbintointeger(aux,10);
+				getstr(aux,binarystring,lengthmessage,71+i*105,10);			//Extract E1,3
+				sbasblock->clockephemeriscovariance[i-start][E13]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
 
-				getstr(aux,binarystring,101+i*105,10);			//Extract E2,4
-				sbasblock->clockephemeriscovariance[i-start][E24]=twocomplementstrbintointeger(aux,10);
+				getstr(aux,binarystring,lengthmessage,81+i*105,10);			//Extract E1,4
+				sbasblock->clockephemeriscovariance[i-start][E14]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
 
-				getstr(aux,binarystring,111+i*105,10);			//Extract E3,4
-				sbasblock->clockephemeriscovariance[i-start][E34]=twocomplementstrbintointeger(aux,10);
+				getstr(aux,binarystring,lengthmessage,91+i*105,10);			//Extract E2,3
+				sbasblock->clockephemeriscovariance[i-start][E23]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+				getstr(aux,binarystring,lengthmessage,101+i*105,10);			//Extract E2,4
+				sbasblock->clockephemeriscovariance[i-start][E24]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+				getstr(aux,binarystring,lengthmessage,111+i*105,10);			//Extract E3,4
+				sbasblock->clockephemeriscovariance[i-start][E34]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
 
 			}
 			break;
-		case(IONOSPHERICGRIDPOINTSMASKS):
-			//Allocate memory for Ionospheric Grid Points Mask
-			sbasblock->igpmaskmessage=malloc(sizeof(int)*204);	//Message 18 may has 3 parameters and 201 Mask bits
-			 
+		case IONOSPHERICGRIDPOINTSMASKS: /*MT 18*/
 			//Read message
-			getstr(aux,binarystring,14,4);				//Extract Number of bands being broadcast
+			getstr(aux,binarystring,lengthmessage,14,4);				//Extract Number of bands being broadcast
 			sbasblock->igpmaskmessage[NUMBEROFBANDS]=strtol(aux,&endptr,2);	
 
-			getstr(aux,binarystring,18,4);				//Extract Band Number
+			getstr(aux,binarystring,lengthmessage,18,4);				//Extract Band Number
 			sbasblock->igpmaskmessage[BANDNUMBER]=strtol(aux,&endptr,2);	
 
-			getstr(aux,binarystring,22,2);				//Extract IODI (Issue of Data Ionosphere)
+			getstr(aux,binarystring,lengthmessage,22,2);				//Extract IODI (Issue of Data Ionosphere)
 			sbasblock->igpmaskmessage[IODIPOS]=strtol(aux,&endptr,2);	
 
 			for(i=0;i<201;i++) {
-				getstr(aux,binarystring,24+i,1);		//Extract IGP (Ionospheric Grid Point) Mask bit
+				getstr(aux,binarystring,lengthmessage,24+i,1);		//Extract IGP (Ionospheric Grid Point) Mask bit
 				sbasblock->igpmaskmessage[i+3]=strtol(aux,&endptr,2);	
 			}
 			break;
-		case(IONOSPHERICDELAYCORRECTIONS):
-			//Allocate memory for Ionospheric Delay Corrections
-			sbasblock->ionodelayparameters=malloc(sizeof(double*)*15); 		//Message 26 has 15 Grid Points
+		case IONOSPHERICDELAYCORRECTIONS: /*MT 26*/
 			for(i=0;i<15;i++) {
-				sbasblock->ionodelayparameters[i]=NULL;
-				sbasblock->ionodelayparameters[i]=malloc(sizeof(double)*7);	//Each block will have 5 parameters + 2 for the GIVE value and variance
 				for(j=0;j<7;j++) {
 					sbasblock->ionodelayparameters[i][j]=-1.;		//-1 means value not set
 				}
@@ -8320,25 +11292,558 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
 
 			//Read message
 			for(i=0;i<15;i++) {
-				getstr(aux,binarystring,14,4);				//Extract Band Number
+				getstr(aux,binarystring,lengthmessage,14,4);				//Extract Band Number
 				sbasblock->ionodelayparameters[i][BANDNUMBER]=strtol(aux,&endptr,2);	
 				
-				getstr(aux,binarystring,18,4);				//Extract Block ID
+				getstr(aux,binarystring,lengthmessage,18,4);				//Extract Block ID
 				sbasblock->ionodelayparameters[i][BLOCKID]=strtol(aux,&endptr,2);	
 
-				getstr(aux,binarystring,22+i*13,9);			//Extract IGP Vertical Delay
-				sbasblock->ionodelayparameters[i][IGPVERTICALDELAY]=0.125*strtol(aux,&endptr,2);	//IGP Vertical Delay has a resolution of 0.125 meters
+				getstr(aux,binarystring,lengthmessage,22+i*13,9);			//Extract IGP Vertical Delay
+				sbasblock->ionodelayparameters[i][IGPVERTICALDELAY]=0.125*strtol(aux,&endptr,2);	//IGP Vertical Delay has a resolution of 0.125 metres
 
-				getstr(aux,binarystring,31+i*13,4);			//Extract GIVEI (Grid Ionospheric Vertical Error Indicator)
+				getstr(aux,binarystring,lengthmessage,31+i*13,4);			//Extract GIVEI (Grid Ionospheric Vertical Error Indicator)
 				sbasblock->ionodelayparameters[i][GIVEI]=strtol(aux,&endptr,2);	
-				sbasblock->ionodelayparameters[i][GIVEVALUE]=givemeterslist[(int)sbasblock->ionodelayparameters[i][GIVEI]];	//Get the GIVE value (meters) for the given indicator
-				sbasblock->ionodelayparameters[i][GIVEVARIANCE]=givevariancelist[(int)sbasblock->ionodelayparameters[i][GIVEI]]; //Get the GIVE variance (meters^2) for the given indicator
+				sbasblock->ionodelayparameters[i][GIVEVALUE]=givemeterslist[(int)sbasblock->ionodelayparameters[i][GIVEI]];	//Get the GIVE value (metres) for the given indicator
+				sbasblock->ionodelayparameters[i][GIVEVARIANCE]=givevariancelist[(int)sbasblock->ionodelayparameters[i][GIVEI]]; //Get the GIVE variance (metres^2) for the given indicator
 
-				getstr(aux,binarystring,217,2);				//Extract IODI (Ionospheric Mask Issue of Data)
+				getstr(aux,binarystring,lengthmessage,217,2);				//Extract IODI (Ionospheric Mask Issue of Data)
 				sbasblock->ionodelayparameters[i][IODIPOS]=strtol(aux,&endptr,2);	
 			}
 			break;
-		case(RESERVED8):case(RESERVED11):case(RESERVED13):case(RESERVED14):case(RESERVED15):case(RESERVED16):case(RESERVED19):case(RESERVED20):case(RESERVED21):case(RESERVED22):case(RESERVED23):case(INTERNALTESTMESSAGE):case(NULLMESSAGE):
+		case SATMASKASIGNMENTS: /*MT 31*/
+			//Initialize blocks
+			for(i=0;i<MAX_GNSS;i++) {
+				for(j=0;j<MAX_SBAS_PRN;j++) {
+					sbasblock->PRNactive[i][j]=0;		//0 means satellite not active
+					sbasblock->PRN2pos[i][j]=-1;		//-1 means satellite not in mask
+				}
+			}
+
+			for(i=0;i<92;i++) {
+				sbasblock->pos2PRN[i]=-1;			//-1 means position not set
+				sbasblock->pos2GNSS[i]=-1;			//-1 means position not set
+			}
+			for(i=0;i<215;i++) {
+				sbasblock->Slot2pos[i]=-1;			//-1 means position not set
+			}
+
+			//Reading data
+
+			j=0;							//Set the active PRN position indicator to 0
+			//Now there are 214 bits of PRN mask
+			//GPS slots PRN Maks
+			for(i=10;i<47;i++) {
+				if(binarystring[i]=='1') {						//The current PRN has corrections	
+					sbasblock->PRNactive[GPS][i-9]=1;			//Set the current satellite active
+					sbasblock->pos2PRN[j]=i-9;					//Save the PRN number in the list
+					sbasblock->pos2GNSS[j]=GPS;					//Save the GNSS type in the list
+					sbasblock->PRN2pos[GPS][i-9]=j;				//Save the position of this PRN
+					sbasblock->Slot2pos[i-10+1]=j;				//Save conversion from satellite slot to position in mask
+					sbasblock->constMonitored[GPS]=1;
+					j++;
+				}
+
+			}
+
+			//GLONASS slots PRN Maks
+			for(i=47;i<84;i++) {
+				if(binarystring[i]=='1') {							//The current PRN has corrections	
+					if(j==92) return -9;							//Too many satellites corrected
+					sbasblock->PRNactive[GLONASS][i-46]=1;			//Set the current satellite active
+					sbasblock->pos2PRN[j]=i-46;						//Save the PRN number in the list
+					sbasblock->pos2GNSS[j]=GLONASS;					//Save the GNSS type in the list
+					sbasblock->PRN2pos[GLONASS][i-46]=j;			//Save the position of this PRN
+					sbasblock->Slot2pos[i-47+38]=j;					//Save conversion from satellite slot to position in mask
+					sbasblock->constMonitored[GLONASS]=1;
+					j++;
+				}
+			}
+
+			//Galileo slots PRN Maks
+			for(i=84;i<121;i++) {
+				if(binarystring[i]=='1') {							//The current PRN has corrections	
+					if(j==92) return -9;							//Too many satellites corrected
+					sbasblock->PRNactive[Galileo][i-83]=1;			//Set the current satellite active
+					sbasblock->pos2PRN[j]=i-83;						//Save the PRN number in the list
+					sbasblock->pos2GNSS[j]=Galileo;					//Save the GNSS type in the list
+					sbasblock->PRN2pos[Galileo][i-83]=j;			//Save the position of this PRN
+					sbasblock->Slot2pos[i-84+75]=j;					//Save conversion from satellite slot to position in mask
+					sbasblock->constMonitored[Galileo]=1;
+					j++;
+				}
+			}
+
+			//Bits 121 to 128 are spare bits
+
+			//GEO slots PRN Maks
+			for(i=129;i<168;i++) {
+				if(binarystring[i]=='1') {						//The current PRN has corrections	
+					if(j==92) return -9;						//Too many satellites corrected
+					sbasblock->PRNactive[GEO][i-9]=1;			//Set the current satellite active
+					sbasblock->pos2PRN[j]=i-9;					//Save the PRN number in the list
+					sbasblock->pos2GNSS[j]=GEO;					//Save the GNSS type in the list
+					sbasblock->PRN2pos[GEO][i-9]=j;				//Save the position of this PRN
+					sbasblock->Slot2pos[i-129+120]=j;			//Save conversion from satellite slot to position in mask
+					sbasblock->constMonitored[GEO]=1;
+					j++;
+				}
+			}
+
+
+			//BeiDou slots PRN Maks
+			for(i=168;i<205;i++) {
+				if(binarystring[i]=='1') {						//The current PRN has corrections	
+					if(j==92) return -9;						//Too many satellites corrected
+					sbasblock->PRNactive[BDS][i-167]=1;			//Set the current satellite active
+					sbasblock->pos2PRN[j]=i-167;				//Save the PRN number in the list
+					sbasblock->pos2GNSS[j]=BDS;					//Save the GNSS type in the list
+					sbasblock->PRN2pos[BDS][i-167]=j;			//Save the position of this PRN
+					sbasblock->Slot2pos[i-168+159]=j;			//Save conversion from satellite slot to position in mask
+					sbasblock->constMonitored[BDS]=1;
+					j++;
+				}
+			}
+
+			//Bits 205 to 223 are reserved bits
+
+
+			sbasblock->numsatellites=j-1;					//Save number of satellites monitored
+
+			getstr(aux,binarystring,lengthmessage,224,2);	//Extract IODM
+			sbasblock->IODM=strtol(aux,&endptr,2); 
+			break;
+		case CLOCKEPHEMERISCOVARIANCEMATRIXDFMC: /*MT 32*/
+			//Get orbit parameters
+			getstr(aux,binarystring,lengthmessage,10,8);                                                  //Satellite slot number
+			sbasblock->orbitclockcorrection[SATSLOTNUMBER]=(double)strtol(aux,&endptr,2);
+			sbasblock->covariancematrixdata[SATSLOTNUMBER]=(double)strtol(aux,&endptr,2);
+			if(sbasblock->covariancematrixdata[SATSLOTNUMBER]>214) return -10;
+
+			getstr(aux,binarystring,lengthmessage,18,10);                                                  //Issue of Data Navigation
+			sbasblock->orbitclockcorrection[IODNPOSITION]=(double)strtol(aux,&endptr,2);
+			sbasblock->covariancematrixdata[IODNPOSITION]=(double)strtol(aux,&endptr,2);
+
+			getstr(aux,binarystring,lengthmessage,28,11);                                        	 //Delta X
+			sbasblock->orbitclockcorrection[DELTAX]=0.0625*twocomplementstrbintointeger(aux,11); //Delta X has a resolution of 0.0625 metres 
+
+			getstr(aux,binarystring,lengthmessage,39,11);                                      		 //Delta Y
+			sbasblock->orbitclockcorrection[DELTAY]=0.0625*twocomplementstrbintointeger(aux,11); //Delta Y has a resolution of 0.0625 metres
+
+			getstr(aux,binarystring,lengthmessage,50,11);                                        	 //Delta Z
+			sbasblock->orbitclockcorrection[DELTAZ]=0.0625*twocomplementstrbintointeger(aux,11); //Delta Z has a resolution of 0.0625 metres 
+
+			getstr(aux,binarystring,lengthmessage,61,12);                                      		 //Delta A f0
+			sbasblock->orbitclockcorrection[DELTAB]=0.03125*twocomplementstrbintointeger(aux,12); //Delta B has a resolution of 0.03125 metres
+
+			getstr(aux,binarystring,lengthmessage,73,8);                                          	 //Delta X Rate of Change
+			sbasblock->orbitclockcorrection[DELTAXRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta X Rate has a resolution of 2^-11 metres/second
+
+			getstr(aux,binarystring,lengthmessage,81,8);                                          	 //Delta Y Rate of Change
+			sbasblock->orbitclockcorrection[DELTAYRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta Y Rate has a resolution of 2^-11 metres/second
+
+			getstr(aux,binarystring,lengthmessage,89,8);                                          	 //Delta Z Rate of Change
+			sbasblock->orbitclockcorrection[DELTAZRATEOFCHANGE]=pow(2,-11)*twocomplementstrbintointeger(aux,8); //Delta Z Rate has a resolution of 2^-11 metres/second
+
+			getstr(aux,binarystring,lengthmessage,97,9);                                          	 //Delta A f1
+			sbasblock->orbitclockcorrection[DELTABRATEOFCHANGE]=pow(2,-12)*twocomplementstrbintointeger(aux,8); //Delta B Rate has a resolution of 2^-12 metres/second
+
+			getstr(aux,binarystring,lengthmessage,106,13);											//Time of Day Applicability 
+			sbasblock->orbitclockcorrection[TIMEOFDAYAPPLICABILITY]=16.*(double)strtol(aux,&endptr,2);		//Time of Day Applicability to has a resolution of 16 seconds
+			//if((int)sbasblock->orbitclockcorrection[TIMEOFDAYAPPLICABILITY]>86384) return -5;
+
+			getstr(aux,binarystring,lengthmessage,218,4);                                        	 //DFREI
+			sbasblock->orbitclockcorrection[DFREIPOS]=(double)strtol(aux,&endptr,2); 
+
+			getstr(aux,binarystring,lengthmessage,222,4);                                        	 //RCORR
+			sbasblock->orbitclockcorrection[RCORRMULT]=1./15.*(double)strtol(aux,&endptr,2); 
+
+			//Get covariance parameters
+			getstr(aux,binarystring,lengthmessage,119,3);			//Extract Scale Exponent
+			sbasblock->covariancematrixdata[SCALEEXPONENT]=(double)strtol(aux,&endptr,2);	
+
+			scalefactor=pow(2,sbasblock->covariancematrixdata[SCALEEXPONENT]-5.);
+
+			sbasblock->covariancematrixdata[SCALEFACTOR]=scalefactor;
+
+			getstr(aux,binarystring,lengthmessage,122,9);			//Extract E1,1
+			sbasblock->covariancematrixdata[E11]=scalefactor*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,131,9);			//Extract E2,2
+			sbasblock->covariancematrixdata[E22]=scalefactor*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,140,9);			//Extract E3,3
+			sbasblock->covariancematrixdata[E33]=scalefactor*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,149,9);			//Extract E4,4
+			sbasblock->covariancematrixdata[E44]=scalefactor*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,158,10);			//Extract E1,2
+			sbasblock->covariancematrixdata[E12]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,168,10);			//Extract E1,3
+			sbasblock->covariancematrixdata[E13]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,178,10);			//Extract E1,4
+			sbasblock->covariancematrixdata[E14]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,188,10);			//Extract E2,3
+			sbasblock->covariancematrixdata[E23]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,198,10);			//Extract E2,4
+			sbasblock->covariancematrixdata[E24]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,208,10);			//Extract E3,4
+			sbasblock->covariancematrixdata[E34]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			break;
+		case OBADDFREIPARAMETERS: /*MT 37*/
+			//Decode common OBAD parameters
+			getstr(aux,binarystring,lengthmessage,10,6);			//Extract IvalidMT32
+			sbasblock->commonOBAD[IVALIDMT32]=30.+6.*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,16,6);			//Extract IvalidMT39/40
+			sbasblock->commonOBAD[IVALIDMT3940]=30.+6.*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,22,6);			//Extract CER
+			sbasblock->commonOBAD[CERMT37]=0.5*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,28,7);			//Extract Ccovariance
+			sbasblock->commonOBAD[CCOVARIANCEMT37]=0.1*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,221,3);			//Extract Time reference identifier
+			sbasblock->commonOBAD[TIMEREFID]=(double)strtol(aux,&endptr,2);	
+
+			//Decode OBAD parameters for each constellation
+			for(i=0;i<5;i++) {
+				j=constOBADorder[i];
+
+				getstr(aux,binarystring,lengthmessage,35+i*21,5);			//Extract ICORR
+				sbasblock->OBAD[j][ICORR]=30.+6.*(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,35+i*21+5,8);			//Extract CCORR
+				sbasblock->OBAD[j][CCORR]=0.01*(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,35+i*21+13,8);			//Extract RCORR and transform from mm/s to m/s
+				sbasblock->OBAD[j][RCORR]=(0.2/1000.)*(double)strtol(aux,&endptr,2);	
+			}
+
+			//Decode DREI table parameters
+			getstr(aux,binarystring,lengthmessage,161,4);			//Extract DFREI0
+			sbasblock->DFREITable[DFREI0]=DFREIminvalues[DFREI0]+0.0625*(double)strtol(aux,&endptr,2);	
+
+			for(i=0;i<4;i++) {
+				getstr(aux,binarystring,lengthmessage,165+i*4,4);			//Extract DFREI 1 to 4
+				sbasblock->DFREITable[i+1]=DFREIminvalues[i+1]+0.125*(double)strtol(aux,&endptr,2);	
+			}
+
+			for(i=0;i<5;i++) {
+				getstr(aux,binarystring,lengthmessage,181+i*4,4);			//Extract DFREI 5 to 9
+				sbasblock->DFREITable[i+5]=DFREIminvalues[i+5]+0.25*(double)strtol(aux,&endptr,2);	
+			}
+
+			for(i=0;i<2;i++) {
+				getstr(aux,binarystring,lengthmessage,201+i*4,4);			//Extract DFREI 10 to 11
+				sbasblock->DFREITable[i+10]=DFREIminvalues[i+10]+0.5*(double)strtol(aux,&endptr,2);	
+			}
+
+			getstr(aux,binarystring,lengthmessage,209,4);			//Extract DFREI12
+			sbasblock->DFREITable[DFREI12]=DFREIminvalues[DFREI12]+(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,213,4);			//Extract DFREI13
+			sbasblock->DFREITable[DFREI13]=DFREIminvalues[DFREI13]+3.*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,217,4);			//Extract DFREI14
+			if (options->SBASDFMCMT37version==MT37V1) {
+				sbasblock->DFREITable[DFREI14]=DFREIminvalues[DFREI14]+6.*(double)strtol(aux,&endptr,2);	
+			} else {
+				sbasblock->DFREITable[DFREI14]=DFREIminvalues[DFREI14]+30.*(double)strtol(aux,&endptr,2);	
+			}
+
+			break;
+		case SBASEPHEMERISDFMC: /*MT 39*/
+			if (options->SBASDFMCMT3940version==MT3940V1) {
+				getstr(aux,binarystring,lengthmessage,10,6);			//Extract satellite slot delta (converted to satellite slot number)
+				sbasblock->sbasepehemeris1[SATSLOTNUMBER]=119.+(double)strtol(aux,&endptr,2);	
+				if ((int)sbasblock->sbasepehemeris1[SATSLOTNUMBER]<120) return -11;
+				else if ((int)sbasblock->sbasepehemeris1[SATSLOTNUMBER]>158) return -12;
+				if ((int)sbasblock->sbasepehemeris1[SATSLOTNUMBER]!=sbasblock->PRN) return -13;
+
+				getstr(aux,binarystring,lengthmessage,16,2);                                                //Extract Issue of Data G
+				sbasblock->sbasepehemeris1[IODGNAVSBAS]=(double)strtol(aux,&endptr,2);
+
+				getstr(aux,binarystring,lengthmessage,18,5);                                                //Extract SBAS provider ID
+				sbasblock->sbasepehemeris1[SBASPROVIDERID]=(double)strtol(aux,&endptr,2);
+
+				getstr(aux,binarystring,lengthmessage,23,19);                                                //Extract Cuc
+				sbasblock->sbasepehemeris1[CUCNAVSBAS]=pow(2,-19)*Pi*1e-4*(double)twocomplementstrbintointeger(aux,19);
+
+				getstr(aux,binarystring,lengthmessage,42,19);                                                //Extract Cus
+				sbasblock->sbasepehemeris1[CUSNAVSBAS]=pow(2,-19)*Pi*1e-4*(double)twocomplementstrbintointeger(aux,19);
+
+				getstr(aux,binarystring,lengthmessage,61,22);                                                //Extract Idot
+				sbasblock->sbasepehemeris1[IDOTNAVSBAS]=pow(2,-21)*7./6.*Pi*1e-6*(double)twocomplementstrbintointeger(aux,22);
+
+				getstr(aux,binarystring,lengthmessage,83,34);                                                //Extract argument of perigree
+				sbasblock->sbasepehemeris1[PERIGREENAVSBAS]=pow(2,-33)*Pi*(double)twocomplementstrbintolonglonginteger(aux,34);
+
+				getstr(aux,binarystring,lengthmessage,117,34);                                                //Extract longitude of ascending node
+				sbasblock->sbasepehemeris1[ASCENDINGNAVSBAS]=pow(2,-33)*Pi*(double)twocomplementstrbintolonglonginteger(aux,34);
+
+				getstr(aux,binarystring,lengthmessage,151,34);                                                //Extract mean anomaly
+				sbasblock->sbasepehemeris1[ANOMALYNAVSBAS]=pow(2,-33)*Pi*(double)twocomplementstrbintolonglonginteger(aux,34);
+
+				getstr(aux,binarystring,lengthmessage,185,25);                                                //Extract agf0
+				sbasblock->sbasepehemeris1[AGF0NAVSBAS]=0.02*(double)twocomplementstrbintointeger(aux,25);
+
+				getstr(aux,binarystring,lengthmessage,210,16);                                                //Extract agf1
+				sbasblock->sbasepehemeris1[AGF1NAVSBAS]=4.*1e-5*(double)twocomplementstrbintointeger(aux,16);
+			} else { //MT3940V044
+				getstr(aux,binarystring,lengthmessage,10,6);			//Extract satellite slot delta (converted to satellite slot number)
+				sbasblock->sbasepehemeris1[SATSLOTNUMBER]=119.+(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,16,2);                                                //Extract Issue of Data G
+				sbasblock->sbasepehemeris1[IODGNAVSBAS]=(double)strtol(aux,&endptr,2);
+
+				getstr(aux,binarystring,lengthmessage,18,5);                                                //Extract SBAS provider ID
+				sbasblock->sbasepehemeris1[SBASPROVIDERID]=(double)strtol(aux,&endptr,2);
+
+				getstr(aux,binarystring,lengthmessage,23,22);                                                //Extract Cuc
+				sbasblock->sbasepehemeris1[CUCNAVSBAS]=pow(2,-22)*Pi*1e-4*(double)twocomplementstrbintointeger(aux,22);
+
+				getstr(aux,binarystring,lengthmessage,45,22);                                                //Extract Cus
+				sbasblock->sbasepehemeris1[CUSNAVSBAS]=pow(2,-22)*Pi*1e-4*(double)twocomplementstrbintointeger(aux,22);
+
+				getstr(aux,binarystring,lengthmessage,67,22);                                                //Extract Idot
+				sbasblock->sbasepehemeris1[IDOTNAVSBAS]=pow(2,-21)*7./6.*Pi*1e-6*(double)twocomplementstrbintointeger(aux,22);
+
+				getstr(aux,binarystring,lengthmessage,89,32);			//Extract eccentricity
+				sbasblock->sbasepehemeris1[AXISNAVSBASV044]=6370000.+0.01*(double)strtoll(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,121,35);                                                //Extract argument of perigree
+				sbasblock->sbasepehemeris1[PERIGREENAVSBAS]=pow(2,-34)*Pi*(double)twocomplementstrbintolonglonginteger(aux,35);
+
+				getstr(aux,binarystring,lengthmessage,156,35);                                                //Extract longitude of ascending node
+				sbasblock->sbasepehemeris1[ASCENDINGNAVSBAS]=pow(2,-34)*Pi*(double)twocomplementstrbintolonglonginteger(aux,35);
+
+				getstr(aux,binarystring,lengthmessage,191,35);                                                //Extract mean anomaly
+				sbasblock->sbasepehemeris1[ANOMALYNAVSBAS]=pow(2,-34)*Pi*(double)twocomplementstrbintolonglonginteger(aux,35);
+
+			}
+
+			break;
+		case SBASEPHEMERISCOVARIANCEDFMC: /*MT 40*/
+			getstr(aux,binarystring,lengthmessage,10,2);                                                  //Issue of Data G
+			sbasblock->sbasepehemeris2[IODGNAVSBAS]=(double)strtol(aux,&endptr,2);
+			sbasblock->covariancematrixdata[IODGPOSITIONNAVSBAS]=(double)strtol(aux,&endptr,2);
+
+			if (options->SBASDFMCMT3940version==MT3940V1) {
+				j=0;
+				getstr(aux,binarystring,lengthmessage,12,33);			//Extract inclination of angle at te
+				sbasblock->sbasepehemeris2[INCNAVSBAS]=pow(2,-33)*Pi*(double)strtoll(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,45,30);			//Extract eccentricity
+				sbasblock->sbasepehemeris2[ECCNAVSBAS]=pow(2,-30)*(double)strtoll(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,75,31);			//Extract semi-major axis
+				sbasblock->sbasepehemeris2[AXISNAVSBAS]=6370000.+0.02*(double)strtoll(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,106,13);			//Extract SBAS ephemeris time
+				sbasblock->sbasepehemeris2[EPHTIMENAVSBAS]=16.*(double)strtol(aux,&endptr,2);	
+				//if((int)sbasblock->sbasepehemeris2[EPHTIMENAVSBAS]>86384) return -5;
+
+				getstr(aux,binarystring,lengthmessage,218,4);                                        	 //DFREI
+				sbasblock->sbasepehemeris2[DFREINAVSBAS]=(double)strtol(aux,&endptr,2); 
+
+				getstr(aux,binarystring,lengthmessage,222,4);                                        	 //RCORR
+				sbasblock->sbasepehemeris2[RCORRMULTNAVSBAS]=1./15.*(double)strtol(aux,&endptr,2); 
+			} else { //MT3940V044
+				j=-3;
+				getstr(aux,binarystring,lengthmessage,12,34);			//Extract inclination of angle at te
+				sbasblock->sbasepehemeris2[INCNAVSBAS]=pow(2,-34)*Pi*(double)strtoll(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,46,31);			//Extract eccentricity
+				sbasblock->sbasepehemeris2[ECCNAVSBAS]=pow(2,-31)*(double)strtoll(aux,&endptr,2);	
+
+				sbasblock->sbasepehemeris2[AXISNAVSBAS]=0.;	//No Semi-major axis provided in V0.4.4
+
+				getstr(aux,binarystring,lengthmessage,77,13);			//Extract eccentricity
+				sbasblock->sbasepehemeris2[EPHTIMENAVSBAS]=16.*(double)strtol(aux,&endptr,2);	
+				//if((int)sbasblock->sbasepehemeris2[EPHTIMENAVSBAS]>86384) return -5;
+
+				getstr(aux,binarystring,lengthmessage,90,15);                                                //Extract agf0
+				sbasblock->sbasepehemeris2[AGF0NAVSBASV044]=0.02*(double)twocomplementstrbintointeger(aux,15);
+
+				getstr(aux,binarystring,lengthmessage,105,11);                                                //Extract agf1
+				sbasblock->sbasepehemeris2[AGF1NAVSBASV044]=4.*1e-5*(double)twocomplementstrbintointeger(aux,11);
+
+				getstr(aux,binarystring,lengthmessage,215,4);                                        	 //DFREI
+				sbasblock->sbasepehemeris2[DFREINAVSBAS]=(double)strtol(aux,&endptr,2); 
+
+				getstr(aux,binarystring,lengthmessage,219,4);                                        	 //RCORR
+				sbasblock->sbasepehemeris2[RCORRMULTNAVSBAS]=1./15.*(double)strtol(aux,&endptr,2); 
+			}
+			getstr(aux,binarystring,lengthmessage,119+j,3);			//Extract Scale Exponent
+			sbasblock->covariancematrixdata[SCALEEXPONENT]=strtol(aux,&endptr,2);	
+
+			scalefactor=pow(2,sbasblock->covariancematrixdata[SCALEEXPONENT]-5.);
+
+			sbasblock->covariancematrixdata[SCALEFACTOR]=scalefactor;
+
+			getstr(aux,binarystring,lengthmessage,122+j,9);			//Extract E1,1
+			sbasblock->covariancematrixdata[E11]=scalefactor*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,131+j,9);			//Extract E2,2
+			sbasblock->covariancematrixdata[E22]=scalefactor*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,140+j,9);			//Extract E3,3
+			sbasblock->covariancematrixdata[E33]=scalefactor*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,149+j,9);			//Extract E4,4
+			sbasblock->covariancematrixdata[E44]=scalefactor*(double)strtol(aux,&endptr,2);	
+
+			getstr(aux,binarystring,lengthmessage,158+j,10);			//Extract E1,2
+			sbasblock->covariancematrixdata[E12]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,168+j,10);			//Extract E1,3
+			sbasblock->covariancematrixdata[E13]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,178+j,10);			//Extract E1,4
+			sbasblock->covariancematrixdata[E14]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,188+j,10);			//Extract E2,3
+			sbasblock->covariancematrixdata[E23]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,198+j,10);			//Extract E2,4
+			sbasblock->covariancematrixdata[E24]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+
+			getstr(aux,binarystring,lengthmessage,208+j,10);			//Extract E3,4
+			sbasblock->covariancematrixdata[E34]=scalefactor*(double)twocomplementstrbintointeger(aux,10);
+			break;
+		case SBASNETWORKTIMEPARAMETERSDFMC: /*MT 42*/
+			if (options->SBASDFMCMT42version==MT42V1) {
+				//To be implement when new MT42 is in standard
+			} else { //MT42V071
+				//Decoding old version, which was removed in version MOPS DFMC v0.8 and will be reworked in future versions
+				//This message was sent in the Australian testbed
+				getstr(aux,binarystring,lengthmessage,10,24);				//Extract A1snt
+				sbasblock->GNSSTimeOffsetsCommon[A1SNT]=pow(2,-50)*(double)twocomplementstrbintointeger(aux,24);	//A1wnt has a resolution of 2^-50 seconds/second
+
+				getstr(aux,binarystring,lengthmessage,34,35);				//Extract A0snt
+				sbasblock->GNSSTimeOffsetsCommon[A0SNT]=pow(2,-33)*(double)twocomplementstrbintolonglonginteger(aux,35);	//A0wnt has a resolution of 2^-33 seconds
+
+				getstr(aux,binarystring,lengthmessage,69,8);				//Extract t0t
+				sbasblock->GNSSTimeOffsetsCommon[T0T]=4096.*(double)strtol(aux,&endptr,2);			//t0t has a resolution of 4096 seconds
+				if((int)sbasblock->GNSSTimeOffsetsCommon[T0T]>604799) return -6;
+
+				getstr(aux,binarystring,lengthmessage,77,8);				//Extract WNt
+				sbasblock->GNSSTimeOffsetsCommon[WNT]=(double)strtol(aux,&endptr,2);				//In weeks
+				
+				getstr(aux,binarystring,lengthmessage,85,8);				//Extract Delta tLS
+				sbasblock->GNSSTimeOffsetsCommon[DELTATLS]=(double)twocomplementstrbintointeger(aux,8);		//Delta tLS has a resolution of 1 second
+
+				getstr(aux,binarystring,lengthmessage,93,8);				//Extract WNlsf
+				sbasblock->GNSSTimeOffsetsCommon[WNLSF]=(double)strtol(aux,&endptr,2);				//In weeks
+
+				getstr(aux,binarystring,lengthmessage,101,3);				//Extract DN
+				sbasblock->GNSSTimeOffsetsCommon[DNDAY]=(double)strtol(aux,&endptr,2);				//In days
+				
+				getstr(aux,binarystring,lengthmessage,104,8);				//Extract Delta tLSF 
+				sbasblock->GNSSTimeOffsetsCommon[DELTATLSF]=(double)twocomplementstrbintointeger(aux,8);		//Delta tLSF has a resolution of 1 second
+
+				getstr(aux,binarystring,lengthmessage,112,3);				//Extract UTC Standard Identifier
+				sbasblock->GNSSTimeOffsetsCommon[UTCIDENTIFIER]=(double)strtol(aux,&endptr,2);
+
+				for(i=0;i<4;i++) {
+					j=constOBADorder[i];
+
+					getstr(aux,binarystring,lengthmessage,115+i*21,1);			//Extract Validity indicator
+					sbasblock->GNSSTimeOffsetsConst[j][VALIDITYIND]=(double)strtol(aux,&endptr,2);	
+
+					getstr(aux,binarystring,lengthmessage,116+i*21,17);			//Extract Time offset with respect to SBAS Network time
+					sbasblock->GNSSTimeOffsetsConst[j][TIMEOFFSETWRTSBAS]=pow(2,-33)*(double)strtol(aux,&endptr,2);	
+				}
+			}
+			break;
+		case SBASALMANACSDFMC: /*MT 47*/
+			sbasblock->numgeoalmanacsDFMC=0;
+			
+			
+			//Decode parameters
+			for(i=0;i<2;i++) {
+				if (i==0) {
+					j=0;
+				} else {
+					if (options->SBASDFMCMT47version==MT47V1) {
+						j=0;
+					} else {
+						//In version <=0.4.4, there was no WNRO and there were 2 spare bits between each satellite
+						j=2;
+					}
+				}
+				getstr(aux,binarystring,lengthmessage,10+i*106+j,6);			//Extract satellite slot delta (converted to satellite slot number)
+				sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]=(double)strtol(aux,&endptr,2);	
+				if ((int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]==0) continue;	//No almanac data
+				sbasblock->numgeoalmanacsDFMC++;
+				sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]+=119.; //Convert to satellite slot number
+				if ((int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]>158) return -12;
+
+				getstr(aux,binarystring,lengthmessage,16+i*106+j,5);			//Extract SBAS provider ID
+				sbasblock->geoalmanacsDFMC[i][SBASPROVIDERID]=(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,21+i*106+j,1);			//Extract broadcast indicator
+				sbasblock->geoalmanacsDFMC[i][BROADCASTIND]=(double)strtol(aux,&endptr,2);	
+				if ((int)sbasblock->geoalmanacsDFMC[i][BROADCASTIND]==1) {
+					// Broadcast indicator will only be 1 for the GEO PRN data matching the GEO broadcasting the message
+					if (sbasblock->PRN!=(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]) return -14;
+				}
+
+				getstr(aux,binarystring,lengthmessage,22+i*106+j,16);			//Extract semi-major axis
+				sbasblock->geoalmanacsDFMC[i][AXISALMANAC]=6370000.+650.*(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,38+i*106+j,8);			//Extract eccentricity
+				sbasblock->geoalmanacsDFMC[i][ECCALMANAC]=pow(2,-8)*(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,46+i*106+j,13);			//Extract inclination
+				sbasblock->geoalmanacsDFMC[i][INCALMANAC]=pow(2,-13)*Pi*(double)strtol(aux,&endptr,2);	
+
+				getstr(aux,binarystring,lengthmessage,59+i*106+j,14);			//Extract argument of perigree
+				sbasblock->geoalmanacsDFMC[i][PERIGREEALMANAC]=pow(2,-13)*Pi*(double)twocomplementstrbintointeger(aux,14);	
+
+				getstr(aux,binarystring,lengthmessage,73+i*106+j,14);			//Extract longitude of ascending node
+				sbasblock->geoalmanacsDFMC[i][ASCENDINGAALMANAC]=pow(2,-13)*Pi*(double)twocomplementstrbintointeger(aux,14);	
+
+				getstr(aux,binarystring,lengthmessage,87+i*106+j,8);			//Extract rate of right ascension
+				sbasblock->geoalmanacsDFMC[i][ASCENSIONAALMANAC]=-1e-9*(double)twocomplementstrbintointeger(aux,8);	
+
+				getstr(aux,binarystring,lengthmessage,95+i*106+j,15);			//Extract mean anomaly at ta
+				sbasblock->geoalmanacsDFMC[i][ANOMALYAALMANAC]=pow(2,-14)*Pi*(double)twocomplementstrbintointeger(aux,15);	
+
+				getstr(aux,binarystring,lengthmessage,110+i*106+j,6);			//Extract almanac reference epoch ta
+				sbasblock->geoalmanacsDFMC[i][REFEPOCHALMANAC]=1800.*(double)strtol(aux,&endptr,2);	
+				//if((int)sbasblock->geoalmanacsDFMC[i][REFEPOCHALMANAC]>86384) return -5;
+
+				if (options->SBASDFMCMT47version==MT47V1) {
+					getstr(aux,binarystring,lengthmessage,222,4);			//Week number roll over count
+					sbasblock->geoalmanacsDFMC[i][WNR0COUNTALMANAC]=(double)strtol(aux,&endptr,2);	
+				} else {
+					//No WNR0COUNTALMANAC in version <= 0.4.4
+					sbasblock->geoalmanacsDFMC[i][WNR0COUNTALMANAC]=15.;	
+				}
+			}
+			break;
+		case INTERNALTESTMESSAGE: /*MT 62*/
+			if(sbasblock->frequency==5) {
+				//For Australia SBAS DFMC test bed, there is a flag indicating if it is using GPS L1/L5 or L1/L2C
+				getstr(aux,binarystring,lengthmessage,27,4);                //Extract flag
+				sbasblock->GPSfrequenciesUsed=strtol(aux,&endptr,2);		//Flag = 0 => not set (using default L1/L5)
+																			//Flag = 1 => using L1/L2
+																			//Flag = 2 => using L1/L5
+			}
+			break;
+		case SERVICEAREADFMC: /*MT 48*/ case SERVICEAREADFMCTESTBED: /*MT 50*/
+			//DFMC messages not in standard
+			break;
+		case RESERVED8: case RESERVED11: case RESERVED13: case RESERVED14: case RESERVED15: case RESERVED16: case RESERVED19: case RESERVED20: case RESERVED21: case RESERVED22: case RESERVED23: case NULLMESSAGE:
 			//Messages with no data that do not have any effect 
 			return 0;
 			break;
@@ -8357,25 +11862,33 @@ int readSBASmessage (char *binarystring, int messagetype, int *decodedmessagetyp
  * Description : Update the SBAS data with the next message
  * Parameters  :
  * Name                           |Da|Unit|Description
+ * TSBASdatabox *SBASdatabox       IO N/A  Structure to save SBAS data
  * TSBASdata  *SBASdata            IO N/A  Structure to save SBAS data
  * TSBASblock  *sbasblock          I  N/A  TSBASblock structure
- * TTime currentepoch              I  N/A  Current epoch
- * int *messagesmissing            I  N/A  Indicates the number of messages missing due to the 
- *                                         preamble does not follow the cycle (can be 0,1,2)
  * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
-void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime currentepoch, int messagesmissing, TOptions  *options) {
+void updateSBASdata (TSBASdatabox *SBASdatabox, TSBASdata  *SBASdata, TSBASblock  *sbasblock, TOptions  *options) {
 
 	int 				i,j,k,l,m,n;
 	int 				pos,GEObuffer;
-	int					currentbandnumber,currentblockID;
+	int					currentbandnumber,currentblockID,currentIODI;
 	int					posFC;
+	int					iodpposition;
+	int					msgtimeout;
+	int					dataDestMode;
+	int					checkforIonobuffered,IODImaskVal;
+	int					*BlockIDPlace2GridPtr;
+	int					effectiveMessageType;
 	static int			initpos;
 	static int			posIndex[2];
 	static int			initialized=0;
-	static int			ionobuffered[MAX_SBAS_PRN][11][14];
-	static TSBASblock 	ionobuffer[MAX_SBAS_PRN][11][14]; //One for each band number and Block ID
-	
+	static int			ionobuffered[MAX_SBAS_PRN][11][14]; //One for each band number and Block ID
+	static int			MT39buffered[MAX_SBAS_PRN],MT40buffered[MAX_SBAS_PRN];
+	static int			anyIonoCorrBuffered[MAX_SBAS_PRN];
+	static double		sbasepehemeris1Buffer[MAX_SBAS_PRN][11];
+	static double		sbasepehemeris2Buffer[MAX_SBAS_PRN][9];
+	static double		covariancematrixdataBuffer[MAX_SBAS_PRN][14];
+	static TTime		MT39bufferedtime[MAX_SBAS_PRN],MT40bufferedtime[MAX_SBAS_PRN];
 
 	if(initialized==0) {
 		//Check if mixed GEO is allowed
@@ -8386,16 +11899,22 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 		}
 		posIndex[0]=0;
 				
+		SBASdatabox->ionobuffer=malloc(sizeof(TSBASblockIono*)*MAX_SBAS_PRN);
 		for(m=0;m<MAX_SBAS_PRN;m++) {
+			MT39buffered[m]=0;
+			MT40buffered[m]=0;
+			anyIonoCorrBuffered[m]=0;
+			SBASdatabox->ionobuffer[m]=malloc(sizeof(TSBASblockIono*)*11);
 			for(i=0;i<11;i++) {
+				SBASdatabox->ionobuffer[m][i]=malloc(sizeof(TSBASblockIono)*14);
 				for(j=0;j<14;j++) {
-					initSBASblock(&ionobuffer[m][i][j]);
+					//initSBASblock(&SBASdatabox->ionobuffer[m][i][j]);
 					//Allocate memory for Ionospheric Delay Corrections
-					ionobuffer[m][i][j].ionodelayparameters=malloc(sizeof(double*)*15); 		//Message 26 has 15 Grid Points
+					//SBASdatabox->ionobuffer[m][i][j].ionodelayparameters=malloc(sizeof(double*)*15); 		//Message 26 has 15 Grid Points
 					for(k=0;k<15;k++) {
-						ionobuffer[m][i][j].ionodelayparameters[k]=malloc(sizeof(double)*7);	//Each block will have 5 parameters + 2 for the GIVE value and variance
+					//	SBASdatabox->ionobuffer[m][i][j].ionodelayparameters[k]=malloc(sizeof(double)*7);	//Each block will have 5 parameters + 2 for the GIVE value and variance
 						for(l=0;l<7;l++) {
-							ionobuffer[m][i][j].ionodelayparameters[k][l]=-1.;			//-1 means value not set
+							SBASdatabox->ionobuffer[m][i][j].ionodelayparameters[k][l]=-1.;			//-1 means value not set
 						}
 					}
 					ionobuffered[m][i][j]=0;
@@ -8406,7 +11925,7 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 	}
 
 	//If we have one satellite in alarm (which lasts one minute), ignore its messages
-	if(SBASdata[0].alarmGEOPRN[sbasblock->PRN]==sbasblock->PRN && sbasblock->messagetype!=DONTUSE) return;
+	if(SBASdata[0].alarmGEOPRN[sbasblock->frequencyPos][sbasblock->PRN]==sbasblock->PRN && sbasblock->messagetype!=DONTUSE) return;
 
 	posIndex[1]=SBASdata[0].GEOPRN2pos[sbasblock->PRN];
 
@@ -8416,166 +11935,290 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 
 		//New message. Update data only if the current slot is the mixed one (position 0 or the one of the current PRN) 
 
-		if(SBASdata[pos].firstmessage.MJDN==-1) {
-			SBASdata[pos].firstmessage.MJDN=sbasblock->t.MJDN;
-			SBASdata[pos].firstmessage.SoD=sbasblock->t.SoD;
+		if(SBASdata[pos].firstmessage[sbasblock->frequencyPos].MJDN==-1) {
+			SBASdata[pos].firstmessage[sbasblock->frequencyPos].MJDN=sbasblock->t.MJDN;
+			SBASdata[pos].firstmessage[sbasblock->frequencyPos].SoD=sbasblock->t.SoD;
 		}
 
 		switch(sbasblock->messagetype) {
-			case(PRNMASKASSIGNMENTS):
+			case PRNMASKASSIGNMENTS: /*MT 1*/
 				//Check if we have a PRN Mask
 				if(sbasblock->IODP!=SBASdata[pos].IODPmask) {
 					//New Mask. Save the old mask, so we can still use messages 
-					for(i=0;i<51;i++) {
-
-						SBASdata[pos].pos2PRN[sbasblock->IODP][i]=sbasblock->pos2PRN[i];
-						SBASdata[pos].pos2GNSS[sbasblock->IODP][i]=sbasblock->pos2GNSS[i];
-					}
-					for(i=0;i<MAX_GNSS;i++) {
+					memcpy(SBASdata[pos].pos2PRN[sbasblock->frequencyPos][sbasblock->IODP],sbasblock->pos2PRN,sizeof(int)*51);
+					memcpy(SBASdata[pos].pos2GNSS[sbasblock->frequencyPos][sbasblock->IODP],sbasblock->pos2GNSS,sizeof(enum GNSSystem)*51);
+					/*for(i=0;i<51;i++) {
+						SBASdata[pos].pos2PRN[sbasblock->frequencyPos][sbasblock->IODP][i]=sbasblock->pos2PRN[i];
+						SBASdata[pos].pos2GNSS[sbasblock->frequencyPos][sbasblock->IODP][i]=sbasblock->pos2GNSS[i];
+					}*/
+					memcpy(SBASdata[pos].PRNactive[sbasblock->frequencyPos][sbasblock->IODP],sbasblock->PRNactive,sizeof(int)*MAX_GNSS*MAX_SBAS_PRN);
+					memcpy(SBASdata[pos].PRN2pos[sbasblock->frequencyPos][sbasblock->IODP],sbasblock->PRN2pos,sizeof(int)*MAX_GNSS*MAX_SBAS_PRN);
+					/*for(i=0;i<MAX_GNSS;i++) {
 						for(j=0;j<MAX_SBAS_PRN;j++) {
-							SBASdata[pos].PRNactive[sbasblock->IODP][i][j]=sbasblock->PRNactive[i][j];
-							SBASdata[pos].PRN2pos[sbasblock->IODP][i][j]=sbasblock->PRN2pos[i][j];
+							SBASdata[pos].PRNactive[sbasblock->frequencyPos][sbasblock->IODP][i][j]=sbasblock->PRNactive[i][j];
+							SBASdata[pos].PRN2pos[sbasblock->frequencyPos][sbasblock->IODP][i][j]=sbasblock->PRN2pos[i][j];
 						}
-					}
+					}*/
 					SBASdata[pos].oldIODPmask=SBASdata[pos].IODPmask;
 
 					SBASdata[pos].IODPmask=sbasblock->IODP;
-					SBASdata[pos].numsatellites[sbasblock->IODP]=sbasblock->numsatellites;
-					SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN;
-					SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD;
+					SBASdata[pos].numsatellites[sbasblock->frequencyPos][sbasblock->IODP]=sbasblock->numsatellites;
+					SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN;
+					SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD;
+
+					SBASdata[pos].oldmaskdiscarded[sbasblock->frequencyPos][sbasblock->messagetype]=0;
 
 					//Set all other masks to -1
 					for(i=0;i<5;i++) {
 						if(i!=SBASdata[pos].oldIODPmask && i!=SBASdata[pos].IODPmask) {
-							SBASdata[pos].numsatellites[i]=0;
+							SBASdata[pos].numsatellites[sbasblock->frequencyPos][i]=0;
 							for(j=0;j<MAX_GNSS;j++) {
 								for(k=0;k<MAX_SBAS_PRN;k++) {
-									SBASdata[pos].PRNactive[i][j][k]=-1;
-									SBASdata[pos].PRN2pos[i][j][k]=-1;
+									SBASdata[pos].PRNactive[sbasblock->frequencyPos][i][j][k]=-1;
+									SBASdata[pos].PRN2pos[sbasblock->frequencyPos][i][j][k]=-1;
 								}
 							}
+						}
+					}
 
+					//Update constellations monitored
+					//Only need to update once (when it is not mixed GEO), as constellation monitored is saved in Toptions structure
+					//Reset constellation list
+					options->numSBASConstList[pos][SBAS1FMODEPOS]=0;
+					for(i=0;i<MAX_GNSS;i++) {
+						options->SBASConstUsed[pos][SBAS1FMODEPOS][i]=sbasblock->constMonitored[i];
+						if (sbasblock->constMonitored[i]==1 && options->ConstellationUsed[i]==1) {
+							options->SBASConstList[pos][SBAS1FMODEPOS][options->numSBASConstList[pos][SBAS1FMODEPOS]]=i;
+							options->numSBASConstList[pos][SBAS1FMODEPOS]++;
+						} else {
+							options->SBASConstList[pos][SBAS1FMODEPOS][i]=-1;
 						}
 					}
 				}
 				//Update last received message
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 
 				break;
-			case(DONTUSE):
+			case DONTUSE: /*MT 0*/
 				if(options->usetype0messages==0) {
 					//Alarm messages are ignored
 					break;
 				}
 				//Update last received message
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 
-				SBASdata[pos].problems=sbasblock->problems;
+				SBASdata[pos].problems[sbasblock->frequencyPos]=sbasblock->problems;
 				if(sbasblock->problems==1) {
 					//This means that the message is all 0. There is no type 2 message data
-					SBASdata[pos].dontuse=sbasblock->dontuse;
+					SBASdata[pos].dontuse[sbasblock->frequencyPos]=sbasblock->dontuse;
 					if(pos!=0) {
 						//If mixed GEO is not enabled, we set alarm also to the mixed GEO, as the alarm condition is checked with the mixed GEO
-						SBASdata[0].dontuse=sbasblock->dontuse;
+						SBASdata[0].dontuse[sbasblock->frequencyPos]=sbasblock->dontuse;
 						//Save the PRN of the GEO that received the alarm
-						if (SBASdata[0].alarmGEOPRN[sbasblock->PRN]==-1) {
+						if (SBASdata[0].alarmGEOPRN[sbasblock->frequencyPos][sbasblock->PRN]==-1) {
 							//Alarm not already received from current GEO
-							SBASdata[0].alarmGEOPRN[sbasblock->PRN]=sbasblock->PRN;
+							SBASdata[0].alarmGEOPRN[sbasblock->frequencyPos][sbasblock->PRN]=sbasblock->PRN;
 							//Save the index position of the GEO with alarm
-							SBASdata[0].alarmGEOindex[SBASdata[0].numAlarmGEO]=pos;
+							SBASdata[0].alarmGEOindex[sbasblock->frequencyPos][SBASdata[0].numAlarmGEO[sbasblock->frequencyPos]]=pos;
 							//Increase by one the number of GEOs with alarm
-							SBASdata[0].numAlarmGEO++;
+							SBASdata[0].numAlarmGEO[sbasblock->frequencyPos]++;
 						}
 						//Set the remaining alarm time to 60 seconds
-						SBASdata[pos].alarmTimeRemaining=60;
-						SBASdata[0].alarmTimeRemaining=60;
+						SBASdata[pos].alarmTimeRemaining[sbasblock->frequencyPos]=60;
+						SBASdata[0].alarmTimeRemaining[sbasblock->frequencyPos]=60;
 					}
 					break;
 				}
-				if(options->alarmmessageastype2==0) {
+				if(options->useAlarmmessageForCorrections==0) {
 					//Decode message type 0 as it is
-					SBASdata[pos].dontuse=sbasblock->dontuse;
+					SBASdata[pos].dontuse[sbasblock->frequencyPos]=sbasblock->dontuse;
 					if(pos!=0) {
 						//If mixed GEO is not enabled, we set alarm also to the mixed GEO, as the alarm condition is checked with the mixed GEO
-						SBASdata[0].dontuse=sbasblock->dontuse;
-						if (SBASdata[0].alarmGEOPRN[sbasblock->PRN]==-1) {
+						SBASdata[0].dontuse[sbasblock->frequencyPos]=sbasblock->dontuse;
+						if (SBASdata[0].alarmGEOPRN[sbasblock->frequencyPos][sbasblock->PRN]==-1) {
 							//Save the PRN of the GEO that received the alarm
-							SBASdata[0].alarmGEOPRN[sbasblock->PRN]=sbasblock->PRN;
+							SBASdata[0].alarmGEOPRN[sbasblock->frequencyPos][sbasblock->PRN]=sbasblock->PRN;
 							//Save the index position of the GEO with alarm
-							SBASdata[0].alarmGEOindex[SBASdata[0].numAlarmGEO]=pos;
+							SBASdata[0].alarmGEOindex[sbasblock->frequencyPos][SBASdata[0].numAlarmGEO[sbasblock->frequencyPos]]=pos;
 							//Increase by one the number of GEOs with alarm
-							SBASdata[0].numAlarmGEO++;
+							SBASdata[0].numAlarmGEO[sbasblock->frequencyPos]++;
 							//Set the remaining alarm time to 60 seconds
-							SBASdata[pos].alarmTimeRemaining=60;
-							SBASdata[0].alarmTimeRemaining=60;
+							SBASdata[pos].alarmTimeRemaining[sbasblock->frequencyPos]=60;
+							SBASdata[0].alarmTimeRemaining[sbasblock->frequencyPos]=60;
 						}
 					}
 					break;
 				}
-				//No break here because message will be decoded as type 2
+				//If in SBAS DFMC message type is 0 and the spare bits are set to 0,
+				//it means that no message type 34, 35 or 36 is embedded in message type 0
+				if (sbasblock->frequency==5 && sbasblock->msg0type==0) break;
+				//No break here because message will be decoded as type 2 for SBAS 1F
+				// or type 34, 35 or 36 for SBAS DFMC
 				/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
-			case(FASTCORRECTIONS2):case(FASTCORRECTIONS3):case(FASTCORRECTIONS4):case(FASTCORRECTIONS5):
+			case FASTCORRECTIONS2: /*MT 2*/ case FASTCORRECTIONS3: /*MT 3*/ case FASTCORRECTIONS4: /*MT 4*/ case FASTCORRECTIONS5: /*MT 5*/
+				
+				if (sbasblock->frequency==1) {
+					if(SBASdata[pos].IODPfastcorr!=sbasblock->IODP) {
+						SBASdata[pos].oldIODPfastcorr=SBASdata[pos].IODPfastcorr;
+						SBASdata[pos].IODPfastcorr=sbasblock->IODP;
 
-				if(SBASdata[pos].IODPfastcorr!=sbasblock->IODP) {
-					SBASdata[pos].oldIODPfastcorr=SBASdata[pos].IODPfastcorr;
-					SBASdata[pos].IODPfastcorr=sbasblock->IODP;
-
-					for(i=0;i<5;i++) {
-						if(i!=SBASdata[pos].IODPfastcorr && i!=SBASdata[pos].oldIODPfastcorr) {
-							for(j=0;j<MAXSBASFASTCORR;j++) {
-								for(k=0;k<51;k++) {
-									SBASdata[pos].poslastFC[i][k] = -1;
-									SBASdata[pos].numFC[i][k] = 0;
-									SBASdata[pos].PRC[i][j][k] = 9999;
-									SBASdata[pos].RRC[i][j][k] = 9999;
-									SBASdata[pos].UDREI[i][j][k] = -1;
-									SBASdata[pos].UDRE[i][j][k] = -1;
-									SBASdata[pos].UDREsigma[i][j][k] = -1;
-									SBASdata[pos].IODF[i][j][k] = -1;
-									SBASdata[pos].lastfastcorrections[i][j][k].MJDN = -1;
-									SBASdata[pos].lastfastcorrections[i][j][k].SoD = -1;
+						for(i=0;i<5;i++) {
+							if(i!=SBASdata[pos].IODPfastcorr && i!=SBASdata[pos].oldIODPfastcorr) {
+								for(j=0;j<MAXSBASFASTCORR;j++) {
+									for(k=0;k<51;k++) {
+										SBASdata[pos].poslastFC[i][k] = -1;
+										SBASdata[pos].numFC[i][k] = 0;
+										SBASdata[pos].PRC[i][j][k] = 9999;
+										SBASdata[pos].RRC[i][j][k] = 9999;
+										SBASdata[pos].UDREI[i][j][k] = -1;
+										SBASdata[pos].UDRE[i][j][k] = -1;
+										SBASdata[pos].UDREsigma[i][j][k] = -1;
+										SBASdata[pos].IODF[i][j][k] = -1;
+										SBASdata[pos].lastfastcorrections[i][j][k].MJDN = -1;
+										SBASdata[pos].lastfastcorrections[i][j][k].SoD = -1;
+									}
 								}
 							}
 						}
 					}
+
+					if(sbasblock->messagetype==DONTUSE) {
+						i=0;
+						effectiveMessageType=FASTCORRECTIONS2;
+					} else {
+						i=(sbasblock->messagetype-2)*13;
+						effectiveMessageType=sbasblock->messagetype;
+					}
+
+					for(j=i,k=0;j<(effectiveMessageType-1)*13;j++,k++) {
+
+						SBASdata[pos].poslastFC[sbasblock->IODP][j]=mod(SBASdata[pos].poslastFC[sbasblock->IODP][j]+1,MAXSBASFASTCORR);
+						posFC=SBASdata[pos].poslastFC[sbasblock->IODP][j];
+
+						SBASdata[pos].numFC[sbasblock->IODP][j]=SBASdata[pos].numFC[sbasblock->IODP][j]+1;
+						if(SBASdata[pos].numFC[sbasblock->IODP][j]>MAXSBASFASTCORR) SBASdata[pos].numFC[sbasblock->IODP][j]=MAXSBASFASTCORR;
+
+						SBASdata[pos].PRC[sbasblock->IODP][posFC][j]=sbasblock->PRC[k];
+						SBASdata[pos].UDREI[sbasblock->IODP][posFC][j]=sbasblock->UDREI[k];
+						SBASdata[pos].UDRE[sbasblock->IODP][posFC][j]=sbasblock->UDRE[k];
+						SBASdata[pos].UDREsigma[sbasblock->IODP][posFC][j]=sbasblock->UDREsigma[k];
+						SBASdata[pos].IODF[sbasblock->IODP][posFC][j]=sbasblock->IODF[0];
+
+						SBASdata[pos].lastfastcorrections[sbasblock->IODP][posFC][j].MJDN=sbasblock->t.MJDN;
+						SBASdata[pos].lastfastcorrections[sbasblock->IODP][posFC][j].SoD=sbasblock->t.SoD;
+
+						//Save last fast message for satellites in current message
+						SBASdata[pos].lastfastmessage[j]=effectiveMessageType;
+					}
+
+					//Update last received message
+					SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][effectiveMessageType].MJDN=sbasblock->t.MJDN;
+					SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][effectiveMessageType].SoD=sbasblock->t.SoD;
+					break;	
 				}
-
-				if(sbasblock->messagetype==DONTUSE) i=0;
-				else i=(sbasblock->messagetype-2)*13;
-
-
-				for(j=i,k=0;j<(sbasblock->messagetype-1)*13;j++,k++) {
-
-					SBASdata[pos].poslastFC[sbasblock->IODP][j]=mod(SBASdata[pos].poslastFC[sbasblock->IODP][j]+1,MAXSBASFASTCORR);
-					posFC=SBASdata[pos].poslastFC[sbasblock->IODP][j];
-
-					SBASdata[pos].numFC[sbasblock->IODP][j]=SBASdata[pos].numFC[sbasblock->IODP][j]+1;
-					if(SBASdata[pos].numFC[sbasblock->IODP][j]>MAXSBASFASTCORR) SBASdata[pos].numFC[sbasblock->IODP][j]=MAXSBASFASTCORR;
-
-					SBASdata[pos].PRC[sbasblock->IODP][posFC][j]=sbasblock->PRC[k];
-					SBASdata[pos].UDREI[sbasblock->IODP][posFC][j]=sbasblock->UDREI[k];
-					SBASdata[pos].UDRE[sbasblock->IODP][posFC][j]=sbasblock->UDRE[k];
-					SBASdata[pos].UDREsigma[sbasblock->IODP][posFC][j]=sbasblock->UDREsigma[k];
-					SBASdata[pos].IODF[sbasblock->IODP][posFC][j]=sbasblock->IODF[0];
-
-					SBASdata[pos].lastfastcorrections[sbasblock->IODP][posFC][j].MJDN=sbasblock->t.MJDN;
-					SBASdata[pos].lastfastcorrections[sbasblock->IODP][posFC][j].SoD=sbasblock->t.SoD;
-
-					//Save last fast message for satellites in current message
-					SBASdata[pos].lastfastmessage[j]=sbasblock->messagetype;
+				/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
+			case INTEGRITYINFODFMC34: /*MT 34*/
+				if (sbasblock->msg0type==1) {
+					j=0;
+					if (sbasblock->IODM!=SBASdata[pos].IODMmask && sbasblock->IODM!=SBASdata[pos].oldIODMmask) continue; //No mask received for current data
+					for(i=0;i<SBASdata[pos].numsatellites[sbasblock->frequencyPos][sbasblock->IODM];i++) {
+						switch(sbasblock->DFRECI[i]) {
+							case 0:
+								//DFRECI is 0, which means that DFREI doesn't change, so timeout is refreshed
+								//If previous DFREI has timed out, do not refresh timeout
+								//In the case no DFREI was received before, lastDFREIreceived will be -1 (therefore the tdiff will be over the threshold)
+								if (tdiff(&sbasblock->t,&SBASdata[pos].lastDFREIreceived[sbasblock->IODM][i])<=SBASdata[pos].timeoutmessages[sbasblock->frequencyPos][options->precisionapproach][INTEGRITYINFODFMC34]) {
+									//DFREI not timeout, therefore we can refresh timeout
+									memcpy(&SBASdata[pos].lastDFREIreceived[sbasblock->IODM][i],&sbasblock->t,sizeof(TTime));
+								}
+								break;
+							case 1:
+								//DFRECI=1 means that DFREI has changed and therefore its value is transmitted in MT34
+								//In MT34 there are only 7 slots for transmitting new DFREIs, so the first 7 satellites
+								//with DFRECI=1 will have their DFREI updated in this message
+								if (j<7) {
+									SBASdata[pos].DFREI[sbasblock->IODM][i]=sbasblock->DFREI[j];
+									SBASdata[pos].DFRECI2bumped[sbasblock->IODM][i]=0;	//Set no bump applied to DFREI
+									memcpy(&SBASdata[pos].lastDFREIreceived[sbasblock->IODM][i],&sbasblock->t,sizeof(TTime));
+									j++;
+								} else {
+									//Set DFREI to 16. Value 16 is not in MOPS, but this is to indicate that the satellite
+									//cannot be used due to the DFREI has changed but we don't have the new value.
+									//Do not update time-out as we don't know the new value of the DFREI
+									//According to SBAS SARPS, this case should never occur, but if it occurs, it will
+									//be visible to the user in the unselection message
+									SBASdata[pos].DFREI[sbasblock->IODM][i]=16;
+								}
+								break;
+							case 2:
+								//DFRECI is 2 which means that DFREI is increased by 1, so timeout is refreshed
+								//If we don't have a previous DFREI or current DFREI has timeout, don't refresh timeout
+								//and don't save the DFRECI value, as we can only apply the bump to a valid DFREI
+								//In the case no DFREI was received before, lastDFREIreceived will be -1 (therefore the tdiff will be over the threshold)
+								if (tdiff(&sbasblock->t,&SBASdata[pos].lastDFREIreceived[sbasblock->IODM][i])<=SBASdata[pos].timeoutmessages[sbasblock->frequencyPos][options->precisionapproach][INTEGRITYINFODFMC34]) {
+									//If DFREI is 16, means that DFREI value changed but we don't have the new value, so we can't
+									//add a bump to the current DFREI if we don't know the current value
+									if (SBASdata[pos].DFREI[sbasblock->IODM][i]!=16) {
+										if (SBASdata[pos].DFRECI2bumped[sbasblock->IODM][i]==0) {
+											//DFRECI not bumped. Add 1 to DFREI (only if DFREI is not 15)
+											if (SBASdata[pos].DFREI[sbasblock->IODM][i]<15) {
+												SBASdata[pos].DFREI[sbasblock->IODM][i]++;
+											}
+											SBASdata[pos].DFRECI2bumped[sbasblock->IODM][i]=1;
+										}
+										memcpy(&SBASdata[pos].lastDFREIreceived[sbasblock->IODM][i],&sbasblock->t,sizeof(TTime));
+									}
+								}
+								break;
+							default: //case 3:
+								//DFRECI is 3, which means that satellite is unselected.
+								//Timeout is updated although is not really necessary, as satellite will not be used
+								//Also set DFRECI bump indicator to 0 as we have a new DFREI (don't use)
+								SBASdata[pos].DFREI[sbasblock->IODM][i]=15;
+								SBASdata[pos].DFRECI2bumped[sbasblock->IODM][i]=0;
+								memcpy(&SBASdata[pos].lastDFREIreceived[sbasblock->IODM][i],&sbasblock->t,sizeof(TTime));
+								break;
+						}
+					}
+					//Update last received message (the message type is manually set as it me be received inside a MT0 message)
+					memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][INTEGRITYINFODFMC34],&sbasblock->t,sizeof(TTime));
+					break;
 				}
+				/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
+			case INTEGRITYINFODFMC35: /*MT 35*/
+				if (sbasblock->msg0type==2) {
+					if (sbasblock->IODM!=SBASdata[pos].IODMmask && sbasblock->IODM!=SBASdata[pos].oldIODMmask) continue; //No mask received for current data
+					//If number of monitored satellites is less than 53, loop only on the number of monitored satellites
+					if (SBASdata[pos].numsatellites[sbasblock->frequencyPos][sbasblock->IODM]<53) {
+						j=SBASdata[pos].numsatellites[sbasblock->frequencyPos][sbasblock->IODM];
+					} else {
+						j=53;
+					}
+					for(i=0;i<j;i++) {
+						SBASdata[pos].DFREI[sbasblock->IODM][i]=sbasblock->DFREI[i];
+						SBASdata[pos].DFRECI2bumped[sbasblock->IODM][i]=0;	//Set no bump applied to DFREI
+						memcpy(&SBASdata[pos].lastDFREIreceived[sbasblock->IODM][i],&sbasblock->t,sizeof(TTime));
+					}
+					//Update last received message (the message type is manually set as it me be received inside a MT0 message)
+					memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][INTEGRITYINFODFMC35],&sbasblock->t,sizeof(TTime));
+					break;
+				}
+				/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
+			case INTEGRITYINFODFMC36: /*MT 36*/
+				if (sbasblock->IODM!=SBASdata[pos].IODMmask && sbasblock->IODM!=SBASdata[pos].oldIODMmask) continue; //No mask received for current data
+				for(i=53;i<SBASdata[pos].numsatellites[sbasblock->frequencyPos][sbasblock->IODM];i++) {
+					SBASdata[pos].DFREI[sbasblock->IODM][i]=sbasblock->DFREI[i-53];
+					SBASdata[pos].DFRECI2bumped[sbasblock->IODM][i]=0;	//Set no bump applied to DFREI
+					memcpy(&SBASdata[pos].lastDFREIreceived[sbasblock->IODM][i],&sbasblock->t,sizeof(TTime));
+				}
+				//Update last received message (the message type is manually set as it me be received inside a MT0 message)
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][INTEGRITYINFODFMC36],&sbasblock->t,sizeof(TTime));
+				break;
+			case INTEGRITYINFO: /*MT 6*/
 
-				//Update last received message
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
-
-
-				break;	
-			case(INTEGRITYINFO):
-
-				if(SBASdata[pos].IODPfastcorr==-1) {
+				if(SBASdata[pos].IODPfastcorr==4) {
 					//No message type 2-5 or 24 received, so we don't have any IODP for the fast corrections.
 					//This message has no IODP, it uses the last one received in messages 2-5 or 24.
 					//There is the case that when IODP changes and we miss fast corrections messages with the
@@ -8611,11 +12254,11 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					SBASdata[pos].lastfastmessage[i]=sbasblock->messagetype;
 				}
 
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 
 				break;	
-			case(FASTCORRECTIONSDEGRADATIONFACTOR):
+			case FASTCORRECTIONSDEGRADATIONFACTOR: /*MT 7*/
 
 				if(SBASdata[pos].IODPdegcorr!=sbasblock->IODP) {
 					SBASdata[pos].oldIODPdegcorr=SBASdata[pos].IODPdegcorr;
@@ -8635,11 +12278,15 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					}
 				}
 
+				memcpy(SBASdata[pos].aifactor[sbasblock->IODP],sbasblock->aifactor,sizeof(double)*51);
+				memcpy(SBASdata[pos].fastcorrtimeout[0][sbasblock->IODP],sbasblock->timeoutintervalnonprecise,sizeof(int)*51);
+				memcpy(SBASdata[pos].fastcorrtimeout[1][sbasblock->IODP],sbasblock->timeoutintervalprecise,sizeof(int)*51);
+				memcpy(SBASdata[pos].fastcorrupdateinterval[sbasblock->IODP],sbasblock->fastcorrupdateinterval,sizeof(int)*51);
 				for(i=0;i<51;i++) {
-					SBASdata[pos].aifactor[sbasblock->IODP][i]=sbasblock->aifactor[i];	
+				/*	SBASdata[pos].aifactor[sbasblock->IODP][i]=sbasblock->aifactor[i];	
 					SBASdata[pos].fastcorrtimeout[0][sbasblock->IODP][i]=sbasblock->timeoutintervalnonprecise[i];	
 					SBASdata[pos].fastcorrtimeout[1][sbasblock->IODP][i]=sbasblock->timeoutintervalprecise[i];	
-					SBASdata[pos].fastcorrupdateinterval[sbasblock->IODP][i]=sbasblock->fastcorrupdateinterval[i];	
+					SBASdata[pos].fastcorrupdateinterval[sbasblock->IODP][i]=sbasblock->fastcorrupdateinterval[i];	*/
 					SBASdata[pos].lastfastdegfactor[sbasblock->IODP][i].MJDN=sbasblock->t.MJDN;
 					SBASdata[pos].lastfastdegfactor[sbasblock->IODP][i].SoD=sbasblock->t.SoD;
 				}
@@ -8647,34 +12294,37 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 				SBASdata[pos].tlat[sbasblock->IODP]=sbasblock->tlat;
 				SBASdata[pos].IODPdegcorr=sbasblock->IODP;
 
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 				break;
-			case(DEGRADATIONPARAMETERS):
-				for(i=0;i<16;i++) {
+			case DEGRADATIONPARAMETERS: /*MT 10*/
+
+				memcpy(SBASdata[pos].olddegradationfactors,SBASdata[pos].degradationfactors,sizeof(double)*16);
+				memcpy(SBASdata[pos].degradationfactors,sbasblock->degradationfactors,sizeof(double)*16);
+			/*	for(i=0;i<16;i++) {
 					//Save old values
 					SBASdata[pos].olddegradationfactors[i]=SBASdata[pos].degradationfactors[i];	
 
 					//Save new values
 					SBASdata[pos].degradationfactors[i]=sbasblock->degradationfactors[i];
-				}	
+				}*/	
 
 				//Update last received message 
 				//Save old values
-				SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN;
-				SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD;
+				SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN;
+				SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD;
 				//Save new values
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 				break;
-			case(LONGTERMSATELLITECORRECTIONS):
+			case LONGTERMSATELLITECORRECTIONS: /*MT 25*/
 				//Check if IODP has changed
 				if(SBASdata[pos].IODPlongterm!=sbasblock->longtermsaterrcorrections[0][IODPPOSITION]) {
 					//IODP has changed. Save the old values and initialize the current one
 					SBASdata[pos].oldIODPlongterm=SBASdata[pos].IODPlongterm;
 					SBASdata[pos].IODPlongterm=(int)sbasblock->longtermsaterrcorrections[0][IODPPOSITION];
 					for(i=0;i<51;i++) {
-						for(j=0;j<13;j++) {
+						for(j=0;j<15;j++) {
 							for(k=0;k<4;k++) {
 								if(k!=SBASdata[pos].oldIODPlongterm && k!=SBASdata[pos].IODPlongterm) {
 									//Initialize the other IODP blocks
@@ -8698,17 +12348,19 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					//Check if IODE has changed. Save the previous message if it has changed
 					if(SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j][ISSUEOFDATA]!=sbasblock->longtermsaterrcorrections[i][ISSUEOFDATA]) {
 						//IODE has changed
-						for(k=0;k<13;k++) {
+						memcpy(SBASdata[pos].prevlongtermsaterrcorrections[SBASdata[pos].IODPlongterm][j],SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j],sizeof(double)*15);
+						/*for(k=0;k<15;k++) {
 							SBASdata[pos].prevlongtermsaterrcorrections[SBASdata[pos].IODPlongterm][j][k]=SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j][k];
-						}
+						}*/
 						//Update last received message for the given PRNs
 						SBASdata[pos].prevlastlongtermdata[SBASdata[pos].IODPlongterm][j].MJDN=SBASdata[pos].lastlongtermdata[SBASdata[pos].IODPlongterm][j].MJDN;
 						SBASdata[pos].prevlastlongtermdata[SBASdata[pos].IODPlongterm][j].SoD=SBASdata[pos].lastlongtermdata[SBASdata[pos].IODPlongterm][j].SoD;
 					}
 
-					for(k=0;k<13;k++) {
+					memcpy(SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j],sbasblock->longtermsaterrcorrections[i],sizeof(double)*15);
+					/*for(k=0;k<15;k++) {
 						SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j][k]=sbasblock->longtermsaterrcorrections[i][k];
-					}
+					}*/
 					//Update last received message for the given PRNs
 					SBASdata[pos].lastlongtermdata[SBASdata[pos].IODPlongterm][j].MJDN=sbasblock->t.MJDN;
 					SBASdata[pos].lastlongtermdata[SBASdata[pos].IODPlongterm][j].SoD=sbasblock->t.SoD;
@@ -8718,7 +12370,7 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 
 				}
 				break;
-			case(MIXEDFASTLONGTERMCORRECTIONS):
+			case MIXEDFASTLONGTERMCORRECTIONS: /*MT 24*/
 				//FASTCORRECTIONS
 				if(SBASdata[pos].IODPfastcorr!=sbasblock->IODP) {
 					SBASdata[pos].oldIODPfastcorr=SBASdata[pos].IODPfastcorr;
@@ -8767,8 +12419,8 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					SBASdata[pos].lastfastmessage[j]=sbasblock->messagetype;
 				}
 
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 
 				//LONGTERMSATELLITECORRECTIONS
 				//Check if IODP has changed
@@ -8777,7 +12429,7 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					SBASdata[pos].oldIODPlongterm=SBASdata[pos].IODPlongterm;
 					SBASdata[pos].IODPlongterm=(int)sbasblock->longtermsaterrcorrections[0][IODPPOSITION];
 					for(i=0;i<51;i++) {
-						for(j=0;j<13;j++) {
+						for(j=0;j<15;j++) {
 							for(k=0;k<4;k++) {
 								if(k!=SBASdata[pos].oldIODPlongterm && k!=SBASdata[pos].IODPlongterm) {
 									//Initialize the other IODP blocks
@@ -8801,16 +12453,18 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					//Check if IODE has changed. Save the previous message if it has changed
 					if(SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j][ISSUEOFDATA]!=sbasblock->longtermsaterrcorrections[i][ISSUEOFDATA]) {
 						//IODE has changed
-						for(k=0;k<13;k++) {
+						memcpy(SBASdata[pos].prevlongtermsaterrcorrections[SBASdata[pos].IODPlongterm][j],SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j],sizeof(double)*15);
+						/*for(k=0;k<15;k++) {
 							SBASdata[pos].prevlongtermsaterrcorrections[SBASdata[pos].IODPlongterm][j][k]=SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j][k];
-						}
+						}*/
 						//Update last received message for the given PRNs
 						SBASdata[pos].prevlastlongtermdata[SBASdata[pos].IODPlongterm][j].MJDN=SBASdata[pos].lastlongtermdata[SBASdata[pos].IODPlongterm][j].MJDN;
 						SBASdata[pos].prevlastlongtermdata[SBASdata[pos].IODPlongterm][j].SoD=SBASdata[pos].lastlongtermdata[SBASdata[pos].IODPlongterm][j].SoD;
 					}
-					for(k=0;k<13;k++) {
+					memcpy(SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j],sbasblock->longtermsaterrcorrections[i],sizeof(double)*15);
+					/*for(k=0;k<15;k++) {
 						SBASdata[pos].longtermsaterrcorrections[SBASdata[pos].IODPlongterm][j][k]=sbasblock->longtermsaterrcorrections[i][k];	
-					}
+					}*/
 					//Update last received message for the given PRNs
 					SBASdata[pos].lastlongtermdata[SBASdata[pos].IODPlongterm][j].MJDN=sbasblock->t.MJDN;
 					SBASdata[pos].lastlongtermdata[SBASdata[pos].IODPlongterm][j].SoD=sbasblock->t.SoD;
@@ -8821,38 +12475,43 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 				}
 				
 				break;
-			case(GEONAVIGATIONMESSAGE):
-				for(i=0;i<17;i++) {
+
+			case GEONAVIGATIONMESSAGE: /*MT 9*/
+				memcpy(SBASdata[pos].oldgeonavigationmessage,SBASdata[pos].geonavigationmessage,sizeof(double)*17);
+				memcpy(SBASdata[pos].geonavigationmessage,sbasblock->geonavigationmessage,sizeof(double)*17);
+				/*for(i=0;i<17;i++) {
 					//Save old values
 					SBASdata[pos].oldgeonavigationmessage[i]=SBASdata[pos].geonavigationmessage[i];	
 
 					//Save new values
 					SBASdata[pos].geonavigationmessage[i]=sbasblock->geonavigationmessage[i];	
-				}
+				}*/
 				//Update last received message
 				//Save old values
-				SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN;
-				SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD;
+				SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN;
+				SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD;
 				//Save new values
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 				break;
-			case(GEOSATELLITEALMANACS):
+			case GEOSATELLITEALMANACS: /*MT 17*/
+				memcpy(SBASdata[pos].oldgeoalmanacsmessage,SBASdata[pos].geoalmanacsmessage,sizeof(double)*3*12);
 				//Save old values
 				SBASdata[pos].oldnumgeoalmanacs=SBASdata[pos].numgeoalmanacs;
-				for(i=0;i<3;i++) {
+				/*for(i=0;i<3;i++) {
 					for(j=0;j<12;j++) {
 						SBASdata[pos].oldgeoalmanacsmessage[i][j]=SBASdata[pos].geoalmanacsmessage[i][j];
 					}
-				}
+				}*/
 
+				memcpy(SBASdata[pos].geoalmanacsmessage,sbasblock->geoalmanacsmessage,sizeof(double)*sbasblock->numgeoalmanacs*12);
 				//Save new values
 				SBASdata[pos].numgeoalmanacs=sbasblock->numgeoalmanacs;
-				for(i=0;i<sbasblock->numgeoalmanacs;i++) {
+				/*for(i=0;i<sbasblock->numgeoalmanacs;i++) {
 					for(j=0;j<12;j++) {
 						SBASdata[pos].geoalmanacsmessage[i][j]=sbasblock->geoalmanacsmessage[i][j];	
 					}
-				}
+				}*/
 
 				//If there are empty slots, initialize them so there are no remanents from previous messages
 				for(;i<3;i++) {
@@ -8862,20 +12521,20 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 				}
 				//Update last received message
 				//Save old values
-				SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN;
-				SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD;
+				SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN;
+				SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD;
 				//Save new values
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 
 				break;
-			case(SBASSERVICEMESSAGE):
+			case SBASSERVICEMESSAGE: /*MT 27*/
 				if(SBASdata[pos].IODS!=(int)sbasblock->servicemessage[IODSPOS]) {
 					//New IODS, we need to save old values and initialize the values of the current block
 					SBASdata[pos].oldIODS=SBASdata[pos].IODS;
 
-					SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN;
-					SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD;
+					SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN;
+					SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD;
 
 					SBASdata[pos].IODS=sbasblock->servicemessage[IODSPOS];
 					//Initialize the values of the not used blocks 
@@ -8903,6 +12562,7 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 				if(SBASdata[pos].servicemessagesreceived[(int)sbasblock->servicemessage[IODSPOS]][(int)sbasblock->servicemessage[SERVICEMESSAGENUMBER]-1]==-1) {
 					//This service message has not been received, we need to save the data
 					for(i=0;i<(int)sbasblock->servicemessage[NUMBEROFREGIONS];i++) {
+						//memcpy(SBASdata[pos].regioncoordinates[(int)sbasblock->servicemessage[IODSPOS]][(int)sbasblock->servicemessage[PRIORITYCODE]][SBASdata[pos].numberofregions[(int)sbasblock->servicemessage[IODSPOS]][(int)sbasblock->servicemessage[PRIORITYCODE]]+i],sbasblock->regioncoordinates[i],sizeof(int)*12);
 						for(j=0;j<12;j++) {
 							SBASdata[pos].regioncoordinates[(int)sbasblock->servicemessage[IODSPOS]][(int)sbasblock->servicemessage[PRIORITYCODE]][SBASdata[pos].numberofregions[(int)sbasblock->servicemessage[IODSPOS]][(int)sbasblock->servicemessage[PRIORITYCODE]]+i][j]=sbasblock->regioncoordinates[i][j];
 						}
@@ -8916,23 +12576,25 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					}
 				}
 				//Update last received message
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 				break;
-			case(SBASNETWORKTIMEPARAMETERS):
-				for(i=0;i<12;i++) {
-					SBASdata[pos].networktimemessage[i]=sbasblock->networktimemessage[i];
-				}
+			case SBASNETWORKTIMEPARAMETERS: /*MT 12*/
+				memcpy(SBASdata[pos].networktimemessage,sbasblock->networktimemessage,sizeof(double)*13);
+				//for(i=0;i<13;i++) {
+				//	SBASdata[pos].networktimemessage[i]=sbasblock->networktimemessage[i];
+				//}
 				//Update last received message
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 				break;
-			case(CLOCKEPHEMERISCOVARIANCEMATRIX):
+			case CLOCKEPHEMERISCOVARIANCEMATRIX: /*MT 28*/
 				//Check if the Message mask matches with the latest message received
-				if(SBASdata[pos].IODPcovariance!=(int)sbasblock->clockephemeriscovariance[0][IODPPOSITION]) {
+				iodpposition=(int)sbasblock->clockephemeriscovariance[0][IODPPOSITION];
+				if(SBASdata[pos].IODPcovariance!=iodpposition) {
 					//New mask. We need to save all the old values and initialize the current one
 					for(i=0;i<5;i++) {
-						if(i!=SBASdata[pos].IODPcovariance && i!=(int)sbasblock->clockephemeriscovariance[0][IODPPOSITION]) {
+						if(i!=SBASdata[pos].IODPcovariance && i!=iodpposition) {
 							for(j=0;j<51;j++) {
 								SBASdata[pos].lastcovmatrix[i][j].MJDN=-1;
 								SBASdata[pos].lastcovmatrix[i][j].SoD=-1;
@@ -8942,36 +12604,34 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					}
 					SBASdata[pos].oldIODPcovariance=SBASdata[pos].IODPcovariance;
 
-					SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN;
-					SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD;
+					SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN;
+					SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD;
 				}
 
 
 				for(i=0;i<sbasblock->numclockephemeriscovariance;i++) {
-					if(sbasblock->clockephemeriscovariance[i][PRNMASKNUMBER]==0) continue; //PRNMASKNUMBER=0 means that there is no valid data
+					if((int)sbasblock->clockephemeriscovariance[i][PRNMASKNUMBER]==0) continue; //PRNMASKNUMBER=0 means that there is no valid data
 					//Substract one because our PRN Mask number goes from 0 to 50
 					sbasblock->clockephemeriscovariance[i][PRNMASKNUMBER]=sbasblock->clockephemeriscovariance[i][PRNMASKNUMBER]-1;
-					j=sbasblock->clockephemeriscovariance[i][PRNMASKNUMBER];
-					for(k=0;k<13;k++) {
-						//Save new values
-						SBASdata[pos].clockephemeriscovariance[(int)sbasblock->clockephemeriscovariance[0][IODPPOSITION]][j][k]=sbasblock->clockephemeriscovariance[i][k];
-					}
+					j=(int)sbasblock->clockephemeriscovariance[i][PRNMASKNUMBER];
+					//Save new values
+					memcpy(SBASdata[pos].clockephemeriscovariance[iodpposition][j],sbasblock->clockephemeriscovariance[i],sizeof(double)*14);
 
 					//Update last received message for the given PRNs 
-					SBASdata[pos].lastcovmatrix[(int)sbasblock->clockephemeriscovariance[0][IODPPOSITION]][j].MJDN=sbasblock->t.MJDN;
-					SBASdata[pos].lastcovmatrix[(int)sbasblock->clockephemeriscovariance[0][IODPPOSITION]][j].SoD=sbasblock->t.SoD;
+					SBASdata[pos].lastcovmatrix[iodpposition][j].MJDN=sbasblock->t.MJDN;
+					SBASdata[pos].lastcovmatrix[iodpposition][j].SoD=sbasblock->t.SoD;
 
 					//Leave sbasblock as it was
 					sbasblock->clockephemeriscovariance[i][PRNMASKNUMBER]=sbasblock->clockephemeriscovariance[i][PRNMASKNUMBER]+1;
 				}
 				
-				SBASdata[pos].IODPcovariance=sbasblock->clockephemeriscovariance[0][IODPPOSITION];
+				SBASdata[pos].IODPcovariance=iodpposition;
 
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 
 				break;
-			case(IONOSPHERICGRIDPOINTSMASKS):
+			case IONOSPHERICGRIDPOINTSMASKS: /*MT 18*/
 				//Check if the mask has changed 
 				if(SBASdata[pos].IODImask==(int)sbasblock->igpmaskmessage[IODIPOS]) {
 					//The mask has NOT changed. Check if we have received this mask
@@ -8982,6 +12642,7 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 						SBASdata[pos].IGPbandreceived[sbasblock->igpmaskmessage[BANDNUMBER]]=1;
 						SBASdata[pos].numIGPbandbroadcast=sbasblock->igpmaskmessage[NUMBEROFBANDS];
 						j=0;
+						//memcpy(&SBASdata[pos].IGPinMask[SBASdata[pos].IODImask][sbasblock->igpmaskmessage[BANDNUMBER]][1],&sbasblock->igpmaskmessage[3],sizeof(int)*201);
 						for(i=1;i<202;i++) {
 							SBASdata[pos].IGPinMask[SBASdata[pos].IODImask][sbasblock->igpmaskmessage[BANDNUMBER]][i]=sbasblock->igpmaskmessage[i+2];
 
@@ -9001,12 +12662,16 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					SBASdata[pos].oldnumIGPbandbroadcast=SBASdata[pos].numIGPbandbroadcast;
 					SBASdata[pos].oldnumIGPbandreceived=SBASdata[pos].numIGPbandreceived;
 					SBASdata[pos].numIGPbandreceived=0;
+
+					//memcpy(SBASdata[pos].oldIGPbandreceived,SBASdata[pos].IGPbandreceived,sizeof(int)*11);
+					//memset(SBASdata[pos].IGPinMask[(int)sbasblock->igpmaskmessage[IODIPOS]],0,sizeof(int)*5*202);
+					//memcpy(SBASdata[pos].oldBlockIDPlace2Grid,SBASdata[pos].BlockIDPlace2Grid,sizeof(int)*11*14*15);
+
 					for(i=0;i<11;i++) {
 						SBASdata[pos].oldIGPbandreceived[i]=SBASdata[pos].IGPbandreceived[i];
 
 						SBASdata[pos].IGPbandreceived[i]=-1;
 						for(j=0;j<202;j++) {
-
 							SBASdata[pos].IGPinMask[(int)sbasblock->igpmaskmessage[IODIPOS]][i][j]=0;
 						}
 						for(j=0;j<14;j++) {
@@ -9017,13 +12682,10 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 							}
 						}
 					}
-					SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN;
-					SBASdata[pos].oldlastmsgreceived[sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD;
+					SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN;
+					SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD;
 
 					
-
-
-
 					//Check the values of IGP2Mask 
 					for(i=0;i<11;i++) {
 						for(j=0;j<202;j++) {
@@ -9057,13 +12719,13 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					}
 				}
 				//Update last received message
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
+				SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype].SoD=sbasblock->t.SoD;
 
 				//No break here, so it will continue to process ionospheric delay corrections.
 				//The reason for this is that when a new mask arrives, try to process all the data buffered fron the new mask
 				/* Falls through. */ //To avoid warning -Wimplicit-fallthrough=
-			case(IONOSPHERICDELAYCORRECTIONS):
+			case IONOSPHERICDELAYCORRECTIONS: /*MT 26*/
 
 				//First we save the data in the buffer "ionobuffered". Then, if we have the mask, the data is saved in the SBAS structure
 				//This allows to save data received before having the iono mask, and when the iono band mask is available decode the data,
@@ -9076,70 +12738,587 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 					GEObuffer=sbasblock->PRN;
 				}
 
-				//We can come here also when we receive a mask message. We only have to buffer if the message received are iono delay corrections
+				//We can come here also when we receive a mask message. We only have to buffer if the message received are iono delay corrections and we don't have the mask
 				if(sbasblock->messagetype==IONOSPHERICDELAYCORRECTIONS) {
-					currentbandnumber=(int)sbasblock->ionodelayparameters[0][BANDNUMBER];
-					currentblockID=(int)sbasblock->ionodelayparameters[0][BLOCKID];
-					//Copy values to the buffer
-					for(i=0;i<15;i++) {
-						for(j=0;j<7;j++) {
-							ionobuffer[GEObuffer][currentbandnumber][currentblockID].ionodelayparameters[i][j]=sbasblock->ionodelayparameters[i][j];
-							ionobuffer[GEObuffer][currentbandnumber][currentblockID].t.MJDN=sbasblock->t.MJDN;
-							ionobuffer[GEObuffer][currentbandnumber][currentblockID].t.SoD=sbasblock->t.SoD;
+					if (SBASdata[pos].IGPbandreceived[(int)sbasblock->ionodelayparameters[0][BANDNUMBER]]==-1) {
+						currentbandnumber=(int)sbasblock->ionodelayparameters[0][BANDNUMBER];
+						currentblockID=(int)sbasblock->ionodelayparameters[0][BLOCKID];
+						//Copy values to the buffer
+						memcpy(SBASdatabox->ionobuffer[GEObuffer][currentbandnumber][currentblockID].ionodelayparameters,sbasblock->ionodelayparameters,sizeof(double)*15*7);
+						/*for(i=0;i<15;i++) {
+							for(j=0;j<7;j++) {
+								SBASdatabox->ionobuffer[GEObuffer][currentbandnumber][currentblockID].ionodelayparameters[i][j]=sbasblock->ionodelayparameters[i][j];
+							}
+						}*/
+						SBASdatabox->ionobuffer[GEObuffer][currentbandnumber][currentblockID].t.MJDN=sbasblock->t.MJDN;
+						SBASdatabox->ionobuffer[GEObuffer][currentbandnumber][currentblockID].t.SoD=sbasblock->t.SoD;
+
+						ionobuffered[GEObuffer][currentbandnumber][currentblockID]=1;
+						anyIonoCorrBuffered[GEObuffer]=1;
+					} else {
+						//Save data read in current message
+						currentbandnumber=(int)sbasblock->ionodelayparameters[0][BANDNUMBER];
+						currentblockID=(int)sbasblock->ionodelayparameters[0][BLOCKID];
+						currentIODI=(int)sbasblock->ionodelayparameters[0][IODIPOS];
+						if(SBASdata[pos].IODImask==currentIODI) {
+							//Data is from the current mask
+							dataDestMode=0;
+							BlockIDPlace2GridPtr=SBASdata[pos].BlockIDPlace2Grid[currentbandnumber][currentblockID];
+							IODImaskVal=SBASdata[pos].IODImask;
+						} else if (SBASdata[pos].oldIODImask==currentIODI) {
+							//Data is from the old mask
+							dataDestMode=1;
+							BlockIDPlace2GridPtr=SBASdata[pos].oldBlockIDPlace2Grid[currentbandnumber][currentblockID];
+							IODImaskVal=SBASdata[pos].oldIODImask;
+						} else {
+							//The IODI does not match the current band or we have not received any mask
+							dataDestMode=2;
 						}
-					}
-
-					ionobuffered[GEObuffer][currentbandnumber][currentblockID]=1;
-				}
-
-
-				for(i=0;i<11;i++) {
-					for(m=0;m<14;m++) {
-						//Check if we have data for the current band in any BlockID
-						if(ionobuffered[GEObuffer][i][m]==1) {
-							//Check if we have received the iono mask for this band number. Otherwise leave it in the buffer 
-							if(SBASdata[pos].IGPbandreceived[i]==1) {
-								//We have the iono mask for this band number. 
-								j=(int)ionobuffer[GEObuffer][i][m].ionodelayparameters[0][BLOCKID];
-								for(k=0;k<15;k++) {
-									if(SBASdata[pos].IODImask==(int)ionobuffer[GEObuffer][i][m].ionodelayparameters[0][IODIPOS]) {
+						if (dataDestMode<2) {
+							//Save data
+							for(i=0;i<15;i++) {
+								/*switch(dataDestMode) {
+									case 0:
 										//Data is from the current mask
-										l=SBASdata[pos].BlockIDPlace2Grid[i][j][k];
+										l=SBASdata[pos].BlockIDPlace2Grid[currentbandnumber][currentblockID][i];
 										if(l==-1) continue;
-										SBASdata[pos].IGP2Mask[i][l]=SBASdata[pos].IODImask;
-									} else if (SBASdata[pos].oldIODImask==(int)ionobuffer[GEObuffer][i][m].ionodelayparameters[0][IODIPOS]) {
-										//Data is from the old mask
-										l=SBASdata[pos].oldBlockIDPlace2Grid[i][j][k];
-										if(l==-1) continue;
-										SBASdata[pos].IGP2Mask[i][l]=SBASdata[pos].oldIODImask;
-									} else {
-										//The IODI does not match the current band or we have not received any mask
+										SBASdata[pos].IGP2Mask[currentbandnumber][l]=SBASdata[pos].IODImask;
 										break;
-									}
-									SBASdata[pos].Ionodelay[i][l]=ionobuffer[GEObuffer][i][m].ionodelayparameters[k][IGPVERTICALDELAY];
-									SBASdata[pos].IonoGIVE[i][l]=ionobuffer[GEObuffer][i][m].ionodelayparameters[k][GIVEVALUE];
-									SBASdata[pos].Ionosigma[i][l]=ionobuffer[GEObuffer][i][m].ionodelayparameters[k][GIVEVARIANCE];
-									SBASdata[pos].lastiono[i][l].MJDN=ionobuffer[GEObuffer][i][m].t.MJDN;
-									SBASdata[pos].lastiono[i][l].SoD=ionobuffer[GEObuffer][i][m].t.SoD;
+									case 1:
+										//Data is from the old mask
+										l=SBASdata[pos].oldBlockIDPlace2Grid[currentbandnumber][currentblockID][i];
+										if(l==-1) continue;
+										SBASdata[pos].IGP2Mask[currentbandnumber][l]=SBASdata[pos].oldIODImask;
+										break;
+									default:
+										//The IODI does not match the current band or we have not received any mask
+										continue;
+										break;
+								}*/
 
-								}
-								ionobuffered[GEObuffer][i][m]=0;
-							} else {
-								//We do not have the mask, so we cannot read any data for this band
-								break;
+								l=BlockIDPlace2GridPtr[i];
+								if(l==-1) continue;
+								SBASdata[pos].IGP2Mask[currentbandnumber][l]=IODImaskVal;
+
+
+								SBASdata[pos].Ionodelay[currentbandnumber][l]=sbasblock->ionodelayparameters[i][IGPVERTICALDELAY];
+								SBASdata[pos].IonoGIVE[currentbandnumber][l]=sbasblock->ionodelayparameters[i][GIVEVALUE];
+								SBASdata[pos].Ionosigma[currentbandnumber][l]=sbasblock->ionodelayparameters[i][GIVEVARIANCE];
+								SBASdata[pos].lastiono[currentbandnumber][l].MJDN=sbasblock->t.MJDN;
+								SBASdata[pos].lastiono[currentbandnumber][l].SoD=sbasblock->t.SoD;
 							}
 						} else {
-							//No data for this bandnumber and BLockID
-							continue;
+							//No matching mask, buffer message instead
+							currentbandnumber=(int)sbasblock->ionodelayparameters[0][BANDNUMBER];
+							currentblockID=(int)sbasblock->ionodelayparameters[0][BLOCKID];
+							//Copy values to the buffer
+							memcpy(SBASdatabox->ionobuffer[GEObuffer][currentbandnumber][currentblockID].ionodelayparameters,sbasblock->ionodelayparameters,sizeof(double)*15*7);
+							/*for(i=0;i<15;i++) {
+								for(j=0;j<7;j++) {
+									SBASdatabox->ionobuffer[GEObuffer][currentbandnumber][currentblockID].ionodelayparameters[i][j]=sbasblock->ionodelayparameters[i][j];
+								}
+							}*/
+							SBASdatabox->ionobuffer[GEObuffer][currentbandnumber][currentblockID].t.MJDN=sbasblock->t.MJDN;
+							SBASdatabox->ionobuffer[GEObuffer][currentbandnumber][currentblockID].t.SoD=sbasblock->t.SoD;
+
+							ionobuffered[GEObuffer][currentbandnumber][currentblockID]=1;
+							anyIonoCorrBuffered[GEObuffer]=1;
 						}
 					}
 				}
+
+				if (anyIonoCorrBuffered[GEObuffer]==1) {
+					checkforIonobuffered=0;
+					for(i=0;i<11;i++) {
+						for(m=0;m<14;m++) {
+							//Check if we have data for the current band in any BlockID
+							if(ionobuffered[GEObuffer][i][m]==1) {
+								//Check if we have received the iono mask for this band number. Otherwise leave it in the buffer 
+								if(SBASdata[pos].IGPbandreceived[i]==1) {
+									//We have the iono mask for this band number. 
+									j=(int)SBASdatabox->ionobuffer[GEObuffer][i][m].ionodelayparameters[0][BLOCKID];
+									if(SBASdata[pos].IODImask==(int)SBASdatabox->ionobuffer[GEObuffer][i][m].ionodelayparameters[0][IODIPOS]) {
+										//Data is from the current mask
+										dataDestMode=0;
+										BlockIDPlace2GridPtr=SBASdata[pos].BlockIDPlace2Grid[i][j];
+										IODImaskVal=SBASdata[pos].IODImask;
+									} else if (SBASdata[pos].oldIODImask==(int)SBASdatabox->ionobuffer[GEObuffer][i][m].ionodelayparameters[0][IODIPOS]) {
+										//Data is from the old mask
+										dataDestMode=1;
+										BlockIDPlace2GridPtr=SBASdata[pos].oldBlockIDPlace2Grid[i][j];
+										IODImaskVal=SBASdata[pos].oldIODImask;
+									} else {
+										//The IODI does not match the current band or we have not received any mask
+										dataDestMode=2;
+									}
+									if (dataDestMode<2) {
+										for(k=0;k<15;k++) {
+											/*switch(dataDestMode) {
+												case 0:
+													//Data is from the current mask
+													l=SBASdata[pos].BlockIDPlace2Grid[i][j][k];
+													if(l==-1) continue;
+													SBASdata[pos].IGP2Mask[i][l]=SBASdata[pos].IODImask;
+													break;
+												case 1:
+													//Data is from the old mask
+													l=SBASdata[pos].oldBlockIDPlace2Grid[i][j][k];
+													if(l==-1) continue;
+													SBASdata[pos].IGP2Mask[i][l]=SBASdata[pos].oldIODImask;
+													break;
+												default:
+													//The IODI does not match the current band or we have not received any mask
+													continue;
+													break;
+											}*/
+
+											/*if(SBASdata[pos].IODImask==(int)SBASdatabox->ionobuffer[GEObuffer][i][m].ionodelayparameters[0][IODIPOS]) {
+												//Data is from the current mask
+												l=SBASdata[pos].BlockIDPlace2Grid[i][j][k];
+												if(l==-1) continue;
+												SBASdata[pos].IGP2Mask[i][l]=SBASdata[pos].IODImask;
+											} else if (SBASdata[pos].oldIODImask==(int)SBASdatabox->ionobuffer[GEObuffer][i][m].ionodelayparameters[0][IODIPOS]) {
+												//Data is from the old mask
+												l=SBASdata[pos].oldBlockIDPlace2Grid[i][j][k];
+												if(l==-1) continue;
+												SBASdata[pos].IGP2Mask[i][l]=SBASdata[pos].oldIODImask;
+											} else {
+												//The IODI does not match the current band or we have not received any mask
+												break;
+											}*/
+											l=BlockIDPlace2GridPtr[k];
+											if(l==-1) continue;
+											SBASdata[pos].IGP2Mask[i][l]=IODImaskVal;
+
+											SBASdata[pos].Ionodelay[i][l]=SBASdatabox->ionobuffer[GEObuffer][i][m].ionodelayparameters[k][IGPVERTICALDELAY];
+											SBASdata[pos].IonoGIVE[i][l]=SBASdatabox->ionobuffer[GEObuffer][i][m].ionodelayparameters[k][GIVEVALUE];
+											SBASdata[pos].Ionosigma[i][l]=SBASdatabox->ionobuffer[GEObuffer][i][m].ionodelayparameters[k][GIVEVARIANCE];
+											SBASdata[pos].lastiono[i][l].MJDN=SBASdatabox->ionobuffer[GEObuffer][i][m].t.MJDN;
+											SBASdata[pos].lastiono[i][l].SoD=SBASdatabox->ionobuffer[GEObuffer][i][m].t.SoD;
+
+										}
+										ionobuffered[GEObuffer][i][m]=0;
+									} else {
+										//The stored data has not been read, set the flag that we still have remaining data
+										checkforIonobuffered=1;
+									}
+								} else {
+									//We do not have the mask, so we cannot read any data for this band
+									//The stored data has not been read, set the flag that we still have remaining data
+									checkforIonobuffered=1;
+									break;
+								}
+							} else {
+								//No data for this bandnumber and BlockID
+								continue;
+							}
+						}
+					}
+					//Update the flag to check if there is data buffered
+					anyIonoCorrBuffered[GEObuffer]=checkforIonobuffered;
+				}
 				break;
-			case(RESERVED8):case(RESERVED11):case(RESERVED13):case(RESERVED14):case(RESERVED15):case(RESERVED16):case(RESERVED19):case(RESERVED20):case(RESERVED21):case(RESERVED22):case(RESERVED23):case(INTERNALTESTMESSAGE):case(NULLMESSAGE):
+			case SATMASKASIGNMENTS: /*MT 31*/
+				//Check if we have a new PRN Mask
+				if(sbasblock->IODM!=SBASdata[pos].IODMmask) {
+					//New Mask. Save the old mask, so we can still use messages 
+					memcpy(SBASdata[pos].pos2PRN[sbasblock->frequencyPos][sbasblock->IODM],sbasblock->pos2PRN,sizeof(int)*92);
+					memcpy(SBASdata[pos].pos2GNSS[sbasblock->frequencyPos][sbasblock->IODM],sbasblock->pos2GNSS,sizeof(enum GNSSystem)*92);
+					memcpy(SBASdata[pos].Slot2pos[sbasblock->frequencyPos][sbasblock->IODM],sbasblock->Slot2pos,sizeof(int)*215);
+					memcpy(SBASdata[pos].PRNactive[sbasblock->frequencyPos][sbasblock->IODM],sbasblock->PRNactive,sizeof(int)*MAX_GNSS*MAX_SBAS_PRN);
+					memcpy(SBASdata[pos].PRN2pos[sbasblock->frequencyPos][sbasblock->IODM],sbasblock->PRN2pos,sizeof(int)*MAX_GNSS*MAX_SBAS_PRN);
+					/*for(i=0;i<MAX_GNSS;i++) {
+						memcpy(SBASdata[pos].PRNactive[sbasblock->frequencyPos][sbasblock->IODM][i],sbasblock->PRNactive[i],sizeof(int)*MAX_SBAS_PRN);
+						memcpy(SBASdata[pos].PRN2pos[sbasblock->frequencyPos][sbasblock->IODM][i],sbasblock->PRN2pos[i],sizeof(int)*MAX_SBAS_PRN);
+					}*/
+
+					//Set the old IODmask to -1 before changing the current IODM to the old one
+					SBASdata[pos].numsatellites[sbasblock->frequencyPos][SBASdata[pos].oldIODMmask]=0;
+					for(j=0;j<MAX_GNSS;j++) {
+						for(k=0;k<MAX_SBAS_PRN;k++) {
+							SBASdata[pos].PRNactive[sbasblock->frequencyPos][SBASdata[pos].oldIODMmask][j][k]=-1;
+							SBASdata[pos].PRN2pos[sbasblock->frequencyPos][SBASdata[pos].oldIODMmask][j][k]=-1;
+						}
+					}
+					for(j=0;j<215;j++) {
+						SBASdata[pos].Slot2pos[sbasblock->frequencyPos][SBASdata[pos].oldIODMmask][j]=-1;
+					}
+
+					SBASdata[pos].oldIODMmask=SBASdata[pos].IODMmask;
+
+					SBASdata[pos].IODMmask=sbasblock->IODM;
+					SBASdata[pos].numsatellites[sbasblock->frequencyPos][sbasblock->IODM]=sbasblock->numsatellites;
+
+					SBASdata[pos].oldmaskdiscarded[sbasblock->frequencyPos][sbasblock->messagetype]=0;
+
+					memcpy(&SBASdata[pos].oldlastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],sizeof(TTime));
+
+					//Update constellations monitored
+					//Only need to update once (when it is not mixed GEO), as constellation monitored is saved in Toptions structure
+					//Reset constellation list
+					options->numSBASConstList[pos][SBASDFMCMODEPOS]=0;
+					for(i=0;i<MAX_GNSS;i++) {
+						options->SBASConstUsed[pos][SBASDFMCMODEPOS][i]=sbasblock->constMonitored[i];
+						if (sbasblock->constMonitored[i]==1 && options->ConstellationUsed[i]==1) {
+							options->SBASConstList[pos][SBASDFMCMODEPOS][options->numSBASConstList[pos][SBASDFMCMODEPOS]]=i;
+							options->numSBASConstList[pos][SBASDFMCMODEPOS]++;
+						} else {
+							options->SBASConstList[pos][SBASDFMCMODEPOS][i]=-1;
+						}
+					}
+				}
+
+				//Update last received message
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
+
+				break;
+			case CLOCKEPHEMERISCOVARIANCEMATRIXDFMC: /*MT 32*/
+				
+				memcpy(SBASdata[pos].covarianceMatrixDFMC[(int)sbasblock->covariancematrixdata[SATSLOTNUMBER]],sbasblock->covariancematrixdata,sizeof(double)*14);
+				memcpy(SBASdata[pos].clockephemerisDFMC[(int)sbasblock->covariancematrixdata[SATSLOTNUMBER]],sbasblock->orbitclockcorrection,sizeof(double)*15);
+
+				//Check if mask is available
+				if (SBASdata[pos].IODMmask!=-1) {
+					//Mask available, update DFREI data
+					j=SBASdata[pos].Slot2pos[sbasblock->frequencyPos][SBASdata[pos].IODMmask][(int)sbasblock->covariancematrixdata[SATSLOTNUMBER]];
+					if (j!=-1) {
+						SBASdata[pos].DFREI[SBASdata[pos].IODMmask][j]=(int)sbasblock->orbitclockcorrection[DFREIPOS];
+						SBASdata[pos].DFRECI2bumped[SBASdata[pos].IODMmask][j]=0;	//Set no bump applied to DFREI
+						memcpy(&SBASdata[pos].lastDFREIreceived[SBASdata[pos].IODMmask][j],&sbasblock->t,sizeof(TTime));
+					}
+				}
+				
+				//Check also if previous IODMmask is available
+				if (SBASdata[pos].oldIODMmask!=-1) {
+					//Mask available, update DFREI data
+					j=SBASdata[pos].Slot2pos[sbasblock->frequencyPos][SBASdata[pos].oldIODMmask][(int)sbasblock->covariancematrixdata[SATSLOTNUMBER]];
+					if (j!=-1) {
+						SBASdata[pos].DFREI[SBASdata[pos].oldIODMmask][j]=(int)sbasblock->orbitclockcorrection[DFREIPOS];
+						SBASdata[pos].DFRECI2bumped[SBASdata[pos].oldIODMmask][j]=0;	//Set no bump applied to DFREI
+						memcpy(&SBASdata[pos].lastDFREIreceived[SBASdata[pos].oldIODMmask][j],&sbasblock->t,sizeof(TTime));
+					}
+				}
+				memcpy(&SBASdata[pos].clockephemerisDFMCTime[(int)sbasblock->covariancematrixdata[SATSLOTNUMBER]],&sbasblock->t,sizeof(TTime));
+				//Update last received message
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
+				break;
+			case OBADDFREIPARAMETERS: /*MT 37*/
+				for(i=0;i<MAX_GNSS;i++) {
+					memcpy(SBASdata[pos].OBAD[i],sbasblock->OBAD[i],sizeof(double)*3);
+				}
+				memcpy(SBASdata[pos].commonOBAD,sbasblock->commonOBAD,sizeof(double)*5);
+				memcpy(SBASdata[pos].DFREITable,sbasblock->DFREITable,sizeof(double)*15);
+
+
+				//Update last received message
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
+				break;
+			case SBASEPHEMERISDFMC: /*MT 39*/
+				if ((int)sbasblock->sbasepehemeris1[IODGNAVSBAS]==SBASdata[pos].navSBASmessage.IODG) {
+					//IODG sent is the same. so data has not changed. Just update timeout
+					memcpy(&SBASdata[pos].lastMT3940received,&sbasblock->t,sizeof(TTime));
+				} else if (MT40buffered[sbasblock->PRN]==1) {
+					//We have received a MT40 message first with different IODG, check it has the same IODG as the MT40
+					if ((int)sbasblock->sbasepehemeris1[IODGNAVSBAS]==(int)sbasepehemeris2Buffer[sbasblock->PRN][IODGNAVSBAS]) {
+						//New MT39 has the new IODG as in the MT40
+						//Check that the MT40 buffered message has not timed-out
+						if (SBASdata[pos].lastmsgreceived[SBASDFMCFREQPOS][OBADDFREIPARAMETERS].MJDN!=-1) {
+							if (tdiff(&sbasblock->t,&MT40bufferedtime[sbasblock->PRN])>(SBASdata[pos].commonOBAD[IVALIDMT3940]*SBASdata[pos].tmoutFactor[options->precisionapproach]) ) {
+								msgtimeout=1;
+							} else {
+								msgtimeout=0;
+							}
+						} else {
+							//408 (seconds) is the highest value for IvalidMT39/40. As we don't have any IvalidMT39/40 value, we use
+							//the highest value. As MT39/40 is for SBAS orbits, and Keplearian orbits usually lasts up to 2 hours (like GPS),
+							//it is not critical to use the highest timeout value
+							if (tdiff(&sbasblock->t,&MT40bufferedtime[sbasblock->PRN])>408) { 
+								msgtimeout=1;
+							} else {
+								msgtimeout=0;
+							}
+						}
+						if (msgtimeout==1) {
+							//Buffered MT40 message has timed out. Save MT39 and remove MT40
+							memcpy(sbasepehemeris1Buffer[sbasblock->PRN],sbasblock->sbasepehemeris1,sizeof(double)*11);
+							memcpy(&MT39bufferedtime[sbasblock->PRN],&sbasblock->t,sizeof(TTime));
+							MT40buffered[sbasblock->PRN]=0;
+						} else {
+							//There is a buffered MT40 (and not timed-out) with same IOD as the current MT39.
+							//Save data from both messages
+							SBASdata[pos].SBASproviderID=(int)sbasblock->sbasepehemeris1[SBASPROVIDERID];
+							SBASdata[pos].DFREISBASMT3940=(int)sbasepehemeris1Buffer[sbasblock->PRN][DFREINAVSBAS];
+							SBASdata[pos].RCORRSBASMT3940=sbasepehemeris2Buffer[sbasblock->PRN][RCORRMULTNAVSBAS];
+							SBASdata[pos].navSBASmessage.SBASDFMCdatatype=SBASDFMCGEONAVIGATIONDATA;
+
+							SBASdata[pos].navSBASmessage.GNSS=GEO;
+							SBASdata[pos].navSBASmessage.PRN=sbasblock->PRN;
+							SBASdata[pos].navSBASmessage.BRDCtype=GEOCNAV;
+							SBASdata[pos].navSBASmessage.IODNGEO=(int)sbasblock->sbasepehemeris1[IODGNAVSBAS];
+							SBASdata[pos].navSBASmessage.IODG=(int)sbasblock->sbasepehemeris1[IODGNAVSBAS];
+							SBASdata[pos].navSBASmessage.IODE=(int)sbasblock->sbasepehemeris1[IODGNAVSBAS];
+							SBASdata[pos].navSBASmessage.cuc=sbasblock->sbasepehemeris1[CUCNAVSBAS];
+							SBASdata[pos].navSBASmessage.cus=sbasblock->sbasepehemeris1[CUSNAVSBAS];
+							SBASdata[pos].navSBASmessage.IDOT=sbasblock->sbasepehemeris1[IDOTNAVSBAS];
+							SBASdata[pos].navSBASmessage.omega=sbasblock->sbasepehemeris1[PERIGREENAVSBAS];
+							SBASdata[pos].navSBASmessage.OMEGA=sbasblock->sbasepehemeris1[ASCENDINGNAVSBAS];
+							SBASdata[pos].navSBASmessage.M0=sbasblock->sbasepehemeris1[ANOMALYNAVSBAS];
+							SBASdata[pos].navSBASmessage.i0=sbasepehemeris2Buffer[sbasblock->PRN][INCNAVSBAS];
+							SBASdata[pos].navSBASmessage.e=sbasepehemeris2Buffer[sbasblock->PRN][ECCNAVSBAS];
+							SBASdata[pos].navSBASmessage.toe=sbasepehemeris2Buffer[sbasblock->PRN][EPHTIMENAVSBAS];
+							SBASdata[pos].navSBASmessage.transTime=sbasblock->t.SoD;
+
+							SBASdata[pos].navSBASmessage.Ttoc.MJDN=sbasblock->t.MJDN;
+							SBASdata[pos].navSBASmessage.Ttoe.MJDN=sbasblock->t.MJDN;
+							SBASdata[pos].navSBASmessage.TtransTime.MJDN=sbasblock->t.MJDN;
+							SBASdata[pos].navSBASmessage.Ttoc.SoD=sbasepehemeris2Buffer[sbasblock->PRN][EPHTIMENAVSBAS];
+							SBASdata[pos].navSBASmessage.Ttoe.SoD=sbasepehemeris2Buffer[sbasblock->PRN][EPHTIMENAVSBAS];
+							SBASdata[pos].navSBASmessage.TtransTime.SoD=sbasblock->t.SoD;
+
+							if (options->SBASDFMCMT3940version==MT3940V1) {
+								SBASdata[pos].navSBASmessage.sqrta=sqrt(sbasepehemeris2Buffer[sbasblock->PRN][AXISNAVSBAS]);
+								SBASdata[pos].navSBASmessage.clockbias=sbasblock->sbasepehemeris1[AGF0NAVSBAS];
+								SBASdata[pos].navSBASmessage.clockdrift=sbasblock->sbasepehemeris1[AGF1NAVSBAS];
+								SBASdata[pos].navSBASmessage.clockdriftrate=0.;
+							} else {
+								SBASdata[pos].navSBASmessage.sqrta=sqrt(sbasblock->sbasepehemeris1[AXISNAVSBASV044]);
+								SBASdata[pos].navSBASmessage.clockbias=sbasepehemeris2Buffer[sbasblock->PRN][AGF0NAVSBASV044];
+								SBASdata[pos].navSBASmessage.clockdrift=sbasepehemeris2Buffer[sbasblock->PRN][AGF1NAVSBASV044];
+								SBASdata[pos].navSBASmessage.clockdriftrate=0.;
+							}
+							//Save covariance matrix data
+							memcpy(SBASdata[pos].covarianceMatrixSBASDFMC,covariancematrixdataBuffer[sbasblock->PRN],sizeof(double)*14);
+
+							//Save epoch of the last MT39 received (after decoding MT39 and MT40 act as single message and
+							//the timeout will be accounted from then last one received
+							memcpy(&SBASdata[pos].lastMT3940received,&sbasblock->t,sizeof(TTime));
+
+							//Check if mask is available
+							if (SBASdata[pos].IODMmask!=-1) {
+								//Mask available, update DFREI data
+								j=SBASdata[pos].Slot2pos[sbasblock->frequencyPos][SBASdata[pos].IODMmask][(int)sbasblock->sbasepehemeris1[SATSLOTNUMBER]];
+								if (j!=-1) {
+									SBASdata[pos].DFREI[SBASdata[pos].IODMmask][j]=(int)sbasepehemeris2Buffer[sbasblock->PRN][DFREINAVSBAS];
+									SBASdata[pos].DFRECI2bumped[SBASdata[pos].IODMmask][j]=0;	//Set no bump applied to DFREI
+									memcpy(&SBASdata[pos].lastDFREIreceived[SBASdata[pos].IODMmask][j],&sbasblock->t,sizeof(TTime));
+								}
+							}
+							
+							//Check also if previous IODMmask is available
+							if (SBASdata[pos].oldIODMmask!=-1) {
+								//Mask available, update DFREI data
+								j=SBASdata[pos].Slot2pos[sbasblock->frequencyPos][SBASdata[pos].oldIODMmask][(int)sbasblock->sbasepehemeris1[SATSLOTNUMBER]];
+								if (j!=-1) {
+									SBASdata[pos].DFREI[SBASdata[pos].oldIODMmask][j]=(int)sbasepehemeris2Buffer[sbasblock->PRN][DFREINAVSBAS];
+									SBASdata[pos].DFRECI2bumped[SBASdata[pos].oldIODMmask][j]=0;	//Set no bump applied to DFREI
+									memcpy(&SBASdata[pos].lastDFREIreceived[SBASdata[pos].oldIODMmask][j],&sbasblock->t,sizeof(TTime));
+								}
+							}
+
+							//Unbuffer MT39 and MT40 messages
+							MT39buffered[sbasblock->PRN]=0;
+							MT40buffered[sbasblock->PRN]=0;
+						}
+					} else {
+						//New IODG from MT39 does not match the MT40. This case should not occur (MT39 and MT40 having different IODG and these
+						//IODG are not the current one used. In these case, save MT39 data and remove the buffered MT40
+						memcpy(sbasepehemeris1Buffer[sbasblock->PRN],sbasblock->sbasepehemeris1,sizeof(double)*11);
+						memcpy(&MT39bufferedtime[sbasblock->PRN],&sbasblock->t,sizeof(TTime));
+						MT39buffered[sbasblock->PRN]=1;
+						MT40buffered[sbasblock->PRN]=0;
+					}
+				} else {
+					//New MT39 has a different IODG and no MT40 saved. Buffer MT39 until a matching MT40 arrives
+					memcpy(sbasepehemeris1Buffer[sbasblock->PRN],sbasblock->sbasepehemeris1,sizeof(double)*11);
+					memcpy(&MT39bufferedtime[sbasblock->PRN],&sbasblock->t,sizeof(TTime));
+					MT39buffered[sbasblock->PRN]=1;
+				}
+				//Update last received message
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
+				break;
+			case SBASEPHEMERISCOVARIANCEDFMC: /*MT 40*/
+				if ((int)sbasblock->sbasepehemeris2[IODGNAVSBAS]==SBASdata[pos].navSBASmessage.IODG) {
+					//IODG sent is the same. so data has not changed. Just update timeout
+					memcpy(&SBASdata[pos].lastMT3940received,&sbasblock->t,sizeof(TTime));
+				} else if (MT39buffered[sbasblock->PRN]==1) {
+					//We have received a MT40 message first with different IODG, check it has the same IODG as the MT40
+					if ((int)sbasblock->sbasepehemeris2[IODGNAVSBAS]==(int)sbasepehemeris1Buffer[sbasblock->PRN][IODGNAVSBAS]) {
+						//New MT40 has the new IODG as in the MT39
+						//Check that the MT39 buffered message has not timed-out
+						if (SBASdata[pos].lastmsgreceived[SBASDFMCFREQPOS][OBADDFREIPARAMETERS].MJDN!=-1) {
+							if (tdiff(&sbasblock->t,&MT39bufferedtime[sbasblock->PRN])>(SBASdata[pos].commonOBAD[IVALIDMT3940]*SBASdata[pos].tmoutFactor[options->precisionapproach]) ) {
+								msgtimeout=1;
+							} else {
+								msgtimeout=0;
+							}
+						} else {
+							//408 (seconds) is the highest value for IvalidMT39/40. As we don't have any IvalidMT39/40 value, we use
+							//the highest value. As MT39/40 is for SBAS orbits, and Keplearian orbits usually lasts up to 2 hours (like GPS),
+							//it is not critical to use the highest timeout value
+							if (tdiff(&sbasblock->t,&MT39bufferedtime[sbasblock->PRN])>408) { 
+								msgtimeout=1;
+							} else {
+								msgtimeout=0;
+							}
+						}
+						if (msgtimeout==1) {
+							//Buffered MT39 message has timed out. Save MT40 and remove MT39
+							memcpy(sbasepehemeris2Buffer[sbasblock->PRN],sbasblock->sbasepehemeris2,sizeof(double)*9);
+							memcpy(covariancematrixdataBuffer[sbasblock->PRN],sbasblock->covariancematrixdata,sizeof(double)*14);
+							memcpy(&MT40bufferedtime[sbasblock->PRN],&sbasblock->t,sizeof(TTime));
+							MT39buffered[sbasblock->PRN]=0;
+						} else {
+							//There is a buffered MT40 (and not timed-out) with same IOD as the current MT39.
+							//Save data from both messages
+							SBASdata[pos].SBASproviderID=(int)sbasepehemeris1Buffer[sbasblock->PRN][SBASPROVIDERID];
+							SBASdata[pos].DFREISBASMT3940=(int)sbasblock->sbasepehemeris2[DFREINAVSBAS];
+							SBASdata[pos].RCORRSBASMT3940=sbasblock->sbasepehemeris2[RCORRMULTNAVSBAS];
+							SBASdata[pos].navSBASmessage.SBASDFMCdatatype=SBASDFMCGEONAVIGATIONDATA;
+
+							SBASdata[pos].navSBASmessage.GNSS=GEO;
+							SBASdata[pos].navSBASmessage.PRN=sbasblock->PRN;
+							SBASdata[pos].navSBASmessage.BRDCtype=GEOCNAV;
+							SBASdata[pos].navSBASmessage.IODNGEO=(int)sbasblock->sbasepehemeris2[IODGNAVSBAS];
+							SBASdata[pos].navSBASmessage.IODG=(int)sbasblock->sbasepehemeris2[IODGNAVSBAS];
+							SBASdata[pos].navSBASmessage.IODE=(int)sbasblock->sbasepehemeris2[IODGNAVSBAS];
+							SBASdata[pos].navSBASmessage.cuc=sbasepehemeris1Buffer[sbasblock->PRN][CUCNAVSBAS];
+							SBASdata[pos].navSBASmessage.cus=sbasepehemeris1Buffer[sbasblock->PRN][CUSNAVSBAS];
+							SBASdata[pos].navSBASmessage.IDOT=sbasepehemeris1Buffer[sbasblock->PRN][IDOTNAVSBAS];
+							SBASdata[pos].navSBASmessage.omega=sbasepehemeris1Buffer[sbasblock->PRN][PERIGREENAVSBAS];
+							SBASdata[pos].navSBASmessage.OMEGA=sbasepehemeris1Buffer[sbasblock->PRN][ASCENDINGNAVSBAS];
+							SBASdata[pos].navSBASmessage.M0=sbasepehemeris1Buffer[sbasblock->PRN][ANOMALYNAVSBAS];
+							SBASdata[pos].navSBASmessage.i0=sbasblock->sbasepehemeris2[INCNAVSBAS];
+							SBASdata[pos].navSBASmessage.e=sbasblock->sbasepehemeris2[ECCNAVSBAS];
+							SBASdata[pos].navSBASmessage.toe=sbasblock->sbasepehemeris2[EPHTIMENAVSBAS];
+							SBASdata[pos].navSBASmessage.transTime=sbasblock->t.SoD;
+
+							SBASdata[pos].navSBASmessage.Ttoc.MJDN=sbasblock->t.MJDN;
+							SBASdata[pos].navSBASmessage.Ttoe.MJDN=sbasblock->t.MJDN;
+							SBASdata[pos].navSBASmessage.TtransTime.MJDN=sbasblock->t.MJDN;
+							SBASdata[pos].navSBASmessage.Ttoc.SoD=sbasblock->sbasepehemeris2[EPHTIMENAVSBAS];
+							SBASdata[pos].navSBASmessage.Ttoe.SoD=sbasblock->sbasepehemeris2[EPHTIMENAVSBAS];
+							SBASdata[pos].navSBASmessage.TtransTime.SoD=sbasblock->t.SoD;
+
+							if (options->SBASDFMCMT3940version==MT3940V1) {
+								SBASdata[pos].navSBASmessage.sqrta=sqrt(sbasblock->sbasepehemeris2[AXISNAVSBAS]);
+								SBASdata[pos].navSBASmessage.clockbias=sbasepehemeris1Buffer[sbasblock->PRN][AGF0NAVSBAS];
+								SBASdata[pos].navSBASmessage.clockdrift=sbasepehemeris1Buffer[sbasblock->PRN][AGF1NAVSBAS];
+								SBASdata[pos].navSBASmessage.clockdriftrate=0.;
+							} else {
+								SBASdata[pos].navSBASmessage.sqrta=sqrt(sbasepehemeris1Buffer[sbasblock->PRN][AXISNAVSBASV044]);
+								SBASdata[pos].navSBASmessage.clockbias=sbasblock->sbasepehemeris2[AGF0NAVSBASV044];
+								SBASdata[pos].navSBASmessage.clockdrift=sbasblock->sbasepehemeris2[AGF1NAVSBASV044];
+								SBASdata[pos].navSBASmessage.clockdriftrate=0.;
+							}
+
+							//Save covariance matrix data
+							memcpy(SBASdata[pos].covarianceMatrixSBASDFMC,sbasblock->covariancematrixdata,sizeof(double)*14);
+
+							//Save epoch of the last MT39 received (after decoding MT39 and MT40 act as single message and
+							//the timeout will be accounted from then last one received
+							memcpy(&SBASdata[pos].lastMT3940received,&sbasblock->t,sizeof(TTime));
+
+							//Check if mask is available
+							if (SBASdata[pos].IODMmask!=-1) {
+								//Mask available, update DFREI data
+								j=SBASdata[pos].Slot2pos[sbasblock->frequencyPos][SBASdata[pos].IODMmask][(int)sbasepehemeris1Buffer[sbasblock->PRN][SATSLOTNUMBER]];
+								if (j!=-1) {
+									SBASdata[pos].DFREI[SBASdata[pos].IODMmask][j]=(int)sbasblock->sbasepehemeris2[DFREINAVSBAS];
+									SBASdata[pos].DFRECI2bumped[SBASdata[pos].IODMmask][j]=0;	//Set no bump applied to DFREI
+									memcpy(&SBASdata[pos].lastDFREIreceived[SBASdata[pos].IODMmask][j],&sbasblock->t,sizeof(TTime));
+								}
+							}
+							
+							//Check also if previous IODMmask is available
+							if (SBASdata[pos].oldIODMmask!=-1) {
+								//Mask available, update DFREI data
+								j=SBASdata[pos].Slot2pos[sbasblock->frequencyPos][SBASdata[pos].oldIODMmask][(int)sbasepehemeris1Buffer[sbasblock->PRN][SATSLOTNUMBER]];
+								if (j!=-1) {
+									SBASdata[pos].DFREI[SBASdata[pos].oldIODMmask][j]=(int)sbasblock->sbasepehemeris2[DFREINAVSBAS];
+									SBASdata[pos].DFRECI2bumped[SBASdata[pos].oldIODMmask][j]=0;	//Set no bump applied to DFREI
+									memcpy(&SBASdata[pos].lastDFREIreceived[SBASdata[pos].oldIODMmask][j],&sbasblock->t,sizeof(TTime));
+								}
+							}
+
+							//Unbuffer MT39 and MT40 messages
+							MT39buffered[sbasblock->PRN]=0;
+							MT40buffered[sbasblock->PRN]=0;
+						}
+					} else {
+						//New IODG from MT40 does not match the MT39. This case should not occur (MT39 and MT40 having different IODG and these
+						//IODG are not the current one used. In these case, save MT40 data and remove the buffered MT39
+						memcpy(sbasepehemeris2Buffer[sbasblock->PRN],sbasblock->sbasepehemeris2,sizeof(double)*9);
+						memcpy(covariancematrixdataBuffer[sbasblock->PRN],sbasblock->covariancematrixdata,sizeof(double)*14);
+						memcpy(&MT40bufferedtime[sbasblock->PRN],&sbasblock->t,sizeof(TTime));
+						MT39buffered[sbasblock->PRN]=0;
+						MT40buffered[sbasblock->PRN]=1;
+					}
+				} else {
+					//New MT40 has a different IODG and no MT39 saved. Buffer MT40 until a matching MT39 arrives
+					memcpy(sbasepehemeris2Buffer[sbasblock->PRN],sbasblock->sbasepehemeris2,sizeof(double)*9);
+					memcpy(covariancematrixdataBuffer[sbasblock->PRN],sbasblock->covariancematrixdata,sizeof(double)*14);
+					memcpy(&MT40bufferedtime[sbasblock->PRN],&sbasblock->t,sizeof(TTime));
+					MT40buffered[sbasblock->PRN]=1;
+				}
+				//Update last received message
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
+				break;
+			case SBASNETWORKTIMEPARAMETERSDFMC: /*MT 42*/
+				for(i=0;i<MAX_GNSS;i++) {
+					memcpy(SBASdata[pos].GNSSTimeOffsetsConst[i],sbasblock->GNSSTimeOffsetsConst[i],sizeof(double)*2);
+				}
+				memcpy(SBASdata[pos].GNSSTimeOffsetsCommon,sbasblock->GNSSTimeOffsetsCommon,sizeof(double)*9);
+				//Update last received message
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
+				break;
+			case SBASALMANACSDFMC: /*MT 47*/
+				for(i=0;i<2;i++) {
+					if ((int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]==0) continue;  //No almanac data for current slot
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].GNSS=GEO;
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].PRN=(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER];
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].SBASDFMCdatatype=SBASDFMCGEOALMANACDATA;
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].sqrta=sqrt(sbasblock->geoalmanacsDFMC[i][AXISALMANAC]);
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].e=sbasblock->geoalmanacsDFMC[i][ECCALMANAC];
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].i0=sbasblock->geoalmanacsDFMC[i][INCALMANAC];
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].omega=sbasblock->geoalmanacsDFMC[i][PERIGREEALMANAC];
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].OMEGA=sbasblock->geoalmanacsDFMC[i][ASCENDINGAALMANAC];
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].OMEGADOT=sbasblock->geoalmanacsDFMC[i][ASCENSIONAALMANAC];
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].M0=sbasblock->geoalmanacsDFMC[i][ANOMALYAALMANAC];
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].toe=sbasblock->geoalmanacsDFMC[i][REFEPOCHALMANAC];
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].Ttoe.MJDN=sbasblock->t.MJDN;
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].TtransTime.MJDN=sbasblock->t.MJDN;
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].Ttoe.SoD=sbasblock->geoalmanacsDFMC[i][REFEPOCHALMANAC];
+					SBASdata[pos].DFMCalmanac[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].TtransTime.SoD=sbasblock->t.SoD;
+					SBASdata[pos].WNROcount=(int)sbasblock->geoalmanacsDFMC[i][WNR0COUNTALMANAC];
+					
+					//If almanac for current GEO had not been received, add one to the number of almanacs
+					if (SBASdata[pos].DFMCalmanacTime[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120].MJDN==-1) {
+						SBASdata[pos].posWithDataDFMCalmanac[SBASdata[pos].numDFMCalmanac]=(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120;
+						SBASdata[pos].numDFMCalmanac++;
+					}
+
+					SBASdata[pos].DFMCSBASProvider[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120]=(int)sbasblock->geoalmanacsDFMC[i][SBASPROVIDERID];
+					memcpy(&SBASdata[pos].DFMCalmanacTime[(int)sbasblock->geoalmanacsDFMC[i][SATSLOTNUMBER]-120],&sbasblock->t,sizeof(TTime));
+				}
+				//Update last received message
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
+				break;
+			case INTERNALTESTMESSAGE: /*MT 62*/
+				if (sbasblock->frequency==5) {
+					SBASdata[pos].GPSfrequenciesUsed=sbasblock->GPSfrequenciesUsed;
+				}
+				//Update last received message
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
+				break;
+			case SERVICEAREADFMC: /*MT 48*/ case SERVICEAREADFMCTESTBED: /*MT 50*/
+				//Messages not in SBAS DFMC standard
+				//Update last received message
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
+				break;
+			case RESERVED8: case RESERVED11: case RESERVED13: case RESERVED14: case RESERVED15: case RESERVED16: case RESERVED19: case RESERVED20: case RESERVED21: case RESERVED22: case RESERVED23: case NULLMESSAGE:
 				//Messages with no data that do not have any effect
 				//Update last received message
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].MJDN=sbasblock->t.MJDN;
-				SBASdata[pos].lastmsgreceived[sbasblock->messagetype].SoD=sbasblock->t.SoD;
+				memcpy(&SBASdata[pos].lastmsgreceived[sbasblock->frequencyPos][sbasblock->messagetype],&sbasblock->t,sizeof(TTime));
 				break;
 			default:
 				//Unknown message
@@ -9147,10 +13326,7 @@ void updateSBASdata (TSBASdata  *SBASdata, TSBASblock  *sbasblock, TTime current
 		}//End case
 
 	}//End for PRN slot update
-
 }
-
-
 
 /*****************************************************************************
  * Name        : readsigmamultipathFile
@@ -9194,19 +13370,14 @@ int readsigmamultipathFile (char *filename,  TSBASdata  *SBASdata, TOptions  *op
  *****************************************************************************/
 int readsigmamultipath (FILE *fd, char  *filename, TSBASdata  *SBASdata, TOptions  *options) {
 	char		line[MAX_INPUT_LINE];
-	char		word[MAX_INPUT_LINE];
-	char		*wordlst[MAX_WORDS];
-	char		format[MAX_INPUT_LINE];
-	char		format2[MAX_INPUT_LINE];
-	char		formataux[MAX_INPUT_LINE];
 	int			len = 0;
+	int			numCharRead,numCharReadTotal;
 	int			ret = 0;
 	int			wordindex = 1;
 	int			i;
 	int			numwordsperline;
 	int			numline = 0;
 	
-	wordlst[0] = NULL;
 	while (getLNoComments(line,&len,fd)!=-1) {
 		//Take out commas ',' and semicolon ';'
 		for(i=0;i<len;i++) {
@@ -9216,28 +13387,20 @@ int readsigmamultipath (FILE *fd, char  *filename, TSBASdata  *SBASdata, TOption
 		}
 
 		numwordsperline=0;
-		word[0]='#';
-		word[1]='\0';
-		ret = sscanf(line,"%s",word);
+		numCharReadTotal=0;
+		wordlst[wordindex][0]='#';
+		wordlst[wordindex][1]='\0';
+		ret = sscanf(line,"%s%n",wordlst[wordindex],&numCharRead);
 		if ( ret ) {
-			if ( word[0] != '#' ) { // It is not a comment
+			if ( wordlst[wordindex][0] != '#' ) { // It is not a comment
 				numline++;
 				numwordsperline++;
-				wordlst[wordindex] = malloc(sizeof(char)*(strlen(word)+2)); // +2 for the '\0' and the '-' char
-				strcpy(wordlst[wordindex],word);
 				wordindex++;
-				strcpy(format,"%*s");
-				sprintf(formataux,"%s %%s",format);
-				while(sscanf(line,formataux,word)==1) {
+				numCharReadTotal+=numCharRead;
+				while(sscanf(&line[numCharReadTotal],"%s%n",wordlst[wordindex],&numCharRead)==1) {
 					numwordsperline++;
-					if(numwordsperline>2) {
-					}
-					wordlst[wordindex] = malloc(sizeof(char)*(strlen(word)+1)); // +1 for the '\0'
-					strcpy(wordlst[wordindex],word);
 					wordindex++;
-					sprintf(format2,"%s %%*s",format);
-					sprintf(format,"%s",format2);
-					sprintf(formataux,"%s %%s",format);
+					numCharReadTotal+=numCharRead;
 				}
 				if(numline>1) {
 						if(numwordsperline<2) {
@@ -9259,9 +13422,6 @@ int readsigmamultipath (FILE *fd, char  *filename, TSBASdata  *SBASdata, TOption
 		}
 	}
 	
-	wordlst[wordindex] = NULL;
-/*
-*/
 	SBASdata[0].numsigmamultipath=numline-1;
 
 	//Allocate memory
@@ -9309,11 +13469,6 @@ int readsigmamultipath (FILE *fd, char  *filename, TSBASdata  *SBASdata, TOption
 		}
 	}
 				
-	// Free memory
-	for (i=0;i<wordindex;i++) {
-		free (wordlst[i]);
-	}
-
 	return 1;
 }
 
@@ -9332,13 +13487,11 @@ int readsigmamultipath (FILE *fd, char  *filename, TSBASdata  *SBASdata, TOption
 void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserError, TOptions  *options) {
 	static int				endfile=0;
 	static int				numline=0;
+	static int				GLOprintNoBias[MAX_SATELLITES_PER_GNSS];
+	static int				initialized=0;
 	char 					line[MAX_INPUT_LINE];
-	char					word[MAX_INPUT_LINE];
-	char					*wordlst[MAX_WORDS];
-	char					format[MAX_INPUT_LINE];
-	char					format2[MAX_INPUT_LINE];
-	char					formataux[MAX_INPUT_LINE];
 	int						len = 0;
+	int						numCharRead,numCharReadTotal;
 	int						ret = 0;
 	int						wordindex = 1;
 	int 					i,j,k,l;
@@ -9347,19 +13500,23 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 	int						check=0;
 	int						pos,numpos=0,measpos;
 	int						start,end;
-	int						Error2pos[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_MEASUREMENTS];
+	int						Error2pos[MAX_GNSS][MAX_SATELLITES_PER_GNSS][MAX_MEASUREMENTS_NO_COMBINATIONS];
 	int						seed;
-	enum MeasurementType	measType;
+	enum MeasurementType	measType; 
 	double					meas,sample;
 	double					**SatMeasError;
 	TTime					StartTime;
 	TTime					EndTime;
+
+	if (initialized==0) {
+		for(i=0;i<MAX_SATELLITES_PER_GNSS;i++) {
+			GLOprintNoBias[i]=0;
+		}
+		initialized=1;
+	}
 	
 	SatMeasError=NULL;
 	if(endfile==0) { 
-		for(i=0;i<MAX_WORDS;i++) {
-			wordlst[i] = NULL;
-		}
 
 		//If file has not finished, read new lines and check previous active user defined errors		
 		while(getLNoComments(line,&len,fd)!=-1) {
@@ -9371,26 +13528,20 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 			}
 			wordindex=1;
 			numwordsperline=0;
-			word[0]='#';
-			word[1]='\0';
-			ret = sscanf(line,"%s",word);
+			numCharReadTotal=0;
+			wordlst[wordindex][0]='#';
+			wordlst[wordindex][1]='\0';
+			ret = sscanf(line,"%s%n",wordlst[wordindex],&numCharRead);
 			if (ret) {
-				if (word[0]!='#') { // It is not a comment
+				if (wordlst[wordindex][0]!='#') { // It is not a comment
 					numline++;
 					numwordsperline++;
-					wordlst[wordindex] = realloc(wordlst[wordindex],sizeof(char)*(strlen(word)+2)); // +2 for the '\0' and the '-' char
-					strcpy(wordlst[wordindex],word);
 					wordindex++;
-					strcpy(format,"%*s");
-					sprintf(formataux,"%s %%s",format);
-					while(sscanf(line,formataux,word)==1) {
+					numCharReadTotal+=numCharRead;
+					while(sscanf(&line[numCharReadTotal],"%s%n",wordlst[wordindex],&numCharRead)==1) {
 						numwordsperline++;
-						wordlst[wordindex] = realloc(wordlst[wordindex],sizeof(char)*(strlen(word)+1)); // +1 for the '\0'
-						strcpy(wordlst[wordindex],word);
 						wordindex++;
-						sprintf(format2,"%s %%*s",format);
-						sprintf(format,"%s",format2);
-						sprintf(formataux,"%s %%s",format);
+						numCharReadTotal+=numCharRead;
 					}
 					if(numline==1) {
 						if(numwordsperline!=2) {
@@ -9463,6 +13614,7 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 											memcpy(&UserError->activeErrorsStart[i][k],&UserError->activeErrorsStart[i][k+1],sizeof(TTime));
 											memcpy(&UserError->activeErrorsEnd[i][k],&UserError->activeErrorsEnd[i][k+1],sizeof(TTime));
 											UserError->measType[i][k]=UserError->measType[i][k+1];
+											UserError->measFreq[i][k]=UserError->measFreq[i][k+1];
 											UserError->System[i][k]=UserError->System[i][k+1];
 											UserError->PRN[i][k]=UserError->PRN[i][k+1];
 											for(l=0;l<NUMPARAMERRORS;l++) {
@@ -9477,8 +13629,10 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 										UserError->activeErrorsStart[i]=realloc(UserError->activeErrorsStart[i],UserError->numactiveErrors[i]*sizeof(TTime));
 										UserError->activeErrorsEnd[i]=realloc(UserError->activeErrorsEnd[i],UserError->numactiveErrors[i]*sizeof(TTime));
 										UserError->measType[i]=realloc(UserError->measType[i],UserError->numactiveErrors[i]*sizeof(enum MeasurementType));
-										UserError->System[i]=realloc(UserError->System[i],UserError->numactiveErrors[i]*sizeof(enum MeasurementType));
+										UserError->measFreq[i]=realloc(UserError->measFreq[i],UserError->numactiveErrors[i]*sizeof(int));
+										UserError->System[i]=realloc(UserError->System[i],UserError->numactiveErrors[i]*sizeof(enum GNSSystem));
 										UserError->PRN[i]=realloc(UserError->PRN[i],UserError->numactiveErrors[i]*sizeof(int));
+										UserError->ErrorParam[i]=realloc(UserError->ErrorParam[i],(UserError->numactiveErrors[i])*sizeof(double *));
 										if(j==UserError->numactiveErrors[i]) break;
 										j--;
 									}
@@ -9490,54 +13644,21 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 						if(strcasecmp(wordlst[1],"Step")==0) {
 							currenterrortype=STEP;
 							numwords=NUMWORDSSTEP;
-							if(numwordsperline!=numwords+UserError->numcolumnstime) {
-								// Free memory
-								for (i=1;i<=wordindex;i++) {
-									free (wordlst[i]);
-									wordlst[i]=NULL;
-								}
-								continue;
-							}
+							if(numwordsperline!=numwords+UserError->numcolumnstime) continue;
 						} else if(strcasecmp(wordlst[1],"Ramp")==0) {
 							currenterrortype=RAMP;
 							numwords=NUMWORDSRAMP;
-							if(numwordsperline!=numwords+UserError->numcolumnstime) {
-								// Free memory
-								for (i=1;i<=wordindex;i++) {
-									free (wordlst[i]);
-									wordlst[i]=NULL;
-								}
-								continue;
-							}
+							if(numwordsperline!=numwords+UserError->numcolumnstime) continue;
 						} else if (strcasecmp(wordlst[1],"Sinu")==0) {
 							currenterrortype=SINUSOIDAL;
 							numwords=NUMWORDSSINUSOIDAL;
-							if(numwordsperline!=numwords+UserError->numcolumnstime) {
-								// Free memory
-								for (i=1;i<=wordindex;i++) {
-									free (wordlst[i]);
-									wordlst[i]=NULL;
-								}
-								continue;
-							}
+							if(numwordsperline!=numwords+UserError->numcolumnstime) continue;
 						} else if(strcasecmp(wordlst[1],"AWGN")==0) {
 							currenterrortype=AWGN;
 							numwords=NUMWORDSAWGN;
-							if(numwordsperline!=numwords+UserError->numcolumnstime) {
-								// Free memory
-								for (i=1;i<=wordindex;i++) {
-									free (wordlst[i]);
-									wordlst[i]=NULL;
-								}
-								continue;
-							}
+							if(numwordsperline!=numwords+UserError->numcolumnstime) continue;
 						} else { 
 							//Not supported model error. Ignore line
-							// Free memory
-							for (i=1;i<=wordindex;i++) {
-								free (wordlst[i]);
-								wordlst[i]=NULL;
-							}
 							continue;
 						}
 
@@ -9546,9 +13667,17 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 							//Using YY/DoY/SoD
 							StartTime.MJDN=(int)yeardoy2MJDN(atoi(wordlst[numwords+1]),atoi(wordlst[numwords+2]),atoi(wordlst[numwords+3]));
 							StartTime.SoD=atof(wordlst[numwords+3]);
+							if (StartTime.MJDN<FIRSTMJDNGPS || StartTime.SoD<0 || StartTime.SoD>=86400) {
+								sprintf(messagestr,"Invalid start date in line '%s' in user error file [%s]",line,filename);
+								printError(messagestr,options);
+							}
 							if(UserError->lengthtype==1) {
 								EndTime.MJDN=(int)yeardoy2MJDN(atoi(wordlst[numwords+4]),atoi(wordlst[numwords+5]),atoi(wordlst[numwords+6]));
 								EndTime.SoD=atof(wordlst[numwords+6]);
+								if (EndTime.MJDN<FIRSTMJDNGPS || EndTime.SoD<0 || EndTime.SoD>=86400) {
+									sprintf(messagestr,"Invalid end date in line '%s' in user error file [%s]",line,filename);
+									printError(messagestr,options);
+								}
 							} else {
 								EndTime.MJDN=StartTime.MJDN;
 								EndTime.SoD=StartTime.SoD+atof(wordlst[numwords+4]);
@@ -9560,8 +13689,16 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 						} else {
 							// Using GPSWeek/ToW
 							StartTime=gpsws2ttime(atoi(wordlst[numwords+1]),atof(wordlst[numwords+2]));
+							if (StartTime.MJDN<FIRSTMJDNGPS || StartTime.SoD<0 || StartTime.SoD>=86400) {
+								sprintf(messagestr,"Invalid start date in line '%s' in user error file [%s]",line,filename);
+								printError(messagestr,options);
+							}
 							if(UserError->lengthtype==1) {
 								EndTime=gpsws2ttime(atoi(wordlst[numwords+3]),atof(wordlst[numwords+4]));
+								if (EndTime.MJDN<FIRSTMJDNGPS || EndTime.SoD<0 || EndTime.SoD>=86400) {
+									sprintf(messagestr,"Invalid end date in line '%s' in user error file [%s]",line,filename);
+									printError(messagestr,options);
+								}
 							} else {
 								EndTime.MJDN=StartTime.MJDN;
 								EndTime.SoD=StartTime.SoD+atof(wordlst[numwords+3]);
@@ -9577,19 +13714,9 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 							// User model error starts ahead of current time. Stop reading, go one line back and exit function
 							getLback(line,&len,fd);
 							numline--;
-							// Free memory
-							for (i=1;i<=wordindex;i++) {
-								free (wordlst[i]);
-								wordlst[i]=NULL;
-							}
 							break;
 						} else if(tdiff(&epoch->t,&EndTime)>=0) {
 							// User model error has already finished. Skip the line
-							// Free memory
-							for (i=1;i<=wordindex;i++) {
-								free (wordlst[i]);
-								wordlst[i]=NULL;
-							}
 							continue;
 						}
 
@@ -9597,11 +13724,6 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 						measType=measstr2meastype(wordlst[3]);
 						if (measType==NA || measType>=ENDMEAS) {
 							// Invalid measurement or it is a combination. Skip the line
-							// Free memory
-							for (i=1;i<=wordindex;i++) {
-								free (wordlst[i]);
-								wordlst[i]=NULL;
-							}
 							continue;
 						}
 
@@ -9609,7 +13731,8 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 						UserError->activeErrorsStart[currenterrortype]=realloc(UserError->activeErrorsStart[currenterrortype],(UserError->numactiveErrors[currenterrortype]+1)*sizeof(TTime));
 						UserError->activeErrorsEnd[currenterrortype]=realloc(UserError->activeErrorsEnd[currenterrortype],(UserError->numactiveErrors[currenterrortype]+1)*sizeof(TTime));
 						UserError->measType[currenterrortype]=realloc(UserError->measType[currenterrortype],(UserError->numactiveErrors[currenterrortype]+1)*sizeof(enum MeasurementType));
-						UserError->System[currenterrortype]=realloc(UserError->System[currenterrortype],(UserError->numactiveErrors[currenterrortype]+1)*sizeof(enum MeasurementType));
+						UserError->measFreq[currenterrortype]=realloc(UserError->measFreq[currenterrortype],(UserError->numactiveErrors[currenterrortype]+1)*sizeof(int));
+						UserError->System[currenterrortype]=realloc(UserError->System[currenterrortype],(UserError->numactiveErrors[currenterrortype]+1)*sizeof(enum GNSSystem));
 						UserError->PRN[currenterrortype]=realloc(UserError->PRN[currenterrortype],(UserError->numactiveErrors[currenterrortype]+1)*sizeof(int));
 						UserError->ErrorParam[currenterrortype]=realloc(UserError->ErrorParam[currenterrortype],(UserError->numactiveErrors[currenterrortype]+1)*sizeof(double *));
 						UserError->ErrorParam[currenterrortype][UserError->numactiveErrors[currenterrortype]]=malloc(sizeof(double)*NUMPARAMERRORS);
@@ -9618,8 +13741,13 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 						memcpy(&UserError->activeErrorsStart[currenterrortype][UserError->numactiveErrors[currenterrortype]],&StartTime,sizeof(TTime));
 						memcpy(&UserError->activeErrorsEnd[currenterrortype][UserError->numactiveErrors[currenterrortype]],&EndTime,sizeof(TTime));
 						UserError->measType[currenterrortype][UserError->numactiveErrors[currenterrortype]]=measType;
+						UserError->measFreq[currenterrortype][UserError->numactiveErrors[currenterrortype]]=getFrequencyInt(measType);
 						UserError->System[currenterrortype][UserError->numactiveErrors[currenterrortype]]=gnsschar2gnsstype(wordlst[2][0]);
 						UserError->PRN[currenterrortype][UserError->numactiveErrors[currenterrortype]]=atoi(&wordlst[2][1]);
+						if (UserError->PRN[currenterrortype][UserError->numactiveErrors[currenterrortype]]<0||UserError->PRN[currenterrortype][UserError->numactiveErrors[currenterrortype]]>=MAX_SATELLITES_PER_GNSS) {
+							sprintf(messagestr,"Invalid PRN number '%s' in user defined error file [%s]",&wordlst[2][1],filename);
+							printError(messagestr,options);
+						}
 
 						for(i=0;i<NUMPARAMERRORS;i++) {
 							if(currenterrortype!=SINUSOIDAL && i>0) break;
@@ -9632,14 +13760,6 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 
 
 					} //End if(numline==1)
-
-					// Free memory
-					for (i=1;i<=wordindex;i++) {
-						free (wordlst[i]);
-						wordlst[i]=NULL;
-					}
-
-
 				} //End if(word[0]=='#')
 			} //End if(ret)
 		} //End while
@@ -9653,6 +13773,7 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 						memcpy(&UserError->activeErrorsStart[i][k],&UserError->activeErrorsStart[i][k+1],sizeof(TTime));
 						memcpy(&UserError->activeErrorsEnd[i][k],&UserError->activeErrorsEnd[i][k+1],sizeof(TTime));
 						UserError->measType[i][k]=UserError->measType[i][k+1];
+						UserError->measFreq[i][k]=UserError->measFreq[i][k+1];
 						UserError->System[i][k]=UserError->System[i][k+1];
 						UserError->PRN[i][k]=UserError->PRN[i][k+1];
 						for(l=0;l<NUMPARAMERRORS;l++) {
@@ -9667,8 +13788,10 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 					UserError->activeErrorsStart[i]=realloc(UserError->activeErrorsStart[i],UserError->numactiveErrors[i]*sizeof(TTime));
 					UserError->activeErrorsEnd[i]=realloc(UserError->activeErrorsEnd[i],UserError->numactiveErrors[i]*sizeof(TTime));
 					UserError->measType[i]=realloc(UserError->measType[i],UserError->numactiveErrors[i]*sizeof(enum MeasurementType));
-					UserError->System[i]=realloc(UserError->System[i],UserError->numactiveErrors[i]*sizeof(enum MeasurementType));
+					UserError->measFreq[i]=realloc(UserError->measFreq[i],UserError->numactiveErrors[i]*sizeof(int));
+					UserError->System[i]=realloc(UserError->System[i],UserError->numactiveErrors[i]*sizeof(enum GNSSystem));
 					UserError->PRN[i]=realloc(UserError->PRN[i],UserError->numactiveErrors[i]*sizeof(int));
+					UserError->ErrorParam[i]=realloc(UserError->ErrorParam[i],(UserError->numactiveErrors[i])*sizeof(double *));
 					if(j==UserError->numactiveErrors[i]-1) break;
 					j--;
 				}
@@ -9684,7 +13807,7 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 		//Initialize Error2pos vector
 		for(i=0;i<MAX_GNSS;i++) {
 			for(j=0;j<MAX_SATELLITES_PER_GNSS;j++) {
-				for(k=0;k<MAX_MEASUREMENTS;k++) {
+				for(k=0;k<MAX_MEASUREMENTS_NO_COMBINATIONS;k++) {
 					Error2pos[i][j][k]=-1;
 				}
 			}
@@ -9701,7 +13824,8 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 				}
 				for(k=start;k<end;k++) {
 					//Check that we have data from the satellite 
-					meas=getMeasurementValue(epoch,UserError->System[i][j],k,UserError->measType[i][j]);
+					meas=getMeasurementValue(epoch,UserError->System[i][j],k,&UserError->measType[i][j],&UserError->measFreq[i][j]);
+					if (options->includeSatellite[UserError->System[i][j]][k]==0) continue; //Skip unselected satellites 
 					if(meas==-1) continue; //No data for this PRN and measurement
 					pos=Error2pos[UserError->System[i][j]][k][UserError->measType[i][j]];
 					if(pos==-1) {
@@ -9714,6 +13838,7 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 						SatMeasError[pos][USRGNSSPOS]=UserError->System[i][j];
 						SatMeasError[pos][USRPRNPOS]=k;
 						SatMeasError[pos][USRMEASPOS]=UserError->measType[i][j];
+						SatMeasError[pos][USRFREQPOS]=(double)UserError->measFreq[i][j];
 						SatMeasError[pos][USRMEASRAWPOS]=meas;
 						SatMeasError[pos][USRMEASTOTPOS]=meas;
 					}
@@ -9764,7 +13889,22 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 					measpos=epoch->measOrder[UserError->System[i][j]].meas2Ind[UserError->measType[i][j]];
 					if(measpos!=-1) {
 						if (whatIs(UserError->measType[i][j])==CarrierPhase) {
-							epoch->sat[(int)SatMeasError[pos][USREPOCHPOS]].meas[measpos].value+=sample/epoch->measOrder[epoch->sat[(int)SatMeasError[pos][USREPOCHPOS]].GNSS].conversionFactor[UserError->measType[i][j]];
+							if(epoch->sat[(int)SatMeasError[pos][USREPOCHPOS]].GNSS==GLONASS) {
+								//Check if we have a valid conversion factor
+								if (epoch->measOrder[epoch->sat[(int)SatMeasError[pos][USREPOCHPOS]].GNSS].lambdaMeas[(int)SatMeasError[i][USRFREQPOS]][(int)SatMeasError[pos][USRPRNPOS]]!=1.) {
+									//Conversion factor available
+									epoch->sat[(int)SatMeasError[pos][USREPOCHPOS]].meas[measpos].value+=sample/epoch->measOrder[epoch->sat[(int)SatMeasError[pos][USREPOCHPOS]].GNSS].lambdaMeas[(int)SatMeasError[i][USRFREQPOS]][(int)SatMeasError[pos][USRPRNPOS]];
+								} else {
+									if(GLOprintNoBias[(int)SatMeasError[pos][USRPRNPOS]]==0) {
+										//Only print message first time
+										GLOprintNoBias[(int)SatMeasError[pos][USRPRNPOS]]=1;
+										sprintf(messagestr,"WARNING Frequency offset for GLONASS PRN %2d not available. User added error in phase measurements for this satellite will not be applied",(int)SatMeasError[pos][USRPRNPOS]);
+										printInfo(messagestr,options);
+									}
+								}
+							} else {
+								epoch->sat[(int)SatMeasError[pos][USREPOCHPOS]].meas[measpos].value+=sample/epoch->measOrder[epoch->sat[(int)SatMeasError[pos][USREPOCHPOS]].GNSS].conversionFactor[UserError->measType[i][j]];
+							}
 						} else {
 							epoch->sat[(int)SatMeasError[pos][USREPOCHPOS]].meas[measpos].value+=sample;
 						}
@@ -9787,12 +13927,24 @@ void addUserError (FILE  *fd, char  *filename, TEpoch  *epoch, TUserError *UserE
 		}
 		free(SatMeasError);
 
-
 	} //End if(UserError->totalactiveErrors>0)
-	
 
+	if(options->printUserError==1) {
+		//Empty UserError print buffers
+		for (i=0;i<epoch->numPrintGNSS;i++) {
+			for(j=0;j<epoch->numSatellitesGNSS[i];j++) {
+				for (k=0;k<linesstoredUserError[i][j];k++) {
+					fprintf(options->outFileStream,"%s",printbufferUserError[i][j][k]);
+					free(printbufferUserError[i][j][k]);
+				}
+				linesstoredUserError[i][j]=0;
+				free(printbufferUserError[i][j]);
+				printbufferUserError[i][j]=NULL;
+			}
+		}
+	}
 
-	if(feof(fd)>0) endfile=1;
+	if(feof_function(fd)>0) endfile=1;
 }
 
 /*****************************************************************************
@@ -9875,6 +14027,8 @@ int readReferenceFile (char  *filename, TGNSSproducts *RefPosition, TOptions  *o
 		nextSP3Prod.SP3->orbits.index[0][0] = 0; //There only be one position for the index (the reference position, which will be stored at 0,0)
 		pastSP3Prod.SP3->orbits.index[0][0] = 0; //There only be one position for the index (the reference position, which will be stored at 0,0)
 		ConcatenateSP3(1,RefPosition,&pastSP3Prod,&nextSP3Prod,options);
+		freeSP3data(&pastSP3Prod);
+		freeSP3data(&nextSP3Prod);
 	} else {
 		readPosFile (fd, filename, RefPosition, options);	
 		fclose(fd);
@@ -9897,11 +14051,6 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 
     static int      numfileline=0,numvalidline=-1;
     char            line[MAX_INPUT_LINE];
-    char            word[MAX_INPUT_LINE];
-    char            *wordlst[MAX_WORDS];
-    char            format[MAX_INPUT_LINE];
-    char            format2[MAX_INPUT_LINE];
-    char            formataux[MAX_INPUT_LINE];
 	char			aux[100];
 	double			r;
 	double			PositionNEU[3],PositionXYZ[3];
@@ -9911,6 +14060,9 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
     int             ret = 0;
     int             wordindex = 1;
     int             i;
+	int				lenDate,lenTime;
+	int				invalidDate=0;
+	int				numCharRead,numCharReadTotal;
 	int				rtkgeodeticheight=0; //Check if RTK is using height from the ellipsoid
     int             numwordsperline;
     int             numcolumns=0;
@@ -9923,11 +14075,6 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 	int				DataFormat; //0->Year/DoY/SoD XYZ 1->Year/DoY/SoD Lon Lat Height 2->GPSWeek SoW XYZ 3->GPSWeek SoW Lon Lat Height
 	                            //4->Date Time XYZ 5->Date Time Lon Lat Height
 	struct tm		tm;
-
-	//Initialize wordlst
-	for(i=0;i<MAX_WORDS;i++) {
-		wordlst[i] = NULL;
-	}
 
 	//Set space for SP3 orbits and initialize
 	RefPosition->SP3=malloc(sizeof(TSP3products));
@@ -9953,26 +14100,20 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 		numfileline++;
 		wordindex=1;
 		numwordsperline=0;
-		word[0]='#';
-		word[1]='\0';
-		ret = sscanf(line,"%s",word);
+		numCharReadTotal=0;
+		wordlst[wordindex][0]='#';
+		wordlst[wordindex][1]='\0';
+		ret = sscanf(line,"%s%n",wordlst[wordindex],&numCharRead);
 		if (ret) {
-			if (word[0]!='#') { // It is not a comment
+			if (wordlst[wordindex][0]!='#') { // It is not a comment
 				numvalidline++;
 				numwordsperline++;
-				wordlst[wordindex] = realloc(wordlst[wordindex],sizeof(char)*(strlen(word)+2)); // +2 for the '\0' and the '-' char
-				strcpy(wordlst[wordindex],word);
 				wordindex++;
-				strcpy(format,"%*s");
-				sprintf(formataux,"%s %%s",format);
-				while(sscanf(line,formataux,word)==1) {
+				numCharReadTotal+=numCharRead;
+				while(sscanf(&line[numCharReadTotal],"%s%n",wordlst[wordindex],&numCharRead)==1) {
 					numwordsperline++;
-					wordlst[wordindex] = realloc(wordlst[wordindex],sizeof(char)*(strlen(word)+1)); // +1 for the '\0'
-					strcpy(wordlst[wordindex],word);
 					wordindex++;
-					sprintf(format2,"%s %%*s",format);
-					sprintf(format,"%s",format2);
-					sprintf(formataux,"%s %%s",format);
+					numCharReadTotal+=numCharRead;
 				}
 				if (wordlst[1][0]=='%') {
 					if (wordindex>2) {
@@ -9984,11 +14125,6 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 
 					}
 					if (rtkformat==0) {
-						// Free memory
-						for (i=1;i<=wordindex;i++) {
-						free (wordlst[i]);
-						wordlst[i]=NULL;
-						}
 						continue; //Comment line with %
 					}
 				}
@@ -10118,6 +14254,11 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 					//Year DoY SoD X Y Z format
 					RefPosition->SP3->orbits.block[0][usedRecords].t.MJDN=(int)yeardoy2MJDN(atoi(wordlst[YearPos]),atoi(wordlst[DoYPos]),atoi(wordlst[SoDPos]));
 					RefPosition->SP3->orbits.block[0][usedRecords].t.SoD=atof(wordlst[SoDPos]);
+					if (RefPosition->SP3->orbits.block[0][usedRecords].t.MJDN<FIRSTMJDNGPS || RefPosition->SP3->orbits.block[0][usedRecords].t.SoD<0
+							|| RefPosition->SP3->orbits.block[0][usedRecords].t.SoD>=86400) {
+						sprintf(messagestr,"Invalid date in line number %d in reference file [%s]",numfileline,filename);
+						printError(messagestr,options);
+					}
 					RefPosition->SP3->orbits.block[0][usedRecords].x[0]=atof(wordlst[XPos]);
 					RefPosition->SP3->orbits.block[0][usedRecords].x[1]=atof(wordlst[YPos]);
 					RefPosition->SP3->orbits.block[0][usedRecords].x[2]=atof(wordlst[ZPos]);
@@ -10125,6 +14266,11 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 					//Year DoY SoD Lon Lat Height format
 					RefPosition->SP3->orbits.block[0][usedRecords].t.MJDN=(int)yeardoy2MJDN(atoi(wordlst[YearPos]),atoi(wordlst[DoYPos]),atoi(wordlst[SoDPos]));
 					RefPosition->SP3->orbits.block[0][usedRecords].t.SoD=atof(wordlst[SoDPos]);
+					if (RefPosition->SP3->orbits.block[0][usedRecords].t.MJDN<FIRSTMJDNGPS || RefPosition->SP3->orbits.block[0][usedRecords].t.SoD<0
+							|| RefPosition->SP3->orbits.block[0][usedRecords].t.SoD>=86400) {
+						sprintf(messagestr,"Invalid date in line number %d in reference file [%s]",numfileline,filename);
+						printError(messagestr,options);
+					}
 					PositionNEU[0]=atof(wordlst[LatPos]);
 					PositionNEU[1]=atof(wordlst[LonPos]);
 					PositionNEU[2]=atof(wordlst[HeightPos]);
@@ -10150,12 +14296,22 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 				} else if (DataFormat==2) {
 					//GPSWeek SoW X Y Z format
 					RefPosition->SP3->orbits.block[0][usedRecords].t=gpsws2ttime(atoi(wordlst[GPSWeekPos]),atof(wordlst[SoWPos]));
+					if (RefPosition->SP3->orbits.block[0][usedRecords].t.MJDN<FIRSTMJDNGPS || RefPosition->SP3->orbits.block[0][usedRecords].t.SoD<0
+							|| RefPosition->SP3->orbits.block[0][usedRecords].t.SoD>=86400) {
+						sprintf(messagestr,"Invalid date in line number %d in reference file [%s]",numfileline,filename);
+						printError(messagestr,options);
+					}
 					RefPosition->SP3->orbits.block[0][usedRecords].x[0]=atof(wordlst[XPos]);
 					RefPosition->SP3->orbits.block[0][usedRecords].x[1]=atof(wordlst[YPos]);
 					RefPosition->SP3->orbits.block[0][usedRecords].x[2]=atof(wordlst[ZPos]);
 				} else if (DataFormat==3) {
 					//GPSWeek SoW Lat Lon Height format
 					RefPosition->SP3->orbits.block[0][usedRecords].t=gpsws2ttime(atoi(wordlst[GPSWeekPos]),atof(wordlst[SoWPos]));
+					if (RefPosition->SP3->orbits.block[0][usedRecords].t.MJDN<FIRSTMJDNGPS || RefPosition->SP3->orbits.block[0][usedRecords].t.SoD<0
+							|| RefPosition->SP3->orbits.block[0][usedRecords].t.SoD>=86400) {
+						sprintf(messagestr,"Invalid date in line number %d in reference file [%s]",numfileline,filename);
+						printError(messagestr,options);
+					}
 					PositionNEU[0]=atof(wordlst[LatPos]);
 					PositionNEU[1]=atof(wordlst[LonPos]);
 					PositionNEU[2]=atof(wordlst[HeightPos]);
@@ -10180,31 +14336,46 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 					RefPosition->SP3->orbits.block[0][usedRecords].x[2]=PositionXYZ[2];
 				} else if (DataFormat==4) {
 					//Date Time X Y Z format (or rtklib '% GPST X Y Z')
-					if(strlen(wordlst[DatePos])!=10) {
+					lenDate=(int)strlen(wordlst[DatePos]);
+					lenTime=(int)strlen(wordlst[TimePos]);
+					if(lenDate!=10) {
 						sprintf(messagestr,"Date format must be in format YYYY/MM/DD. Check line number %d in reference file [%s]",numfileline,filename);
 						printError(messagestr,options);
 					} else if (wordlst[DatePos][4]!='/'||wordlst[DatePos][7]!='/') {
 						sprintf(messagestr,"Date format must be in format YYYY/MM/DD. Check line number %d in reference file [%s]",numfileline,filename);
 						printError(messagestr,options);
-					} else if (strlen(wordlst[TimePos])!=12) {
+					} else if (lenTime!=12) {
 						sprintf(messagestr,"Time format must be in format HH:MM:SS.zzz. Check line number %d in reference file [%s]",numfileline,filename);
 						printError(messagestr,options);
 					} else if (wordlst[TimePos][2]!=':'||wordlst[TimePos][5]!=':'||wordlst[TimePos][8]!='.') {
 						sprintf(messagestr,"Time format must be in format HH:MM:SS.zzz. Check line number %d in reference file [%s]",numfileline,filename);
 						printError(messagestr,options);
 					}
-					getstr(aux,wordlst[DatePos],0,4);
-					tm.tm_year = atoi(aux)-1900;
-					getstr(aux,wordlst[DatePos],5,2);
-					tm.tm_mon  = atoi(aux)-1;
-					getstr(aux,wordlst[DatePos],8,2);
+					invalidDate=0;
+					getstr(aux,wordlst[DatePos],lenDate,0,4);
+					tm.tm_year = atoi(aux);
+					if (tm.tm_year<=1900) invalidDate=1;
+					tm.tm_year -= 1900;
+					getstr(aux,wordlst[DatePos],lenDate,5,2);
+					tm.tm_mon  = atoi(aux);
+					if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+					tm.tm_mon  -= 1;
+					getstr(aux,wordlst[DatePos],lenDate,8,2);
 					tm.tm_mday = atoi(aux);
-					getstr(aux,wordlst[TimePos],0,2);
+					if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+					getstr(aux,wordlst[TimePos],lenTime,0,2);
 					tm.tm_hour = atoi(aux);
-					getstr(aux,wordlst[TimePos],3,2);
+					if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+					getstr(aux,wordlst[TimePos],lenTime,3,2);
 					tm.tm_min  = atoi(aux);
-					getstr(aux,wordlst[TimePos],6,6);
+					if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+					getstr(aux,wordlst[TimePos],lenTime,6,6);
 					tm.tm_sec  = atoi(aux);
+					if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1;	//Seconds can have value 60 when a leap second is inserted
+					if (invalidDate==1) {
+						sprintf(messagestr,"Invalid date in line number %d in reference file [%s]",numfileline,filename);
+						printError(messagestr,options);
+					}
 					seconds = atof(aux);
 					RefPosition->SP3->orbits.block[0][usedRecords].t.MJDN = MJDN(&tm);
 					RefPosition->SP3->orbits.block[0][usedRecords].t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
@@ -10213,32 +14384,47 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 					RefPosition->SP3->orbits.block[0][usedRecords].x[2]=atof(wordlst[ZPos]);
 				} else {
 					//Date Time Lat Lon Height format
-					if(strlen(wordlst[DatePos])!=10) {
+					lenDate=(int)strlen(wordlst[DatePos]);
+					lenTime=(int)strlen(wordlst[TimePos]);
+					if(lenDate!=10) {
 						sprintf(messagestr,"Date format must be in format YYYY/MM/DD. Check line number %d in reference file [%s]",numfileline,filename);
 						printError(messagestr,options);
 					} else if (wordlst[DatePos][4]!='/'||wordlst[DatePos][7]!='/') {
 						sprintf(messagestr,"Date format must be in format YYYY/MM/DD. Check line number %d in reference file [%s]",numfileline,filename);
 						printError(messagestr,options);
-					} else if (strlen(wordlst[TimePos])!=12) {
+					} else if (lenTime!=12) {
 						sprintf(messagestr,"Time format must be in format HH:MM:SS.zzz. Check line number %d in reference file [%s]",numfileline,filename);
 						printError(messagestr,options);
 					} else if (wordlst[TimePos][2]!=':'||wordlst[TimePos][5]!=':'||wordlst[TimePos][8]!='.') {
 						sprintf(messagestr,"Time format must be in format HH:MM:SS.zzz. Check line number %d in reference file [%s]",numfileline,filename);
 						printError(messagestr,options);
 					}
-					getstr(aux,wordlst[DatePos],0,4);
-					tm.tm_year = atoi(aux)-1900;
-					getstr(aux,wordlst[DatePos],5,2);
-					tm.tm_mon  = atoi(aux)-1;
-					getstr(aux,wordlst[DatePos],8,2);
+					invalidDate=0;
+					getstr(aux,wordlst[DatePos],lenDate,0,4);
+					tm.tm_year = atoi(aux);
+					if (tm.tm_year<=1900) invalidDate=1;
+					tm.tm_year -= 1900;
+					getstr(aux,wordlst[DatePos],lenDate,5,2);
+					tm.tm_mon  = atoi(aux);
+					if (tm.tm_mon<=0||tm.tm_mon>12) invalidDate=1;
+					tm.tm_mon  -= 1;
+					getstr(aux,wordlst[DatePos],lenDate,8,2);
 					tm.tm_mday = atoi(aux);
-					getstr(aux,wordlst[TimePos],0,2);
+					if (tm.tm_mday<=0||tm.tm_mday>31) invalidDate=1;
+					getstr(aux,wordlst[TimePos],lenTime,0,2);
 					tm.tm_hour = atoi(aux);
-					getstr(aux,wordlst[TimePos],3,2);
+					if (tm.tm_hour<0 || tm.tm_hour>23) invalidDate=1;
+					getstr(aux,wordlst[TimePos],lenTime,3,2);
 					tm.tm_min  = atoi(aux);
-					getstr(aux,wordlst[TimePos],6,6);
+					if (tm.tm_min<0 || tm.tm_min>59) invalidDate=1;
+					getstr(aux,wordlst[TimePos],lenTime,6,6);
 					tm.tm_sec  = atoi(aux);
+					if (tm.tm_sec<0 || tm.tm_sec>60) invalidDate=1;	//Seconds can have value 60 when a leap second is inserted
 					seconds = atof(aux);
+					if (invalidDate==1) {
+						sprintf(messagestr,"Invalid date in line number %d in reference file [%s]",numfileline,filename);
+						printError(messagestr,options);
+					}
 					RefPosition->SP3->orbits.block[0][usedRecords].t.MJDN = MJDN(&tm);
 					RefPosition->SP3->orbits.block[0][usedRecords].t.SoD = (double)(tm.tm_hour*3600 + tm.tm_min*60) + seconds;
 					PositionNEU[0]=atof(wordlst[LatPos]);
@@ -10279,7 +14465,7 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 					//Check that current is epoch is ahead of previous one
 					Interval=tdiff(&RefPosition->SP3->orbits.block[0][usedRecords].t,&RefPosition->SP3->orbits.block[0][usedRecords-1].t);
 					if (Interval<=0.) {
-						//Current epoch is before or equal previous one. Show an error exit
+						//Current epoch is before or equal previous one. Show an error and exit
 						sprintf(messagestr,"All data lines must be sort in chronological order in [%s] file. Check line %d of file",filename,numfileline);
 						printError(messagestr,options);
 					}
@@ -10288,11 +14474,6 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 
 				usedRecords++;
 
-				// Free memory
-				for (i=1;i<=wordindex;i++) {
-					free (wordlst[i]);
-					wordlst[i]=NULL;
-				}
 			} //If word[0]!='#'
 		}//End if(ret)
 	}//End while(getL)
@@ -10315,3 +14496,4 @@ void readPosFile (FILE  *fd, char  *filename, TGNSSproducts *RefPosition, TOptio
 
 	return;
 }
+

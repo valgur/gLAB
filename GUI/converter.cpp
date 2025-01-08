@@ -150,6 +150,7 @@ void gLAB_GUI::labelConvSbasFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SBAS File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -174,15 +175,15 @@ void gLAB_GUI::labelConvSbasFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEdit_convert_sbas->text() == "") {
-            messageBox.warning(0, "Error","SBAS file is empty\n");
+            messageBox.warning(nullptr, "Error","SBAS file is empty\n");
         } else if (this->fileExists(ui->lineEdit_convert_sbas->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEdit_convert_sbas->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEdit_convert_sbas->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEdit_convert_sbas->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEdit_convert_sbas->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -198,13 +199,14 @@ void gLAB_GUI::labelConvOutputPathMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SBAS Output Folder");
 
     QAction* selectedItem = myMenu.exec(globalPos);
     if (selectedItem)
     {
         if (ui->lineEdit_outputpath_sbas->text()== "") {
-            messageBox.warning(0, "Error","SBAS Output folder is empty\n");
+            messageBox.warning(nullptr, "Error","SBAS Output folder is empty\n");
         } else {
             if (this->directoryExists( ui->lineEdit_outputpath_sbas->text() ) == true ) {
                 QDesktopServices::openUrl(QUrl::fromLocalFile(ui->lineEdit_outputpath_sbas->text()));
@@ -222,12 +224,14 @@ void gLAB_GUI::comboBoxConverterDgnssInputMenu(const QPoint& pos) { // this is a
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open RTCM Input File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
     if (selectedItem)
     {
         QMessageBox messageBox;
+        messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
         QMessageBox::StandardButton reply;
 
         //File is a binary file
@@ -257,15 +261,15 @@ void gLAB_GUI::comboBoxConverterDgnssInputMenu(const QPoint& pos) { // this is a
 
         // Execute the program
         if (ui->lineEditConverterDgnssInput->text() == "") {
-            messageBox.warning(0, "Error","RTCM file is empty\n");
+            messageBox.warning(nullptr, "Error","RTCM file is empty\n");
         } else if (this->fileExists(ui->lineEditConverterDgnssInput->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditConverterDgnssInput->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditConverterDgnssInput->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditConverterDgnssInput->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditConverterDgnssInput->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -281,6 +285,7 @@ void gLAB_GUI::comboBoxConverterDgnssOutputRinexMenu(const QPoint& pos) { // thi
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Output RINEX File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -305,15 +310,15 @@ void gLAB_GUI::comboBoxConverterDgnssOutputRinexMenu(const QPoint& pos) { // thi
 
         // Execute the program
         if (ui->lineEditConverterDgnssOutputRinex->text() == "") {
-            messageBox.warning(0, "Error","Output RINEX file is empty\n");
+            messageBox.warning(nullptr, "Error","Output RINEX file is empty\n");
         } else if (this->fileExists(ui->lineEditConverterDgnssOutputRinex->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditConverterDgnssOutputRinex->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditConverterDgnssOutputRinex->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditConverterDgnssOutputRinex->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditConverterDgnssOutputRinex->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -329,6 +334,7 @@ void gLAB_GUI::labelConvCorrectionsFileMenu(const QPoint& pos) { // this is a sl
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Output Corrections Text File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -353,15 +359,15 @@ void gLAB_GUI::labelConvCorrectionsFileMenu(const QPoint& pos) { // this is a sl
 
         // Execute the program
         if (ui->lineEditConverterDgnssOutputAsciiCorrections->text() == "") {
-            messageBox.warning(0, "Error","Output Corrections Text file is empty\n");
+            messageBox.warning(nullptr, "Error","Output Corrections Text file is empty\n");
         } else if (this->fileExists(ui->lineEditConverterDgnssOutputAsciiCorrections->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditConverterDgnssOutputAsciiCorrections->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditConverterDgnssOutputAsciiCorrections->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditConverterDgnssOutputAsciiCorrections->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditConverterDgnssOutputAsciiCorrections->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -377,6 +383,7 @@ void gLAB_GUI::labelConvAntennaFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Output Antenna Text File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -401,15 +408,15 @@ void gLAB_GUI::labelConvAntennaFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditConverterDgnssOutputAsciiAntenna->text() == "") {
-            messageBox.warning(0, "Error","Output Antenna Text file is empty\n");
+            messageBox.warning(nullptr, "Error","Output Antenna Text file is empty\n");
         } else if (this->fileExists(ui->lineEditConverterDgnssOutputAsciiAntenna->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditConverterDgnssOutputAsciiAntenna->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditConverterDgnssOutputAsciiAntenna->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditConverterDgnssOutputAsciiAntenna->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditConverterDgnssOutputAsciiAntenna->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -594,8 +601,13 @@ int gLAB_GUI::getConverterOptions(int ShowCommandline, QString *errorString, QSt
              } else if (this->checknonASCIIcharacters(ui->lineEdit_convert_sbas->text())==1) {
                  *errorString += "SBAS source file has non ASCII characters\n";
              } else {
-                 *saveString += "-input:sbas " + ui->lineEdit_convert_sbas->text() +"\n";
-                 *runString << "-input:sbas" << ui->lineEdit_convert_sbas->text();
+                 if (ui->labelCurrentTemplate->text()=="SBAS 1F"){
+                     *saveString += "-input:sbas1f " + ui->lineEdit_convert_sbas->text() +"\n";
+                     *runString << "-input:sbas1f" << ui->lineEdit_convert_sbas->text();
+                 } else if (ui->labelCurrentTemplate->text()=="SBAS DFMC"){
+                     *saveString += "-input:sbasdfmc " + ui->lineEdit_convert_sbas->text() +"\n";
+                     *runString << "-input:sbasdfmc" << ui->lineEdit_convert_sbas->text();
+                 }
              }
         }
 
@@ -948,6 +960,7 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
     QString warningString = "";
     QStringList ParametersList;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     QTextStream InputFile(file);
     QDate date;
     QTime hour;
@@ -992,6 +1005,22 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
         ParametersList = userInput.split(QRegularExpression("\\s+"), QString::SkipEmptyParts);
 
         if ( QString::compare(option, "-input:sbas", Qt::CaseInsensitive)==0 ) {
+            numSBAS++;
+            if (ParametersList.count()<1) {
+                warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+            } else {
+                checkConfigurationFileInputFilePaths("SBAS", &warningString,&errorString,userInput);
+            }
+            mode=0;
+        } else if ( QString::compare(option, "-input:sbas1f", Qt::CaseInsensitive)==0 ) {
+            numSBAS++;
+            if (ParametersList.count()<1) {
+                warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+            } else {
+                checkConfigurationFileInputFilePaths("SBAS", &warningString,&errorString,userInput);
+            }
+            mode=0;
+        } else if ( QString::compare(option, "-input:sbasdfmc", Qt::CaseInsensitive)==0 ) {
             numSBAS++;
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
@@ -1064,7 +1093,7 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
     }
     //More than one orbit file given
     if (numSBAS>1) {
-        errorString += "More than one SBAS file ('-input:sbas' option) is provided.\n";
+        errorString += "More than one SBAS file ('-input:sbas' or '-input:sbas1f' or '-input:sbasdfmc' option) is provided.\n";
     }
     if (numSBASdir>1) {
         errorString += "More than one SBAS output directory ('-output:sbasdir' option) is provided.\n";
@@ -1096,8 +1125,13 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
 
         //If errors ocurred, show them and return
     if (!errorString.isEmpty()) {
-        messageBox.critical(0, "Errors found",
-                            "gLAB did not load the the configuration file due to the following errors:\n\n" + errorString);
+        messageBox.setWindowTitle("Errors found");
+        messageBox.setText("gLAB did not load the the configuration file due to the following errors:\n\n" + errorString);
+        messageBox.setIcon(QMessageBox::Critical);
+        QSpacerItem* horizontalSpacer = new QSpacerItem(800, 0, QSizePolicy::Minimum, QSizePolicy::Expanding);
+        QGridLayout* layout = static_cast<QGridLayout*>(messageBox.layout());
+        layout->addItem(horizontalSpacer, layout->rowCount(), 0, 1, layout->columnCount());
+        messageBox.exec();
         return;
     }
 
@@ -1139,34 +1173,42 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
             if (ParametersList.count()>=1) {
                 ui->lineEdit_convert_sbas->setText(userInput);
             }
+        } else if ( QString::compare(option, "-input:sbas1f", Qt::CaseInsensitive)==0 ) {
+            if (ParametersList.count()>=1) {
+                ui->lineEdit_convert_sbas->setText(userInput);
+            }
+        } else if ( QString::compare(option, "-input:sbasdfmc", Qt::CaseInsensitive)==0 ) {
+            if (ParametersList.count()>=1) {
+                ui->lineEdit_convert_sbas->setText(userInput);
+            }
         } else if ( QString::compare(option, "-output:sbasdir", Qt::CaseInsensitive)==0 ) {
             if (ParametersList.count()>=1) {
                 ui->lineEdit_outputpath_sbas->setText(userInput);
             }
         } else if ( QString::compare(option, "-output:rinexb", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBox_rinexb->setChecked(true);
             numOutputSBASTypes++;
         } else if ( QString::compare(option, "-output:ems", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBox_ems->setChecked(true);
             numOutputSBASTypes++;
         } else if ( QString::compare(option, "-output:pegasus", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBox_pegasus->setChecked(true);
             this->on_checkBox_pegasus_clicked(true);
             numOutputSBASTypes++;
             pegasus=1;
         } else if ( QString::compare(option, "-output:pegspace", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBox_pegasus_space->setChecked(true);
             pegasusspace=1;
         } else if ( QString::compare(option, "-output:pegfilealign", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBox_pegasus_align->setChecked(true);
             pegasusalign=1;
         } else if ( QString::compare(option, "-onlyconvert", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             onlyconvertOption++;
 
         //DGNSS
@@ -1186,7 +1228,7 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
                 this->on_comboBoxConverterDgnssInput_currentIndexChanged(2);
             }
         } else if ( QString::compare(option, "-input:rtcm:initdate", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else {
@@ -1207,7 +1249,7 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
                 }
             }
         } else if ( QString::compare(option, "-input:rtcm:inithour", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else {
@@ -1223,7 +1265,7 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
                 ui->lineEditConverterDgnssOutputRinex->setText(userInput);
             }
         } else if ( QString::compare(option, "-output:rinexversion", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else if (userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt()<2 || userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt()>3) {
@@ -1242,7 +1284,7 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
         } else if ( QString::compare(option, "-output:file", Qt::CaseInsensitive)==0 ) {
              warningString += "Parameter '" + option + "' is omitted in conversion mode\n";
         } else if ( QString::compare(option, "--output:file", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             warningString += "Parameter '" + option + "' is for setting output messages to standard output, which would be lost after execution finishes. It was skipped.\n";
         }
     }
@@ -1260,7 +1302,12 @@ void gLAB_GUI::converterLoadParameters(QFile *file) {
     }
 
     if (!warningString.isEmpty()) {
-        messageBox.warning(0, "Errors found",
-                            "gLAB loaded the configuration file, but found the following errors:\n\n" + warningString);
+        messageBox.setWindowTitle("Errors found");
+        messageBox.setText("gLAB loaded the configuration file, but found the following errors:\n\n" + warningString);
+        messageBox.setIcon(QMessageBox::Warning);
+        QSpacerItem* horizontalSpacer = new QSpacerItem(800, 0, QSizePolicy::Minimum, QSizePolicy::Expanding);
+        QGridLayout* layout = static_cast<QGridLayout*>(messageBox.layout());
+        layout->addItem(horizontalSpacer, layout->rowCount(), 0, 1, layout->columnCount());
+        messageBox.exec();
     }
 }

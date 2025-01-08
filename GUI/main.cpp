@@ -18,10 +18,19 @@
 
 int main(int argc, char *argv[]) {
     QApplication a(argc, argv);
+
+    QPixmap pixSplash(":/data/MainLogo.gif");
+    QSplashScreen winSplash(pixSplash.scaledToHeight(300,Qt::SmoothTransformation));
+    winSplash.show();
+    winSplash.showMessage("Loading...",Qt::AlignRight|Qt::AlignTop);
+
     a.setWindowIcon(QIcon(":/data/gAGE.ico"));
     QLoggingCategory::setFilterRules("qt.network.ssl.warning=false");
+
     gLAB_GUI w;
     w.show();
+
+    winSplash.finish(&w);
 
     return a.exec();
 }

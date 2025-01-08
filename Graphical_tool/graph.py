@@ -1,11 +1,11 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # -*- coding: UTF-8 -*- 
 
 #############################################################################
 #  Copyright & License:
 #  ====================
 #   
-#  Copyright 2009-2020 gAGE/UPC & ESA 
+#  Copyright 2009-2024 gAGE/UPC & ESA 
 #   
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -31,8 +31,8 @@
 #            Yixie Shao ( gAGE/UPC )
 #          glab.gage @ upc.edu           
 # File: graph.py
-# Code Management Tool File Version: 5.5  Revision: 1
-# Date: 2020/12/11
+# Code Management Tool File Version: 6.0  Revision: 0
+# Date: 2024/11/22
 #############################################################################
 
 #############################################################################
@@ -606,6 +606,15 @@
 #          gLAB v5.5.1
 # Release: 2020/12/11
 # Change Log: No changes in this file.
+# -----------
+#          gLAB v6.0.0
+# Release: 2024/11/22
+# Change Log:   Changed interpreter in first line from "/usr/bin/python" to /usr/bin/python3".
+#               Dropped support for python 2. Currently it is still compatible with python 2 as the code only
+#                had bug fixes, as it is only required to change the interpreter back to "/usr/bin/python".
+#                Python 2 code may be removed in future versions.
+#               Fixed bug which made to always quantize values to the defaults X and Y limits independently of
+#                user set X and Y limits.
 # -----------
 #       END_RELEASE_HISTORY
 #############################################################################
@@ -7427,13 +7436,13 @@ def MakeGraph():
         if (Graph.resolution_x_auto == False): sfp.resolution_x = Graph.resolution_x
         if (Graph.resolution_y_auto == False): sfp.resolution_y = Graph.resolution_y
         if (Graph.ColorMap != ""): sfp.cm = Graph.ColorMap
-        sfp.dealData()
-        sfp.getPoints()
-        sfp.plotPoints()
         if (Graph.XmaxAuto == False): sfp.Xmax = Graph.Xmax 
         if (Graph.XminAuto == False): sfp.Xmin = Graph.Xmin 
         if (Graph.YmaxAuto == False): sfp.Ymax = Graph.Ymax 
         if (Graph.YminAuto == False): sfp.Ymin = Graph.Ymin 
+        sfp.dealData()
+        sfp.getPoints()
+        sfp.plotPoints()
         if Graph.clean:
             x = [sfp.Xmin,sfp.Xmax]
             y = x
@@ -7761,8 +7770,8 @@ HelpHeader = """
 #            Yixie Shao ( gAGE/UPC )
 #          glab.gage @ upc.edu           
 # File: graph.py
-# Code Management Tool File Version: 5.5  Revision: 1
-# Date: 2020/12/11
+# Code Management Tool File Version: 6.0  Revision: 0
+# Date: 2024/11/22
 #############################################################################
 
 
@@ -9429,7 +9438,7 @@ SBAS AVAILABILITY, CONTINUITY AND DOP PLOTS:
 
 """
 
-GraphicParser = OptionParser(usage=HelpHeader,version="%prog 5.5.1") #This is for the case the user runs graph with parameter "--version"
+GraphicParser = OptionParser(usage=HelpHeader,version="%prog 6.0.0") #This is for the case the user runs graph with parameter "--version"
 
 GraphicParser.add_option("--title","--tit","-t", type="string", dest="Title", action="callback",callback=ParseCallback,callback_args=(Graph,),help=optparse.SUPPRESS_HELP)
 GraphicParser.add_option("--Ftitle","--ftitle","--ft", type="string", dest="FractionalTitle", action="callback",callback=ParseCallback,callback_args=(Graph,),help=optparse.SUPPRESS_HELP)
@@ -10797,6 +10806,10 @@ if Graph.NumTextMark > 0:
 if Graph.SaveFigure or (Graph.SBASmaps and Graph.FIROnlyPrintDegText):
     import matplotlib
     matplotlib.use('Agg')
+elif sys.platform[:3].lower() == "lin":
+    #Use TkAgg if display is needed in Linux. This is because is some distributions (e.g. OpenSuse) have 'Agg' as default library, which does not use any display
+    import matplotlib
+    matplotlib.use('TkAgg')
 
 #The imports are done after the parameters are read, so if no stanford or 
 #worst integrity ratio plots are done, their libraries are not imported

@@ -40,9 +40,6 @@
        <verstretch>0</verstretch>
       </sizepolicy>
      </property>
-     <property name="styleSheet">
-      <string notr="true">color: rgb(0, 0, 0);</string>
-     </property>
      <property name="clearButtonEnabled">
       <bool>true</bool>
      </property>
@@ -69,9 +66,6 @@
        <verstretch>0</verstretch>
       </sizepolicy>
      </property>
-     <property name="styleSheet">
-      <string notr="true">color: rgb(0, 0, 0);</string>
-     </property>
      <property name="clearButtonEnabled">
       <bool>true</bool>
      </property>
@@ -85,9 +79,6 @@
        <verstretch>0</verstretch>
       </sizepolicy>
      </property>
-     <property name="styleSheet">
-      <string notr="true">color: rgb(0, 0, 0);</string>
-     </property>
      <property name="clearButtonEnabled">
       <bool>true</bool>
      </property>
@@ -100,9 +91,6 @@
        <horstretch>0</horstretch>
        <verstretch>0</verstretch>
       </sizepolicy>
-     </property>
-     <property name="styleSheet">
-      <string notr="true">color: rgb(0, 0, 0);</string>
      </property>
      <property name="clearButtonEnabled">
       <bool>true</bool>
@@ -135,9 +123,6 @@
        <horstretch>0</horstretch>
        <verstretch>0</verstretch>
       </sizepolicy>
-     </property>
-     <property name="styleSheet">
-      <string notr="true">color: rgb(0, 0, 0);</string>
      </property>
      <property name="clearButtonEnabled">
       <bool>true</bool>
@@ -191,7 +176,7 @@
       </sizepolicy>
      </property>
      <property name="toolTip">
-      <string>GPS week number (without rollover). The GPS week starts on the 6&lt;sup&gt;th&lt;/sup&gt; of January of 1980. </string>
+      <string>GPS week number (without rollover). The GPS week starts on the 6&lt;sup&gt;th&lt;/sup&gt; of January of 1980.&lt;br&gt;&lt;br&gt;&lt;b&gt;NOTE:&lt;/b&gt; To convert from Galileo week to GPS week, add 1024.&lt;br&gt;</string>
      </property>
      <property name="styleSheet">
       <string notr="true">color: rgb(0, 0, 0);</string>
@@ -228,9 +213,6 @@
        <verstretch>0</verstretch>
       </sizepolicy>
      </property>
-     <property name="styleSheet">
-      <string notr="true">color: rgb(0, 0, 0);</string>
-     </property>
      <property name="clearButtonEnabled">
       <bool>true</bool>
      </property>
@@ -243,9 +225,6 @@
        <horstretch>0</horstretch>
        <verstretch>0</verstretch>
       </sizepolicy>
-     </property>
-     <property name="styleSheet">
-      <string notr="true">color: rgb(0, 0, 0);</string>
      </property>
      <property name="clearButtonEnabled">
       <bool>true</bool>
@@ -316,9 +295,6 @@
        <horstretch>0</horstretch>
        <verstretch>0</verstretch>
       </sizepolicy>
-     </property>
-     <property name="styleSheet">
-      <string notr="true">color: rgb(0, 0, 0);</string>
      </property>
      <property name="clearButtonEnabled">
       <bool>true</bool>
@@ -394,7 +370,7 @@
     </widget>
    </item>
    <item row="6" column="6">
-    <widget class="QPushButton" name="pushButtonDateConverterOk">
+    <widget class="QPushButton" name="pushButtonDateConverterClose">
      <property name="sizePolicy">
       <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
        <horstretch>0</horstretch>
@@ -402,10 +378,7 @@
       </sizepolicy>
      </property>
      <property name="focusPolicy">
-      <enum>Qt::StrongFocus</enum>
-     </property>
-     <property name="styleSheet">
-      <string notr="true">color: rgb(0, 0, 0);</string>
+      <enum>Qt::NoFocus</enum>
      </property>
      <property name="text">
       <string>Close</string>
@@ -456,7 +429,7 @@
   <tabstop>lineEditDateConverterSoW</tabstop>
   <tabstop>lineEditDateConverterMJDN</tabstop>
   <tabstop>lineEditDateConverterSoD_MJDN</tabstop>
-  <tabstop>pushButtonDateConverterOk</tabstop>
+  <tabstop>pushButtonDateConverterClose</tabstop>
  </tabstops>
  <resources/>
  <connections/>

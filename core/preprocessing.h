@@ -2,7 +2,7 @@
    Copyright & License:
    ====================
    
-   Copyright 2009 - 2020 gAGE/UPC & ESA
+   Copyright 2009 - 2024 gAGE/UPC & ESA
    
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@
  *             Jesus Romero Sanchez ( gAGE/UPC )
  *          glab.gage @ upc.edu
  * File: preprocessing.h
- * Code Management Tool File Version: 5.5  Revision: 1
- * Date: 2020/12/11
+ * Code Management Tool File Version: 6.0  Revision: 0
+ * Date: 2024/11/22
  ***************************************************************************/
 
 /****************************************************************************
@@ -222,11 +222,22 @@
  * Release: 2020/12/11
  * Change Log: No changes in this file.
  * -----------
+ *          gLAB v6.0.0
+ * Release: 2024/11/22
+ * Change Log:   Added multi-constellation support (Galileo, GLONASS, GEO, BDS, QZSS and IRNSS).
+ *               Added multi-frequency support (all RINEX frequencies).
+ *               Added SBAS DFMC processing.
+ * -----------
  *       END_RELEASE_HISTORY
  *****************************/
 
 #ifndef PREPROCESSING_H_
 #define PREPROCESSING_H_
+
+#if defined __WIN32__
+ 	//This is to allow %lld, %llu and %n format specifiers in printf with MinGW
+	#define __USE_MINGW_ANSI_STDIO  1
+#endif
 
 /* System modules */
 #include <stdio.h>
@@ -249,12 +260,12 @@ int isEclipsed (TTime *t, TSatellite *sat, TSatInfo *satInfo, double sunPos[3], 
 
 // Carrier phase prealignment
 void prealignSat (TEpoch *epoch, int ind);
-void prealignEpoch (TEpoch *epoch);
+void prealignEpoch (TEpoch *epoch, TOptions  *options);
 
 // Data checks and cycle-slip detection
 double lagrangeInterpolation (int degree, TTime t, TTime *tPrev, double *yPrev);
 int checkPseudorangeJumps (TEpoch *epoch, TOptions *options);
-double polyfit (TEpoch *epoch, TOptions *options, int i, int type, int numsamples, double *res);
+double polyfit (TTime *t, TTime *tSamples, double *Samples, int outlier, int numsamples, double *res);
 void checkCycleSlips (TEpoch *epoch, TOptions *options, int mode);
 void look4interval (TEpoch *epoch, TOptions  *options);
 

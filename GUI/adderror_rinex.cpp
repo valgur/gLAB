@@ -51,7 +51,25 @@ void gLAB_GUI::on_pushButtonUserAddedErrorAddError_clicked() {
         }
     }
 }
-
+void gLAB_GUI::on_groupBoxRinexNavFileGLOAddError_clicked(bool checked){
+    ui->groupBoxRinexNavFileGLOAddError->setChecked(checked);
+    ui->labelRinexNavFileGLOAddError->setHidden(!checked);
+    ui->pushButtonRinexNavFileGLOAddError->setHidden(!checked);
+    ui->lineEditRinexNavFileGLOAddError->setHidden(!checked);
+}
+void gLAB_GUI::on_pushButtonRinexNavFileGLOAddError_clicked(){
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNavFileGLOAddError->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
 // Open dialog to set the output RINEX observation filename and path
 void gLAB_GUI::on_pushButtonRinexOutputFileAddError_clicked() {
     QFileDialog dialog(this);
@@ -108,6 +126,7 @@ void gLAB_GUI::labelAddErrorObservationFileMenu(const QPoint& pos) { // this is 
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open RINEX Observation File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -132,15 +151,15 @@ void gLAB_GUI::labelAddErrorObservationFileMenu(const QPoint& pos) { // this is 
 
         // Execute the program
         if (ui->lineEditRinexObsAddError->text() == "") {
-            messageBox.warning(0, "Error","RINEX Observation file is empty\n");
+            messageBox.warning(nullptr, "Error","RINEX Observation file is empty\n");
         } else if (this->fileExists(ui->lineEditRinexObsAddError->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditRinexObsAddError->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexObsAddError->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditRinexObsAddError->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexObsAddError->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -156,6 +175,7 @@ void gLAB_GUI::labelAddErrorUserAddedErrorFileMenu(const QPoint& pos) { // this 
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open User Added Error File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -180,15 +200,15 @@ void gLAB_GUI::labelAddErrorUserAddedErrorFileMenu(const QPoint& pos) { // this 
 
         // Execute the program
         if (ui->lineEditUserAddedErrorAddError->text() == "") {
-            messageBox.warning(0, "Error","User Added Error file is empty\n");
+            messageBox.warning(nullptr, "Error","User Added Error file is empty\n");
         } else if (this->fileExists(ui->lineEditUserAddedErrorAddError->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditUserAddedErrorAddError->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditUserAddedErrorAddError->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditUserAddedErrorAddError->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditUserAddedErrorAddError->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -204,6 +224,7 @@ void gLAB_GUI::labelAddErrorRinexOutputFileMenu(const QPoint& pos) { // this is 
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Output RINEX Observation File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -228,15 +249,15 @@ void gLAB_GUI::labelAddErrorRinexOutputFileMenu(const QPoint& pos) { // this is 
 
         // Execute the program
         if (ui->lineEditRinexOutputFileAddError->text() == "") {
-            messageBox.warning(0, "Error","Output RINEX Observation file is empty\n");
+            messageBox.warning(nullptr, "Error","Output RINEX Observation file is empty\n");
         } else if (this->fileExists(ui->lineEditRinexOutputFileAddError->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditRinexOutputFileAddError->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexOutputFileAddError->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditRinexOutputFileAddError->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexOutputFileAddError->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -252,6 +273,7 @@ void gLAB_GUI::labelAddErrorOutputFileMenu(const QPoint& pos) { // this is a slo
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Output Messages File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -276,15 +298,15 @@ void gLAB_GUI::labelAddErrorOutputFileMenu(const QPoint& pos) { // this is a slo
 
         // Execute the program
         if (ui->lineEditOutputFileAddError->text() == "") {
-            messageBox.warning(0, "Error","Output Messages file is empty\n");
+            messageBox.warning(nullptr, "Error","Output Messages file is empty\n");
         } else if (this->fileExists(ui->lineEditOutputFileAddError->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputFileAddError->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputFileAddError->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputFileAddError->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputFileAddError->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -307,7 +329,7 @@ void gLAB_GUI::getAddErrorOptions(QString *errorString, QString *warningString, 
     } else if (this->checknonASCIIcharacters(ui->lineEditRinexObsAddError->text())==1) {
         *errorString += "RINEX Observation source file has non ASCII characters\n";
     } else {
-        *saveString += "-input:obs " + ui->lineEditRinexObsAddError->text()+ "\n";
+        *saveString += "-input:obs " + ui->lineEditRinexObsAddError->text() + "\n";
         *runString <<  "-input:obs" << ui->lineEditRinexObsAddError->text();
     }
 
@@ -319,8 +341,22 @@ void gLAB_GUI::getAddErrorOptions(QString *errorString, QString *warningString, 
     } else if (this->checknonASCIIcharacters(ui->lineEditUserAddedErrorAddError->text())==1) {
         *errorString += "User Added Error source file has non ASCII characters\n";
     } else {
-        *saveString += "-input:usererror " + ui->lineEditUserAddedErrorAddError->text()+ "\n";
+        *saveString += "-input:usererror " + ui->lineEditUserAddedErrorAddError->text() + "\n";
         *runString <<  "-input:usererror" << ui->lineEditUserAddedErrorAddError->text();
+    }
+
+    //Check GLONASS Nav. file
+    if ( ui->groupBoxRinexNavFileGLOAddError->isChecked() ){
+        if ( ui->lineEditRinexNavFileGLOAddError->text() == "" ) {
+            *errorString += "INPUT: GLONASS RINEX navigation file is a required input in 'Precise (1 file)' if GLONASS is selected.\n";
+        } else if (this->fileExists(ui->lineEditRinexNavFileGLOAddError->text())==false) {
+            *errorString += "INPUT: GLONASS RINEX navigation file does not exist.\n";
+        } else if (this->checknonASCIIcharacters(ui->lineEditRinexNavFileGLOAddError->text())==1) {
+            *errorString += "INPUT: GLONASS RINEX navigation file has non ASCII characters\n";
+        } else {
+            *saveString += "-input:navglo " + ui->lineEditRinexNavFileGLOAddError->text() + "\n";
+            *runString << "-input:navglo" << ui->lineEditRinexNavFileGLOAddError->text();
+        }
     }
 
     //Check output Rinex observation file
@@ -371,6 +407,11 @@ void gLAB_GUI::getAddErrorOptions(QString *errorString, QString *warningString, 
             *saveString += "--print:usererror\n";
             *runString <<  "--print:usererror";
         }
+        //V5 messages
+        if (this->v5Message>0) {
+            *saveString += "-print:v5format\n";
+            *runString << "-print:v5format";
+        }
     }
 }
 
@@ -384,6 +425,7 @@ void gLAB_GUI::AddErrorLoadParameters(QFile *file) {
     QString userInputSingleSpace;
     QStringList ParametersList;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     QTextStream InputFile(file);
     InputFile.setAutoDetectUnicode(true);
 
@@ -446,6 +488,10 @@ void gLAB_GUI::AddErrorLoadParameters(QFile *file) {
             numOrb++;
         } else if ( QString::compare(option, "-input:sbas", Qt::CaseInsensitive)==0 ) {
             numSBAS++;
+        } else if ( QString::compare(option, "-input:sbas1f", Qt::CaseInsensitive)==0 ) {
+            numSBAS++;
+        } else if ( QString::compare(option, "-input:sbasdfmc", Qt::CaseInsensitive)==0 ) {
+            numSBAS++;
         } else if ( QString::compare(option, "-input:dgnss", Qt::CaseInsensitive)==0  ) {
             numDGNSS++;
         } else if ( QString::compare(option, "-input:rtcm", Qt::CaseInsensitive)==0  ) {
@@ -494,7 +540,7 @@ void gLAB_GUI::AddErrorLoadParameters(QFile *file) {
         errorString += "A orbit SP3 file ('-input:orb' option) is provided, which is forbidden in this processing mode.\n";
     }
     if (numSBAS>0) {
-        errorString +="A SBAS file ('-input:sbas' option) is provided, which is forbidden in this processing mode.\n";
+        errorString +="A SBAS file ('-input:sbas' or '-input:sbas1f' or '-input:sbasdfmc' option) is provided, which is forbidden in this processing mode.\n";
     }
     if (numDGNSS>0) {
         errorString +="A DGNSS file ('-input:dgnss' option) is provided, which is forbidden in this processing mode.\n";
@@ -512,8 +558,13 @@ void gLAB_GUI::AddErrorLoadParameters(QFile *file) {
 
     //If errors ocurred, show them and return
     if (!errorString.isEmpty()) {
-        messageBox.critical(0, "Errors found",
-                            "gLAB did not load the the configuration file due to the following errors:\n\n" + errorString);
+        messageBox.setWindowTitle("Errors found");
+        messageBox.setText("gLAB did not load the the configuration file due to the following errors:\n\n" + errorString);
+        messageBox.setIcon(QMessageBox::Critical);
+        QSpacerItem* horizontalSpacer = new QSpacerItem(800, 0, QSizePolicy::Minimum, QSizePolicy::Expanding);
+        QGridLayout* layout = static_cast<QGridLayout*>(messageBox.layout());
+        layout->addItem(horizontalSpacer, layout->rowCount(), 0, 1, layout->columnCount());
+        messageBox.exec();
         return;
     }
     //Second loop: Load parameters
@@ -550,26 +601,31 @@ void gLAB_GUI::AddErrorLoadParameters(QFile *file) {
             if (ParametersList.count()>=1) {
                 ui->lineEditUserAddedErrorAddError->setText(userInput);
             }
+        } else if ( QString::compare(option, "-input:navglo", Qt::CaseInsensitive)==0 ) {
+            if (ParametersList.count()>=1) {
+                this->on_groupBoxRinexNavFileGLOAddError_clicked(true);
+                ui->lineEditRinexNavFileGLOAddError->setText(userInput);
+            }
         } else if ( QString::compare(option, "-output:file", Qt::CaseInsensitive)==0 ) {
             if (ParametersList.count()>=1) {
                 ui->lineEditOutputFileAddError->setText(userInput);
             }
         } else if ( QString::compare(option, "--output:file", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             warningString += "Parameter '" + option + "' is for setting output messages to standard output, which will be lost after execution finishes. It was skipped.\n";
         } else if ( QString::compare(option, "-output:rinex", Qt::CaseInsensitive)==0 ) {
             ui->lineEditRinexOutputFileAddError->setText(userInput);
         } else if ( QString::compare(option, "-print:info", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBoxPrintInfoAddError->setChecked(true);
         } else if ( QString::compare(option, "--print:info", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBoxPrintInfoAddError->setChecked(false);
         } else if ( QString::compare(option, "-print:usererror", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBoxPrintUserErrorAddError->setChecked(true);
         } else if ( QString::compare(option, "--print:usererror", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBoxPrintUserErrorAddError->setChecked(false);
         } else if ( QString::compare(option, "-print:all", Qt::CaseInsensitive)==0 ) {
             ui->checkBoxPrintInfoAddError->setChecked(true);
@@ -577,11 +633,18 @@ void gLAB_GUI::AddErrorLoadParameters(QFile *file) {
         } else if ( QString::compare(option, "-print:none", Qt::CaseInsensitive)==0||QString::compare(option, "--print:none", Qt::CaseInsensitive)==0 ) {
             ui->checkBoxPrintInfoAddError->setChecked(false);
             ui->checkBoxPrintUserErrorAddError->setChecked(false);
+        } else if ( QString::compare(option, "-print:v5format", Qt::CaseInsensitive)==0 ) {
+            this->v5Message=1;
         }
     }
 
     if (!warningString.isEmpty()) {
-        messageBox.warning(0, "Errors found",
-                            "gLAB loaded the configuration file, but found the following errors:\n\n" + warningString);
+        messageBox.setWindowTitle("Errors found");
+        messageBox.setText("gLAB loaded the configuration file, but found the following errors:\n\n" + warningString);
+        messageBox.setIcon(QMessageBox::Warning);
+        QSpacerItem* horizontalSpacer = new QSpacerItem(800, 0, QSizePolicy::Minimum, QSizePolicy::Expanding);
+        QGridLayout* layout = static_cast<QGridLayout*>(messageBox.layout());
+        layout->addItem(horizontalSpacer, layout->rowCount(), 0, 1, layout->columnCount());
+        messageBox.exec();
     }
 }

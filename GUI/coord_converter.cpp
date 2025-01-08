@@ -1,3 +1,17 @@
+/*This file is part of gLAB's GUI.
+
+    gLAB's GUI is free software: you can redistribute it and/or modify
+    it under the terms of the Lesser GNU General Public License as published by
+    the Free Software Foundation, either version 3.
+
+    gLAB's GUI is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    Lesser GNU General Public License for more details.
+
+    You should have received a copy of the Lesser GNU General Public License
+    along with gLAB's GUI.  If not, see <http://www.gnu.org/licenses/>.
+*/
 #include "coord_converter.h"
 #include "ui_coord_converter.h"
 #include "math.h"
@@ -8,6 +22,23 @@ GNSS_Coord_converter::GNSS_Coord_converter(QWidget *parent) :
 {
     uiCoord->setupUi(this);
 
+    // Set StyleSheet
+    #if (defined Q_OS_WIN32)
+        QFile qss(":/data/WinStyle.qss");
+        qss.open(QFile::ReadOnly);
+        this->setStyleSheet(qss.readAll());
+        qss.close();
+    #elif (defined Q_OS_MAC)
+        QFile qss(":/data/MacStyle.qss");
+        qss.open(QFile::ReadOnly);
+        this->setStyleSheet(qss.readAll());
+        qss.close();
+    #else
+        QFile qss(":/data/LinuxStyle.qss");
+        qss.open(QFile::ReadOnly);
+        this->setStyleSheet(qss.readAll());
+        qss.close();
+    #endif
 
     #ifdef Q_OS_WIN32
         setMaximumWidth(700);
@@ -52,7 +83,7 @@ GNSS_Coord_converter::~GNSS_Coord_converter()
     delete uiCoord;
 }
 
-void GNSS_Coord_converter::on_pushButtonCoordConvOK_clicked()
+void GNSS_Coord_converter::on_pushButtonCoordConvClose_clicked()
 {
     this->close();
 }

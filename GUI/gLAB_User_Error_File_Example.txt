@@ -1,4 +1,4 @@
-#gLAB version v5.5.1, built on Dec 11 2020 12:27:40
+#gLAB version v6.0.0, built on Nov 22 2024 23:58:23
 #This is an example of user-defined error configuration file
 #Lines with comments start with a # at the beginning of line
 #If the symbol # is found in the middle of the line, the rest of the line will be omitted, as it will be considered a comment
@@ -148,17 +148,27 @@
 #gLAB will print the user-defined error in the lines starting with 'USERADDEDERROR' (which are enabled by default). The description of each field in the message is shown by executing 'gLAB -messages'.
 #
 #For RINEX 2 files, the user must use the equivalent measurements for RINEX 3. The measurement conversion table is:
-#C1 -> C1C
+#C1 -> C1C (except for BeiDou, where it is transformed to C1X)
 #P1 -> C1P
-#L1 -> L1P
-#D1 -> D1P
-#S1 -> S1P
+#L1 -> L1P (except for Galileo, QZSS and GEO, where it is transformed to L1C, and in BeiDou to L1X)
+#D1 -> D1P (except for Galileo, QZSS and GEO, where it is transformed to D1C, and in BeiDou to D1X)
+#S1 -> S1P (except for Galileo, QZSS and GEO, where it is transformed to S1C, and in BeiDou to S1X)
 #
-#C2 -> C2C
-#P2 -> C2P
-#L2 -> L2P
-#D2 -> D2P
-#S2 -> S2P
+#C2 -> C2C (except for BeiDou and QZSS, where it is transformed to C2X)
+#P2 -> C2P (except for BeiDou and QZSS, where it is transformed to C2X)
+#L2 -> L2P (except for BeiDou and QZSS, where it is transformed to L2X)
+#D2 -> D2P (except for BeiDou and QZSS, where it is transformed to D2X)
+#S2 -> S2P (except for BeiDou and QZSS, where it is transformed to S2X)
+#
+#C3 -> C3X
+#L3 -> L3X
+#D3 -> D3X
+#S3 -> S3X
+#
+#C4 -> C4X
+#L4 -> L4X
+#D4 -> D4X
+#S4 -> S4X
 #
 #C5 -> C5X
 #L5 -> L5X
@@ -170,15 +180,20 @@
 #D6 -> D6X
 #S6 -> S6X
 #
-#C7 -> C7X
-#L7 -> L7X
-#D7 -> D7X
-#S7 -> S7X
+#C7 -> C7X (except for GPS and QZSS, where it is transformed to C1X, and in GLONASS to C3X)
+#L7 -> L7X (except for GPS and QZSS, where it is transformed to L1X, and in GLONASS to L3X)
+#D7 -> D7X (except for GPS and QZSS, where it is transformed to D1X, and in GLONASS to D3X)
+#S7 -> S7X (except for GPS and QZSS, where it is transformed to S1X, and in GLONASS to S3X)
 #
-#C8 -> C8X
-#L8 -> L8X
-#D8 -> D8X
-#S8 -> S8X
+#C8 -> C8X (except for QZSS, where it is transformed to C1Z)
+#L8 -> L8X (except for QZSS, where it is transformed to L1Z)
+#D8 -> D8X (except for QZSS, where it is transformed to D1Z)
+#S8 -> S8X (except for QZSS, where it is transformed to S1Z)
+#
+#C9 -> C9X
+#L9 -> L9X
+#D9 -> D9X
+#S9 -> S9X
 #
 #Usage Example:
 SoD Length

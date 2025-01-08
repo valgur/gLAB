@@ -2,7 +2,7 @@
    Copyright & License:
    ====================
    
-   Copyright 2009 - 2020 gAGE/UPC & ESA
+   Copyright 2009 - 2024 gAGE/UPC & ESA
    
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@
  *             Jesus Romero Sanchez ( gAGE/UPC )
  *          glab.gage @ upc.edu
  * File: filter.h
- * Code Management Tool File Version: 5.5  Revision: 1
- * Date: 2020/12/11
+ * Code Management Tool File Version: 6.0  Revision: 0
+ * Date: 2024/11/22
  ***************************************************************************/
 
 /****************************************************************************
@@ -220,11 +220,22 @@
  * Release: 2020/12/11
  * Change Log: No changes in this file.
  * -----------
+ *          gLAB v6.0.0
+ * Release: 2024/11/22
+ * Change Log:   Added multi-constellation support (Galileo, GLONASS, GEO, BDS, QZSS and IRNSS).
+ *               Added multi-frequency support (all RINEX frequencies).
+ *               Added SBAS DFMC processing.
+ * -----------
  *       END_RELEASE_HISTORY
  *****************************/
 
 #ifndef FILTER_H_
 #define FILTER_H_
+
+#if defined __WIN32__
+ 	//This is to allow %lld, %llu and %n format specifiers in printf with MinGW
+	#define __USE_MINGW_ANSI_STDIO  1
+#endif
 
 /* System modules */
 #include <stdio.h>
@@ -240,31 +251,33 @@
 int m2v (int i, int j);
 //static inline int m2v_opt (int i, int j); //Static functions must be declared only in the .c file where is going to be used
 int cholinv (double *mat, int n);
-int cholinv_opt (double *mat, int n);
-void mxv (double *mat, double *vec, int n);
+int cholinv_opt (double *mat, const int n);
+void mxv (double *restrict mat, double *restrict vec, const int n); 
 
 // Filtering
-void StepDetector (TEpoch *epoch, TOptions *options);
+int StepDetector (TEpoch *epoch, TOptions *options);
 void PrefitOutlierDetectorAbsolute (TEpoch *epoch, TOptions *options);
 void PrefitOutlierDetectorMedian (TEpoch *epoch, TOptions *options);
-void fillUsableSatellites (TEpoch *epoch, TOptions *options);
+int fillUsableSatellites (TEpoch *epoch, TEpoch *epochDGNSS, TOptions *options);
+int changeReferenceConstellationFilter (enum GNSSystem lastGNSSselected, TEpoch *epoch, TOptions *options);
 int isEpochComputable (TEpoch *epoch);
-int calculateUnknowns (int obs, TOptions *options);
-void initUnkinfo (TEpoch *epoch, TUnkinfo *unkinfo, int nunk, int observations, double t, TOptions *options);
-void prepareCorrelation (TEpoch *epoch,TFilterSolution *solution,int *PRNlist, TUnkinfo *unkinfo, TUnkinfo *prevUnkinfo, TOptions *options);
-void atwa_atwy_insertline (double *atwa, double *atwy, double *unk, double prefit, int nunk, double sigma2);
-void atwa_atwy_insertLineWithCorrelation (double *atwa, double *atwy, double *corr, double apriorivalue, int nunk, double multiplier, int iniunk);
-void designSystem (TEpoch *epoch, double *atwa, double *atwy, TUnkinfo *unkinfo, enum MeasurementType measType, int filterInd, double **G, double *prefits, double *weights, TOptions *options);
-void designSystemIniValues (TEpoch *epoch, double *atwa, double *atwy, TUnkinfo *unkinfo, TFilterSolution *solution);
-double calculatePostfits (TEpoch *epoch, double *solution, TUnkinfo *unkinfo, enum MeasurementType measType, int filterInd, TOptions *options);
-int computeSolution (TEpoch *epoch,double *stddev2postfit, TFilterSolution *solution, double *newcorrelations, double *newparameterValues, TUnkinfo *unkinfo, TStdESA *StdESA, TOptions *options);
+int calculateUnknowns (TEpoch  *epoch, TOptions *options);
+void initUnkinfo (TEpoch  *epoch, TUnkinfo *unkinfo, double t, TOptions *options);
+int prepareCorrelation (TEpoch *epoch,TFilterSolution *solution,enum GNSSystem *GNSSlist,int *PRNlist, TUnkinfo *unkinfo, TUnkinfo *prevUnkinfo, TOptions *options);
+void atwa_atwy_insertline (double *restrict atwa, double *restrict atwy, const double *restrict unk, const double prefit, const int nunk, const double sigma2);
+void atwa_atwy_insertLineWithCorrelation (double *atwa, double *atwy, const double *corr, const double apriorivalue, const int nunk, const double multiplier, const int iniunk);
+void designSystem (TEpoch *epoch, double *atwa, double *atwy, TUnkinfo *unkinfo, double **G, double *prefits, double *weights, int computeStanfordESA, TConstellation *constellationPrint, TOptions *options);
+void designSystemIniValues (double *restrict atwa, double *restrict atwy, const TUnkinfo *unkinfo, const TFilterSolution *solution);
+double calculatePostfits (TEpoch *epoch, double *solution, TUnkinfo *unkinfo, TConstellation *constellationPrint, TOptions *options);
+int computeSolution (TEpoch *epoch,double *stddev2postfit, TFilterSolution *solution, double *newcorrelations, double *newparameterValues, TUnkinfo *unkinfo, TStdESA *StdESA,  TConstellation *constellationPrint, TOptions *options);
 int calculateDOP (TEpoch *epoch, TFilterSolution *solution, char *errorstr, TOptions *options);
-void StanfordESAComputationRecursive (TEpoch *epoch, char *epochString, int *k, int *kmask, int numsat, int depth, double **G, double *prefits, double *weights, TUnkinfo *unkinfo, TStdESA *StdESA, TOptions  *options);
-void DGNSSSummaryDataUpdate (int UseReferenceFile, TEpoch *epoch, TFilterSolution *solution, TOptions *options, TUnkinfo *unkinfo);
-void SBASSummaryDataUpdate (int UseReferenceFile, TEpoch *epoch, TFilterSolution *solution, TSBASdatabox *SBASdatabox, TOptions *options, TUnkinfo *unkinfo);
-void SummaryDataUpdate (int UseReferenceFile, TEpoch *epoch, TFilterSolution *solution, TOptions *options, TUnkinfo *unkinfo);
+void StanfordESAComputationRecursiveSingleConst (TEpoch *epoch, char *epochString, int *restrict k, int *restrict kmask, const int numsat, const int depth, double **restrict G, const double *restrict prefits, const double *restrict weights, TUnkinfo *unkinfo, TStdESA *StdESA, TOptions  *options);
+void StanfordESAComputationRecursiveMultiConst (TEpoch *epoch, char *epochString, int *restrict k, int *restrict kmask, const int numsat, const int depth, int numInterSystemClocks, double **restrict G, const double *restrict prefits, const double *restrict weights, TUnkinfo *unkinfo, TStdESA *StdESA, TOptions  *options);
+void DGNSSSummaryDataUpdate (TEpoch *epoch, TFilterSolution *solution, TOptions *options);
+void SBASSummaryDataUpdate (TEpoch *epoch, TFilterSolution *solution, TSBASdatabox *SBASdatabox, TOptions *options);
+void SummaryDataUpdate (TEpoch *epoch, TFilterSolution *solution, TOptions *options);
 int calculateSBASAvailability (FILE *fdDiscont, FILE *fdDiscontHour, int LatPos, int LonPos, double latitude, double longitude, TEpoch *epoch, TSBASPlots *SBASplots, TOptions *options);
-void updatePRNlist (TEpoch *epoch, int *PRNlist, TFilterSolution *solution);
-int Kalman (TEpoch *epoch, TFilterSolution *solution, int *PRNlist, TUnkinfo *prevUnkinfo, TStdESA *StdESA, TOptions *options);
+void updatePRNlist (TEpoch *epoch, enum GNSSystem *GNSSlist, int *PRNlist, TFilterSolution *solution);
+int Kalman (TEpoch *epoch, TEpoch *epochDGNSS, TFilterSolution *solution, TUnkinfo *prevUnkinfo, TStdESA *StdESA,  TConstellation *constellationPrint, TOptions *options);
 
 #endif /*FILTER_H_*/

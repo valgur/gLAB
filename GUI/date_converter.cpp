@@ -1,3 +1,17 @@
+/*This file is part of gLAB's GUI.
+
+    gLAB's GUI is free software: you can redistribute it and/or modify
+    it under the terms of the Lesser GNU General Public License as published by
+    the Free Software Foundation, either version 3.
+
+    gLAB's GUI is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    Lesser GNU General Public License for more details.
+
+    You should have received a copy of the Lesser GNU General Public License
+    along with gLAB's GUI.  If not, see <http://www.gnu.org/licenses/>.
+*/
 #include "date_converter.h"
 #include "ui_date_converter.h"
 #include "math.h"
@@ -8,6 +22,24 @@ GNSS_Date_Converter::GNSS_Date_Converter(QWidget *parent) :
     uiDate(new Ui::GNSS_Date_Converter)
 {
     uiDate->setupUi(this);
+
+    // Set StyleSheet
+    #if (defined Q_OS_WIN32)
+        QFile qss(":/data/WinStyle.qss");
+        qss.open(QFile::ReadOnly);
+        this->setStyleSheet(qss.readAll());
+        qss.close();
+    #elif (defined Q_OS_MAC)
+        QFile qss(":/data/MacStyle.qss");
+        qss.open(QFile::ReadOnly);
+        this->setStyleSheet(qss.readAll());
+        qss.close();
+    #else
+        QFile qss(":/data/LinuxStyle.qss");
+        qss.open(QFile::ReadOnly);
+        this->setStyleSheet(qss.readAll());
+        qss.close();
+    #endif
 
     #ifdef Q_OS_WIN32
         uiDate->dateTimeEditDateConverterCalendar->setMinimumWidth(155);
@@ -41,7 +73,7 @@ GNSS_Date_Converter::GNSS_Date_Converter(QWidget *parent) :
     uiDate->lineEditDateConverterMJDN->setValidator(lintPositive);
     uiDate->lineEditDateConverterSoD_MJDN->setValidator(ldoublePositiveSoD);
 
-     QDate date = QDate(2000,1,1);
+     QDate date = QDate(2000, 1,1);
      QTime time = QTime(0,0,0,0);
      uiDate->dateTimeEditDateConverterCalendar->blockSignals(true);
      uiDate->dateTimeEditDateConverterCalendar->setDate(date);
@@ -56,7 +88,7 @@ GNSS_Date_Converter::~GNSS_Date_Converter()
     delete uiDate;
 }
 
-void GNSS_Date_Converter::on_pushButtonDateConverterOk_clicked()
+void GNSS_Date_Converter::on_pushButtonDateConverterClose_clicked()
 {
     DateConverterWindow=0;
     this->close();
@@ -84,7 +116,7 @@ void GNSS_Date_Converter::on_dateTimeEditDateConverterCalendar_dateTimeChanged()
 
     Date=uiDate->dateTimeEditDateConverterCalendar->date();
     Time=uiDate->dateTimeEditDateConverterCalendar->time();
-    SoD= (double)(Time.hour())*3600. + (double)(Time.minute())*60. + (double)Time.second() + ((double)Time.msec())/1000.;
+    SoD= static_cast<double>(Time.hour())*3600. + static_cast<double>(Time.minute())*60. + static_cast<double>(Time.second()) + (static_cast<double>(Time.msec()))/1000.;
 
     if (Date.year()<1980||(Date.year()==1980 && Date.dayOfYear()<6)) return;
 
@@ -134,8 +166,8 @@ void GNSS_Date_Converter::on_lineEditDateConverterYear_textEdited()
 
     if(year<1980||doy<1||(year==1980 && doy<6)) return;
 
-    sodint=(int)SoD;
-    t.MJDN=(int)this->yeardoy2MJDN (year,doy, sodint);
+    sodint=static_cast<int>(SoD);
+    t.MJDN=static_cast<int>(this->yeardoy2MJDN (year,doy, sodint));
     t.SoD=SoD;
     //Fill QDate and QTime
     this->doy2date(year, doy, &date);
@@ -208,12 +240,12 @@ void GNSS_Date_Converter::on_lineEditDateConverterGPSWeek_textEdited()
     uiDate->dateTimeEditDateConverterCalendar->blockSignals(false);
 
     //Fill DoW
-    DoW=(int)((double)(SoW)/86400.0);
+    DoW=static_cast<int>(static_cast<double>(SoW)/86400.0);
     uiDate->lineEditDateConverterDoW->setText(QString("%1").arg(DoW));
 
     //Fill Year/DoY/SoD
     uiDate->lineEditDateConverterYear->setText(QString("%1").arg(year));
-    uiDate->lineEditDateConverterDoY->setText(QString("%1").arg((int)doy));
+    uiDate->lineEditDateConverterDoY->setText(QString("%1").arg(static_cast<int>(doy)));
     uiDate->lineEditDateConverterSoD->setText(QString("%1").arg(t.SoD,0,'g',8));
 
     //Fill MJDN and SoD
@@ -238,9 +270,9 @@ void GNSS_Date_Converter::on_lineEditDateConverterDoW_textEdited()
 
     if(DoW<0||SoW<0.) return;
 
-    DoW_SoW = (int)(SoW/86400.0);
+    DoW_SoW = static_cast<int>(SoW/86400.0);
     SoD = SoW-DoW_SoW*86400;
-    SoW = (double)(DoW)*86400. + SoD;
+    SoW = static_cast<double>(DoW)*86400. + SoD;
 
     uiDate->lineEditDateConverterSoW->setText(QString("%1").arg(SoW,0,'g',9));
 
@@ -301,7 +333,7 @@ void GNSS_Date_Converter::on_lineEditDateConverterMJDN_textEdited()
 
     //Fill Year/DoY/SoD
     uiDate->lineEditDateConverterYear->setText(QString("%1").arg(year));
-    uiDate->lineEditDateConverterDoY->setText(QString("%1").arg((int)doy));
+    uiDate->lineEditDateConverterDoY->setText(QString("%1").arg(static_cast<int>(doy)));
     uiDate->lineEditDateConverterSoD->setText(QString("%1").arg(t.SoD,0,'g',8));
 
 }
@@ -313,7 +345,7 @@ void GNSS_Date_Converter::on_lineEditDateConverterSoD_MJDN_textEdited()
 
 //Does the modulo mod of a number
 double GNSS_Date_Converter::modulo (double a, double mod) {
-    return a - ((int)(a/mod))*mod;
+    return a - (static_cast<int>(a/mod))*mod;
 }
 
 ////////////////////////////////////////////////////
@@ -322,7 +354,7 @@ double GNSS_Date_Converter::modulo (double a, double mod) {
 //Convert from tm struct to QDate and QTime
 void GNSS_Date_Converter::tmstruct2datetime(struct  tm *tmstruct, QDate *date, QTime *time, double SoD) {
     int ms;
-    ms=(int)(round((SoD-(double)((int)SoD))*1000.));
+    ms=static_cast<int>(round((SoD-static_cast<double>(static_cast<int>(SoD)))*1000.));
     date->setDate(tmstruct->tm_year+1900,tmstruct->tm_mon+1, tmstruct->tm_mday);
     time->setHMS(tmstruct->tm_hour,tmstruct->tm_min,tmstruct->tm_sec,ms);
 }
@@ -350,7 +382,7 @@ int GNSS_Date_Converter::MJDN (struct tm *tm) {
         m+=12;
     }
 
-    return (int)(365.25*y) + (int)(30.6001*(m+1)) + tm->tm_mday - 679019;
+    return static_cast<int>(365.25*y) + static_cast<int>(30.6001*(m+1)) + tm->tm_mday - 679019;
 }
 
 //Convert from tm struct to TTime
@@ -375,11 +407,11 @@ void GNSS_Date_Converter::t2tm (TTime *t, struct tm *tm, double *seconds) {
     //IMPORTANT NOTE!! Read man page ctime ('man ctime') to understand how the system tm structure is defined
     tm->tm_year = year - 1900;  // The number of years since 1900.
     tm->tm_mday = day_of_month; // The day of the month, in the range 1 to 31.
-    tm->tm_yday = (int)doy -1;  // The number of days since January 1, in the range 0 to 365
+    tm->tm_yday = static_cast<int>(doy) -1;  // The number of days since January 1, in the range 0 to 365
     tm->tm_mon = month_number-1;    // The number of months since January, in the range 0 to 11.
-    tm->tm_hour = (int)(t->SoD/3600.); // The number of hours past midnight, in the range 0 to 23.
-    tm->tm_min = (int)(modulo(t->SoD,3600.)/60.); // The number of minutes after the hour, in the range 0 to 59.
-    tm->tm_sec = (int)(modulo(t->SoD,60.)); // The number of seconds after the minute, normally in the range 0 to 59, but can be up to 60 to allow for leap seconds.
+    tm->tm_hour = static_cast<int>(t->SoD/3600.); // The number of hours past midnight, in the range 0 to 23.
+    tm->tm_min = static_cast<int>(modulo(t->SoD,3600.)/60.); // The number of minutes after the hour, in the range 0 to 59.
+    tm->tm_sec = static_cast<int>(modulo(t->SoD,60.)); // The number of seconds after the minute, normally in the range 0 to 59, but can be up to 60 to allow for leap seconds.
     tm->tm_isdst = -1;  // A  flag that indicates whether daylight saving time is in effect at the time described.  The value is positive if
                 //    daylight saving time is in effect, zero if it is not, and negative if the information is not available.
     *seconds =  modulo(t->SoD,60);
@@ -395,16 +427,16 @@ void GNSS_Date_Converter::t2doy (TTime *t, int *year, double *doy) {
 
     day = t->MJDN - MJD_1980;
 
-    day_aux = modulo(day,1461.);
+    day_aux = static_cast<int>(modulo(day,1461.));
     if (day_aux>365) {
         day_aux -= 366;
         *doy = modulo (day_aux,365.) + 1;
-        iy = (int)((double)(day_aux)/365.) + 1;
+        iy = static_cast<int>(static_cast<double>(day_aux)/365.) + 1;
     } else {
-        *doy = (double)(day_aux + 1);
+        *doy = static_cast<double>(day_aux + 1);
         iy = 0;
     }
-    *year = ref + 4*(int)((double)(day)/1461.) + iy;
+    *year = ref + 4*static_cast<int>(static_cast<double>(day)/1461.) + iy;
     *doy += t->SoD/86400.;
 }
 
@@ -422,8 +454,8 @@ TTime GNSS_Date_Converter::gpsws2ttime (int GPSweek, double SoW) {
         SoW-=604800.;
         GPSweek++;
     }
-    DoW = (int)(SoW/86400.0);
-    t.MJDN = (int)(44244 + GPSweek * 7.0 + DoW);
+    DoW = static_cast<int>(SoW/86400.0);
+    t.MJDN = static_cast<int>(44244 + GPSweek * 7.0 + DoW);
     t.SoD = SoW - DoW*86400.0;
 
     return t;
@@ -433,8 +465,8 @@ TTime GNSS_Date_Converter::gpsws2ttime (int GPSweek, double SoW) {
 double GNSS_Date_Converter::yeardoy2MJDN (int year, int doy, int sod) {
     double tmp;
 
-    tmp = (int)(365.25 * (year-1)) + 428 + doy;
-    tmp = tmp + 1720981.5 + (double)(sod)/86400. - 2400000.5;
+    tmp = static_cast<int>(365.25 * (year-1)) + 428 + doy;
+    tmp = tmp + 1720981.5 + static_cast<double>(sod)/86400. - 2400000.5;
 
     return tmp;
 }
@@ -448,8 +480,8 @@ void GNSS_Date_Converter::ttime2gpsweek (TTime *t, int *GPSweek, int *DoW, doubl
     gpsday = t->MJDN - 44244;
     *DoW = abs(gpsday%7);
 
-    *GPSweek = (int)(gpsday - (gpsday%7)) / 7;
-    *SoW = (double)(*DoW) * 86400. + t->SoD;
+    *GPSweek = static_cast<int>(gpsday - (gpsday%7)) / 7;
+    *SoW = static_cast<double>(*DoW) * 86400. + t->SoD;
 }
 
 //Compute day of month from Ttime structure
@@ -476,9 +508,9 @@ void GNSS_Date_Converter::tday_of_month (TTime *t, int *day_of_month, int *month
     *month_days = 0;
     while ( *month_days == 0 ) {
         daysum += number_days_month[leapyear][*month_number];
-        if ( (int)doy <= daysum ) {
+        if ( static_cast<int>(doy) <= daysum ) {
             *month_days = number_days_month[leapyear][*month_number];
-            *day_of_month = (int)doy - prevdaysum;
+            *day_of_month = static_cast<int>(doy) - prevdaysum;
         }
         *month_number = *month_number + 1;
         prevdaysum = daysum;
@@ -511,10 +543,10 @@ void GNSS_Date_Converter::doy2date (int year, int doy, QDate *date) {
 void GNSS_Date_Converter::SoD2time (double SoD,QTime *time) {
     int hour, minute,second;
     int ms;
-    hour=(int)(SoD/3600.);
-    minute=(int)(SoD/60.)%60;
-    second=(int)(SoD)%60;
-    ms=(int)(round((SoD-(double)((int)SoD))*1000.));
+    hour=static_cast<int>(SoD/3600.);
+    minute=static_cast<int>(SoD/60.)%60;
+    second=static_cast<int>(SoD)%60;
+    ms=static_cast<int>(round((SoD-static_cast<double>(static_cast<int>(SoD)))*1000.));
 
     *time=QTime(hour,minute,second,ms);
 }
@@ -524,7 +556,7 @@ void GNSS_Date_Converter::GPSTime2DateTime(int GPSWeek, double SoW, QDate *date,
     int DoW;
     double SoD;
 
-    DoW=(int)(SoW/86400.0);
+    DoW=static_cast<int>(SoW/86400.0);
     SoD=SoW-DoW*86400;
     *date=QDate(1980,1,6); //Start of GPS time
     *date=date->addDays(qint64(GPSWeek*7+DoW));

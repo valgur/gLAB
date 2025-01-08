@@ -1,16 +1,34 @@
 CC = gcc
-CXXFLAGS += -O3 -fno-stack-protector
-#CXXFLAGS += -pedantic
-#CXXFLAGS += -Wall
+CXXFLAGS += -O3 -s -fno-stack-protector -flto -DREADNOLOCK -DRANGECASE
 CXXFLAGS += -std=gnu99
-#CXXFLAGS += -Wno-unknown-pragmas
 #CXXFLAGS += -fopenmp
 
-# gLAB installation directory:
-ppwwdd = `pwd`
 
-all: gLAB
+all: gLAB_linux
+clean:
+	$(RM) gLAB.o dataHandling.o filter.o input.o model.o preprocessing.o output.o gLAB_linux
 
-gLAB: gLAB.c dataHandling.c filter.c input.c model.c preprocessing.c output.c
-	 ${CC} ${CXXFLAGS} -o gLAB_linux gLAB.c dataHandling.c filter.c input.c model.c preprocessing.c output.c -lm
+gLAB_linux: gLAB.o dataHandling.o filter.o input.o model.o preprocessing.o output.o
+	${CC} ${CXXFLAGS} -o gLAB_linux $^ -lm
+
+gLAB.o: gLAB.c dataHandling.h
+	${CC} ${CXXFLAGS} -c -o $@ $<
+
+dataHandling.o: dataHandling.c dataHandling.h
+	${CC} ${CXXFLAGS} -c -o $@ $<
+
+filter.o: filter.c filter.h dataHandling.h
+	${CC} ${CXXFLAGS} -c -o $@ $<
+
+input.o: input.c input.h dataHandling.h
+	${CC} ${CXXFLAGS} -c -o $@ $<
+
+model.o: model.c model.h dataHandling.h
+	${CC} ${CXXFLAGS} -c -o $@ $<
+
+preprocessing.o: preprocessing.c preprocessing.h dataHandling.h
+	${CC} ${CXXFLAGS} -c -o $@ $<
+
+output.o: output.c output.h dataHandling.h
+	${CC} ${CXXFLAGS} -c -o $@ $<
 

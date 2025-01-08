@@ -17,100 +17,206 @@
 #include "glab_gui.h"
 #include "ui_glab_gui.h"
 
+//Items for Message comboBoxes
+const QStringList EmptyMessage = (QStringList() << "");
+const QStringList USERADDEDERRORMessage = (QStringList() << "" << "USERADDEDERROR" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GPSWeek" << "TimeofDay" << "GNSS" << "PRN" << "MeasurementID" << "RawMeasurement" << "ModifiedMeasurement" << "ActiveUserErrorFunctions" << "TotalUserErrorFunctions"
+                                     << "ActiveStepFunctionError" << "StepFunctionErrorValue" << "ActiveRampFunction" << "RampFunctionErrorValue" << "ActiveSinusoidalFunctionError" << "SinusoidalFunctionErrorValue" << "ActiveAWGNFunctionError" << "AWGNFunctionErrorValue");
+const QStringList INPUTMessage = (QStringList() << "" << "INPUT" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "ArcNumber" << "ArcLength" << "C1[C1C]" << "P1[C1P]" << "P2[C2P]" << "L1[L1P]" << "L2[L2P]");
+const QStringList CSMessage = (QStringList() << "" << "CS" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN");
+const QStringList SFCSMessage = (QStringList() << "" << "SFCS" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "ArcNumber" << "ArcLength" << "SFMeasurements" << "SFCodeMeas" << "SFPhaseMeas" << "DeltaCode" << "DeltaPhase" << "AbsoluteDiff" << "MeanDiff" << "SigmaDiff"
+                           << "Difference" << "Threshold" << "MaxThreshold" << "UnconsistFlag" << "SFCSFlag");
+const QStringList MWCSMessage = (QStringList() << "" << "MWCS" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "ArcNumber" << "ArcLength" << "MWMeasurements" << "MWCode1Meas" << "MWCode2Meas" << "MWPhase1Meas" << "MWPhase2Meas" << "MWValue" << "MWMean1" << "MWMean2"
+                           << "MWArcSigma" << "Difference1" << "Difference2" << "Threshold1" << "Threshold2" << "OutlierFlag" << "MWCSFlag");
+const QStringList LICSMessage = (QStringList() << "" << "LICS" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "ArcNumber" << "ArcLength" << "GFMeasurements" << "GFPhase1Meas" << "GFPhase2Meas" << "GFInitialValue" << "GFCurrentValue" << "Difference1" << "EstGFValue"
+                           << "Difference2" << "PostfitResidual" << "Threshold1" << "Threshold2" << "OutlierFlag" << "LICSFlag");
+const QStringList IGFCSMessage = (QStringList() << "" << "IGFCS" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "ArcNumber" << "ArcLength" << "IGFMeasurements" << "IGFPhase1Meas" << "IGFPhase2Meas" << "IGFPhase3Meas" << "IGFPhase4Meas" << "IGFInitialValue" << "IGFCurrentValue"
+                            << "Difference1" << "IGFPrediction" << "Difference2" << "PostfitResidual" << "Threshold1" << "Threshold2" << "OutlierFlag" << "IGFCSFlag");
+const QStringList MEASMessage = (QStringList() << "" << "MEAS" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "Block" << "SVN" << "ArcNumber" << "ArcLength" << "SatElevation" << "SatAzimuth" << "MeasNumber" << "MeasList" << "MeasValue1" << "MeasValue2" << "MeasValue3" << "MeasValue4"
+                           << "MeasValue5" << "MeasValue6" << "MeasValue7" << "MeasValue8" << "MeasValue9" << "MeasValue10" << "MeasValue11" << "MeasValue12" << "MeasValue13" << "MeasValue14" << "MeasValue15" << "MeasValue16");
+const QStringList MODELMessage = (QStringList() << "" << "MODEL" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "Block" << "SVN" << "ArcNumber" << "ArcLength" << "SatElevation" << "SatAzimuth" << "MeasurementID" << "OrbitType" << "IOD" << "GLOFrequencyNumber" << "GNSSTimeOffsets"
+                            << "MeasValue" << "SignalFlightTime" << "SatPositionX" << "SatPositionY" << "SatPositionZ" << "SatVelocityX" << "SatVelocityY" << "SatVelocityZ" << "Sat-RecRange" << "SatClockOffset" << "SatPhaseCentreProjection" << "SatPhaseCentreVariation" << "RecPhaseCentreProjection"
+                            << "RecPhaseCentreVariation" << "RecAntennaOffset" << "Relativity" << "Wind-up" << "SlantTroposphere" << "SlantIonosphere" << "GravitationalDelay" << "SolidTides" << "" << "" << "" << "InterSystemClockBias" << "P1-C1DCB(GPS)" << "TGD" << "InterSignalCorrection"
+                            << "DCBforBDS" << "DCBSum" << "SNR" << "ModeValue");
+const QStringList SATSELMessage = (QStringList() << "" << "SATSEL" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "ErrorCode" << "Status");
+const QStringList PREFITMessage = (QStringList() << "" << "PREFIT" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "Block" << "SVN" << "ArcNumber" << "ArcLength" << "SatElevation" << "SatAzimuth" << "MeasurementID" << "SmoothMeasID" << "PrefitValue" << "MeasValue" << "SmoothMeasValue"
+                             << "ModelValue" << "XPartialDerivative" << "YPartialDerivative" << "ZPartialDerivative" << "TPartialDerivative" << "WeightInverse" << "Mapping" << "MeasWavelength" << "GLOFrequencyNumber");
+const QStringList EPOCHSATMessage = (QStringList() << "" << "EPOCHSAT" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "MeasurementID" << "SmoothMeasID" << "ObservedSatNumber" << "SelectedSatNumber" << "GPSIdentifier(G)" << "SelectedGPSsNumber" << "GALIdentifier(E)" << "SelectedGALsNumber"
+                               << "GLOIdentifier(R)" << "SelectedGLOsNumber" << "GEOIdentifier(S)" << "SelectedSBASsNumber" << "BDSIdentifier(C)" << "SelectedBDSsNumber" << "QZSSIdentifier(J)" << "SelectedQZSSsNumber" << "IRNSSIdentifier(I)" << "SelectedIRNSSsNumber" << "UnselectedSatNumber"
+                               << "GPSIdentifier(G)" << "UnselectedGPSsNumber" << "GALIdentifier(E)" << "UnselectedGALsNumber" << "GLOIdentifier(R)" << "UnselectedGLOsNumber" << "GEOIdentifier(S)" << "UnselectedSBASsNumber" << "BDSIdentifier(C)" << "UnselectedBDSsNumber" << "QZSSIdentifier(J)"
+                               << "UnselectedQZSSsNumber" << "IRNSSIdentifier(I)" << "UnselectedIRNSSsNumber" << "Sat1" << "Sat2" << "Sat3" << "Sat4" << "Sat5" << "Sat6" << "Sat7" << "Sat8" << "Sat9" << "Sat10" << "Sat11" << "Sat12" << "Sat13" << "Sat14" << "Sat15" << "Sat16" << "Sat17" << "Sat18"
+                               << "Sat19" << "Sat20" << "Sat21" << "Sat22" << "Sat23" << "Sat24" << "Sat25" << "Sat26" << "Sat27" << "Sat28" << "Sat29" << "Sat30");
+const QStringList POSTFITMessage = (QStringList() << "" << "POSTFIT" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "Block" << "SVN" << "ArcNumber" << "ArcLength" << "SatElevation" << "SatAzimuth" << "MeasurementID" << "SmoothMeasID" << "PostfitValue" << "MeasValue"
+                              << "SmoothMeasValue" << "FittedMeasValue" << "Ambiguities" << "");
+const QStringList FILTERMessage = (QStringList() << "" << "FILTER" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSSReference" << "ISCBNumber" << "UnknownsNumber" << "RecPositionX" << "RecPositionY" << "RecPositionZ" << "RecClockOffset" << "GPS-ISCB" << "GAL-ISCB" << "GLO-ISCB" << "GEO-ISCB"
+                             << "BDS-ISCB" << "QZSS-ISCB" << "IRNSS-ISCB" << "TropoZTD");
+const QStringList OUTPUTMessage = (QStringList() << "" << "OUTPUT" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "NavigationMode" << "DirectionMode" << "TotalSatNumber" << "TotalGNSSNumber" << "GNSSsUsed" << "FormalErrorRecXYZ" << "RecPositionX" << "RecPositionY" << "RecPositionZ" << "DeltaRecX"
+                             << "DeltaRecY" << "DeltaRecZ" << "FormalErrorRecX" << "FormalErrorRecY" << "FormalErrorRecZ" << "RecLatitude" << "RecLongitude" << "RecHeight" << "DeltaRecN" << "DeltaRecE" << "DeltaRecU" << "FormalErrorRecN" << "FormalErrorRecE" << "FormalErrorRecU" << "DeltaRecH"
+                             << "DeltaRecV" << "DeltaRec3D" << "GNSSReference" << "RecClockOffset" << "FormalErrorRecClock" << "GDOP" << "PDOP" << "TDOP" << "HDOP" << "VDOP" << "ZTD(IncludingNominalValue)" << "ZTD(ExcludingNominalValue)" << "FormalErrorZTD");
+const QStringList SBASCORRMessage = (QStringList() << "" << "SBASCORR" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "Block" << "SVN" << "ArcNumber" << "ArcLength" << "SatElevation" << "SatAzimuth" << "SBASMode" << "GEOPRN" << "PrefitResidual" << "MeasurementID" << "SmoothMeasID"
+                               << "GeomatricRange" << "RelativityCorrection" << "SatClockOffset" << "TGDCorrection" << "IPPLatitude" << "IPPLongitude" << "IonoCorrection" << "TropoCorrection" << "PRC" << "RRC" << "FastCorrDegFactor" << "PRCTime-out" << "RRCTime-out" << "PRCTimeReference"
+                               << "UDRETimeReference" << "FastCorrDegTimeRef" << "SatPositionX" << "SatPositionY" << "SatPositionZ" << "LTC-SatX" << "LTC-SatY" << "LTC-SatZ" << "LTC-SatClock" << "IODPFastCorrection" << "IODF" << "FastCorrSatSlot" << "IODPLongTermCorr" << "LongTermCorrSatSlot"
+                               << "IODE" << "IODS" << "IODPClk-ephCovMatrix" << "Clk-ephCovMatrixSlot" << "IonoModelFlag");
+const QStringList SBASVARMessage = (QStringList() << "" << "SBASVAR" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "Block" << "SVN" << "ArcNumber" << "ArcLength" << "SatElevation" << "SatAzimuth" << "SBASMode" << "GEOPRN" << "SigmaTotal" << "SigmaFast&LongTerm" << "SigmaUDRE"
+                              << "DeltaUDRE" << "DeltaUDREDataSource" << "DegradationFastCorr" << "DegradationRRC" << "DegradationLongTerm&Fast" << "DegradationEnRouteNPA" << "RSSUFlag" << "UIVESigma" << "SigmaTropo" << "SigmaAirborne" << "SigmaNoise" << "SigmaMultiPath" << "SigmaDivergence");
+const QStringList SBASIONOMessage = (QStringList() << "" << "SBASIONO" << "Year" << "DoY" << "SecondsofDoy" << "TimeofDay" << "GNSS" << "PRN" << "SatElevation" << "SatAzimuth" << "SBASMode" << "GEOPRN" << "IPPLatitude" << "IPPLongitude" << "InterpolationMode" << "Vertex1IODI" << "Vertex1BandNumber"
+                               << "Vertex1IGP" << "Vertex1IGPReceptionTime" << "Vertex1IGPLatitude" << "Vertex1IGPLongitude" << "Vertex1Delay" << "Vertex1Variance" << "Vertex1Degradation" << "Vertex1InterpolatedDelay" << "Vertex1InterpolatedVariance" << "Vertex1Weight" << "Vertex2IODI"
+                               << "Vertex2BandNumber" << "Vertex2IGP" << "Vertex2IGPReceptionTime" << "Vertex2IGPLatitude" << "Vertex2IGPLongitude" << "Vertex2Delay" << "Vertex2Variance" << "Vertex2Degradation" << "Vertex2InterpolatedDelay" << "Vertex2InterpolatedVariance" << "Vertex2Weight"
+                               << "Vertex3IODI" << "Vertex3BandNumber" << "Vertex3IGP" << "Vertex3IGPReceptionTime" << "Vertex3IGPLatitude" << "Vertex3IGPLongitude" << "Vertex3Delay" << "Vertex3Variance" << "Vertex3Degradation" << "Vertex3InterpolatedDelay" << "Vertex3InterpolatedVariance"
+                               << "Vertex3Weight" << "Vertex4IODI" << "Vertex4BandNumber" << "Vertex4IGP" << "Vertex4IGPReceptionTime" << "Vertex4IGPLatitude" << "Vertex4IGPLongitude" << "Vertex4Delay" << "Vertex4Variance" << "Vertex4Degradation" << "Vertex4InterpolatedDelay"
+                               << "Vertex4InterpolatedVariance" << "Vertex4Weight" << "MappingFunction" << "SlantDelay" << "SlantSigma");
+const QStringList SBASUNSELMessage = (QStringList() << "" << "SBASUNSEL" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "SBASMode" << "GEOPRN" << "ErrorCode" << "ErrorMessage");
+const QStringList SBASDFMCCORRMessage = (QStringList() << "" << "SBASDFMCCORR" << "Year" << "DoY" << "SecondofDay" << "TimeofDay" << "GNSS" << "PRN" << "Block" << "SVN" << "ArcNumber" << "ArcLength" << "SatElevation" << "SatAzimuth" << "SBASMode" << "GEOPRN" << "MeasurementID" << "SmoothMeasID"
+                                   << "PrefitValue" << "MeasValue" << "SmoothMeasValue" << "ModelledRange" << "Relativity" << "ClockOffset" << "TGD" << "Troposphere" << "SatPositionX" << "SatPositionY" << "SatPositionZ" << "SatCorrectionX" << "SatCorrectionY" << "SatCorrectionZ"
+                                   << "SatCorrectionClock" << "DFREI" << "DFREITime" << "MT32Time" << "MT39/40Time" << "MT32Validity" << "MT39/40Validity" << "IODM" << "IODN" << "SlotNumber");
+const QStringList SBASDFMCCVARMessage = (QStringList() << "" << "SBASDFMCCVAR" << "Year" << "DoY" << "SecondofDay" << "TimeofDay" << "GNSS" << "PRN" << "Block" << "SVN" << "ArcNumber" << "ArcLength" << "SatElevation" << "SatAzimuth" << "SBASMode" << "GEOPRN" << "SigmaTotal" << "DFC" << "DFREI"
+                                   << "DFREIFlag" << "DFRE" << "DeltaDFRE" << "DegradationCorrection" << "DegradationEnRouteNPA" << "SigmaIono" << "SigmaTropo" << "SigmaTotal" << "SigmaNoise" << "SigmaMultipath" << "SigmaDivergence" << "Ccorr" << "Icorr" << "Rcorr" << "DeltaRcorrFactor" << "RcorrSV"
+                                   << "Cer" << "Ccovariance");
+const QStringList SBASDFMCUNSELMessage = (QStringList() << "" << "SBASDFMCUNSEL" << "Year" << "DoY" << "SecondofDay" << "TimeofDay" << "GNSS" << "PRN" << "SBASMode" << "GEOPRN" << "ErrorCode" << "ErrorMessage");
+const QStringList SBASOUTMessage = (QStringList() << "" << "SBASOUT" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GPSWeek" << "TimeofWeek" << "ReceiverID" << "ModeID" << "SBASMode" << "GEOPRN" << "DeltaN" << "DeltaE" << "DeltaU" << "HPE" << "HPL" << "HAL" << "VPE" << "VPL" << "VAL" << "3DPositioningError"
+                              << "RecClockOffset" << "SatellitesInView" << "SatellitesUsed" << "Sat1" << "Sat2" << "Sat3" << "Sat4" << "Sat5" << "Sat6" << "Sat7" << "Sat8" << "Sat9" << "Sat10" << "Sat11" << "Sat12" << "Sat13" << "Sat14" << "Sat15" << "Sat16" << "Sat17" << "Sat18" << "Sat19" << "Sat20");
+const QStringList DGNSSMessage = (QStringList() << "" << "DGNSS" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "PRC" << "RRC" << "RRCTime" << "DeltaPRC" << "DeltaRRC" << "DeltaRRCTime" << "SigmaTotal" << "SigmaUDRE" << "SigmaDegradation" << "SigmaAir" << "SigmaMultipath" << "SigmaInflation");
+const QStringList SATSTATMessage = (QStringList() << "" << "SATSTAT" << "GNSS" << "PRN" << "TotalEpochs" << "SISREMean" << "SISRERMS" << "SISREStdDev" << "SISREOrbitMean" << "SISREOrbitRMS" << "SISREOrbitStdDev" << "3DOrbitMean" << "3DOrbitRMS" << "3DOrbitStdDev" << "ClockMean" << "ClockRMS" << "ClockStdDev"
+                              << "DCBMean" << "DCBRMS" << "DCBStdDev" << "RadialMean" << "RadialRMS" << "RadialStdDev" << "AlongTrackMean" << "AlongTrackRMS" << "AlongTrackStdDev" << "CrossTrackMean" << "CrossTrackRMS" << "CrossTrackStdDev");
+const QStringList SATSTATTOTMessage = (QStringList() << "" << "SATSTATTOT" << "SamplesNumber" << "SISREMean" << "SISRERMS" << "SISREStdDev" << "SISREOrbitMean" << "SISREOrbitRMS" << "SISREOrbitStdDev" << "3DOrbitMean" << "3DOrbitRMS" << "3DOrbitStdDev" << "ClockMean" << "ClockRMS" << "ClockStdDev" << "DCBMean"
+                                 << "DCBRMS" << "DCBStdDev" << "RadialMean" << "RadialRMS" << "RadialStdDev" << "AlongTrackMean" << "AlongTrackRMS" << "AlongTrackStdDev" << "CrossTrackMean" << "CrossTrackRMS" << "CrossTrackStdDev");
+const QStringList SATDIFFMessage = (QStringList() << "" << "SATDIFF" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "SISREDifference" << "SISREOrbitDifference" << "3DOrbitDifference" << "ClockDifference" << "DCBDifference" << "RadialDifference" << "AlongTrackDifference"
+                              << "CrossTrackDifference" << "XDifference" << "YDifference" << "ZDifference" << "OrbitType" << "IODEFirstSource" << "IODESecondSource" << "HealthFirstSource" << "HealthSecondSource");
+const QStringList SATPVTMessage = (QStringList() << "" << "SATPVT" << "Year" << "DoY" << "SecondsofDay" << "TimeofDay" << "GNSS" << "PRN" << "Block" << "SVN" << "SatElevation" << "SatAzimuth" << "SatPositionX" << "SatPositionY" << "SatPositionZ" << "SatVelocityX" << "SatVelocityY" << "SatVelocityZ" << "SatLatitude" << "SatLongitude" << "SatHeight" << "SatClockOffset" << "OrbitType" << "IODE"
+                               << "HealthStatus");
+const QStringList AllMessages[]={EmptyMessage,USERADDEDERRORMessage,INPUTMessage,CSMessage,SFCSMessage,MWCSMessage,LICSMessage,IGFCSMessage,MEASMessage,MODELMessage,SATSELMessage,PREFITMessage,
+                          EPOCHSATMessage,POSTFITMessage,FILTERMessage,OUTPUTMessage,SBASCORRMessage,SBASVARMessage,SBASIONOMessage,SBASUNSELMessage,SBASDFMCCORRMessage,SBASDFMCCVARMessage,
+                          SBASDFMCUNSELMessage,SBASOUTMessage,DGNSSMessage,SATSTATMessage,SATSTATTOTMessage,SATDIFFMessage,SATPVTMessage};
+
 //Set tooltips for each item in the Conditions combo box for plot 1
 void gLAB_GUI::set_conditionsComboBoxPlot1_OutputMessagesTooltips() {
     ui->comboBoxPlot1Condition->setItemData(0,ui->comboBoxPlot1Condition->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(1,ui->checkBoxPrintInput->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(2,ui->checkBoxPrintCS->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(3,ui->checkBoxPrintModel->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(4,ui->checkBoxPrintEpochsat->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(5,ui->checkBoxPrintPrefit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(6,ui->checkBoxPrintPostfit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(7,ui->checkBoxPrintFilter->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(8,ui->checkBoxPrintOutput->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(9,ui->checkBoxPrintSatdiff->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(10,ui->checkBoxPrintSatstatCompare->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(11,ui->checkBoxPrintSatstattotCompare->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(12,ui->checkBoxPrintSatpvtShowOrbit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(13,ui->checkBoxPrintSbascor->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(14,ui->checkBoxPrintSbasvar->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(15,ui->checkBoxPrintSbasiono->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(16,ui->checkBoxPrintSbasunsel->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(17,ui->checkBoxPrintSbasout->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(18,ui->checkBoxPrintDgnss->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot1Condition->setItemData(19,ui->checkBoxPrintUsererror->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(1,ui->checkBoxPrintUsererror->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(2,ui->checkBoxPrintInput->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(3,ui->checkBoxPrintCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(4,ui->checkBoxPrintSFCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(5,ui->checkBoxPrintMWCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(6,ui->checkBoxPrintLICS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(7,ui->checkBoxPrintIGFCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(8,ui->checkBoxPrintMeas->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(9,ui->checkBoxPrintModel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(10,ui->checkBoxPrintSatsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(11,ui->checkBoxPrintPrefit->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(12,ui->checkBoxPrintEpochsat->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(13,ui->checkBoxPrintPostfit->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(14,ui->checkBoxPrintFilter->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(15,ui->checkBoxPrintOutput->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(16,ui->checkBoxPrintSbascor->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(17,ui->checkBoxPrintSbasvar->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(18,ui->checkBoxPrintSbasiono->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(19,ui->checkBoxPrintSbasunsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(20,ui->checkBoxPrintSbasDFMCCor->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(21,ui->checkBoxPrintSbasDFMCVar->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(22,ui->checkBoxPrintSbasDFMCUnsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(23,ui->checkBoxPrintSbasout->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(24,ui->checkBoxPrintDgnss->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(25,ui->checkBoxPrintSatstat->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(26,ui->checkBoxPrintSatstattot->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(27,ui->checkBoxPrintSatdiff->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot1Condition->setItemData(28,ui->checkBoxPrintSatpvt->toolTip(),Qt::ToolTipRole);
 }
 
 //Set tooltips for each item in the Conditions combo box for plot 2
 void gLAB_GUI::set_conditionsComboBoxPlot2_OutputMessagesTooltips() {
     ui->comboBoxPlot2Condition->setItemData(0,ui->comboBoxPlot2Condition->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(1,ui->checkBoxPrintInput->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(2,ui->checkBoxPrintCS->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(3,ui->checkBoxPrintModel->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(4,ui->checkBoxPrintEpochsat->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(5,ui->checkBoxPrintPrefit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(6,ui->checkBoxPrintPostfit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(7,ui->checkBoxPrintFilter->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(8,ui->checkBoxPrintOutput->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(9,ui->checkBoxPrintSatdiff->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(10,ui->checkBoxPrintSatstatCompare->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(11,ui->checkBoxPrintSatstattotCompare->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(12,ui->checkBoxPrintSatpvtShowOrbit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(13,ui->checkBoxPrintSbascor->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(14,ui->checkBoxPrintSbasvar->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(15,ui->checkBoxPrintSbasiono->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(16,ui->checkBoxPrintSbasunsel->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(17,ui->checkBoxPrintSbasout->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(18,ui->checkBoxPrintDgnss->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot2Condition->setItemData(19,ui->checkBoxPrintUsererror->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(1,ui->checkBoxPrintUsererror->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(2,ui->checkBoxPrintInput->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(3,ui->checkBoxPrintCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(4,ui->checkBoxPrintSFCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(5,ui->checkBoxPrintMWCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(6,ui->checkBoxPrintLICS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(7,ui->checkBoxPrintIGFCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(8,ui->checkBoxPrintMeas->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(9,ui->checkBoxPrintModel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(10,ui->checkBoxPrintSatsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(11,ui->checkBoxPrintPrefit->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(12,ui->checkBoxPrintEpochsat->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(13,ui->checkBoxPrintPostfit->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(14,ui->checkBoxPrintFilter->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(15,ui->checkBoxPrintOutput->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(16,ui->checkBoxPrintSbascor->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(17,ui->checkBoxPrintSbasvar->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(18,ui->checkBoxPrintSbasiono->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(19,ui->checkBoxPrintSbasunsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(20,ui->checkBoxPrintSbasDFMCCor->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(21,ui->checkBoxPrintSbasDFMCVar->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(22,ui->checkBoxPrintSbasDFMCUnsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(23,ui->checkBoxPrintSbasout->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(24,ui->checkBoxPrintDgnss->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(25,ui->checkBoxPrintSatstat->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(26,ui->checkBoxPrintSatstattot->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(27,ui->checkBoxPrintSatdiff->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot2Condition->setItemData(28,ui->checkBoxPrintSatpvt->toolTip(),Qt::ToolTipRole);
 }
 
 //Set tooltips for each item in the Conditions combo box for plot 3
 void gLAB_GUI::set_conditionsComboBoxPlot3_OutputMessagesTooltips() {
     ui->comboBoxPlot3Condition->setItemData(0,ui->comboBoxPlot3Condition->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(1,ui->checkBoxPrintInput->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(2,ui->checkBoxPrintCS->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(3,ui->checkBoxPrintModel->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(4,ui->checkBoxPrintEpochsat->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(5,ui->checkBoxPrintPrefit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(6,ui->checkBoxPrintPostfit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(7,ui->checkBoxPrintFilter->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(8,ui->checkBoxPrintOutput->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(9,ui->checkBoxPrintSatdiff->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(10,ui->checkBoxPrintSatstatCompare->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(11,ui->checkBoxPrintSatstattotCompare->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(12,ui->checkBoxPrintSatpvtShowOrbit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(13,ui->checkBoxPrintSbascor->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(14,ui->checkBoxPrintSbasvar->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(15,ui->checkBoxPrintSbasiono->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(16,ui->checkBoxPrintSbasunsel->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(17,ui->checkBoxPrintSbasout->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(18,ui->checkBoxPrintDgnss->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot3Condition->setItemData(19,ui->checkBoxPrintUsererror->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(1,ui->checkBoxPrintUsererror->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(2,ui->checkBoxPrintInput->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(3,ui->checkBoxPrintCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(4,ui->checkBoxPrintSFCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(5,ui->checkBoxPrintMWCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(6,ui->checkBoxPrintLICS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(7,ui->checkBoxPrintIGFCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(8,ui->checkBoxPrintMeas->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(9,ui->checkBoxPrintModel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(10,ui->checkBoxPrintSatsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(11,ui->checkBoxPrintPrefit->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(12,ui->checkBoxPrintEpochsat->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(13,ui->checkBoxPrintPostfit->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(14,ui->checkBoxPrintFilter->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(15,ui->checkBoxPrintOutput->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(16,ui->checkBoxPrintSbascor->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(17,ui->checkBoxPrintSbasvar->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(18,ui->checkBoxPrintSbasiono->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(19,ui->checkBoxPrintSbasunsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(20,ui->checkBoxPrintSbasDFMCCor->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(21,ui->checkBoxPrintSbasDFMCVar->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(22,ui->checkBoxPrintSbasDFMCUnsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(23,ui->checkBoxPrintSbasout->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(24,ui->checkBoxPrintDgnss->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(25,ui->checkBoxPrintSatstat->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(26,ui->checkBoxPrintSatstattot->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(27,ui->checkBoxPrintSatdiff->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot3Condition->setItemData(28,ui->checkBoxPrintSatpvt->toolTip(),Qt::ToolTipRole);
 }
 
 //Set tooltips for each item in the Conditions combo box for plot 4
 void gLAB_GUI::set_conditionsComboBoxPlot4_OutputMessagesTooltips() {
     ui->comboBoxPlot4Condition->setItemData(0,ui->comboBoxPlot4Condition->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(1,ui->checkBoxPrintInput->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(2,ui->checkBoxPrintCS->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(3,ui->checkBoxPrintModel->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(4,ui->checkBoxPrintEpochsat->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(5,ui->checkBoxPrintPrefit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(6,ui->checkBoxPrintPostfit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(7,ui->checkBoxPrintFilter->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(8,ui->checkBoxPrintOutput->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(9,ui->checkBoxPrintSatdiff->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(10,ui->checkBoxPrintSatstatCompare->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(11,ui->checkBoxPrintSatstattotCompare->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(12,ui->checkBoxPrintSatpvtShowOrbit->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(13,ui->checkBoxPrintSbascor->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(14,ui->checkBoxPrintSbasvar->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(15,ui->checkBoxPrintSbasiono->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(16,ui->checkBoxPrintSbasunsel->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(17,ui->checkBoxPrintSbasout->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(18,ui->checkBoxPrintDgnss->toolTip(),Qt::ToolTipRole);
-    ui->comboBoxPlot4Condition->setItemData(19,ui->checkBoxPrintUsererror->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(1,ui->checkBoxPrintUsererror->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(2,ui->checkBoxPrintInput->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(3,ui->checkBoxPrintCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(4,ui->checkBoxPrintSFCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(5,ui->checkBoxPrintMWCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(6,ui->checkBoxPrintLICS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(7,ui->checkBoxPrintIGFCS->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(8,ui->checkBoxPrintMeas->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(9,ui->checkBoxPrintModel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(10,ui->checkBoxPrintSatsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(11,ui->checkBoxPrintPrefit->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(12,ui->checkBoxPrintEpochsat->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(13,ui->checkBoxPrintPostfit->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(14,ui->checkBoxPrintFilter->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(15,ui->checkBoxPrintOutput->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(16,ui->checkBoxPrintSbascor->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(17,ui->checkBoxPrintSbasvar->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(18,ui->checkBoxPrintSbasiono->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(19,ui->checkBoxPrintSbasunsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(20,ui->checkBoxPrintSbasDFMCCor->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(21,ui->checkBoxPrintSbasDFMCVar->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(22,ui->checkBoxPrintSbasDFMCUnsel->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(23,ui->checkBoxPrintSbasout->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(24,ui->checkBoxPrintDgnss->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(25,ui->checkBoxPrintSatstat->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(26,ui->checkBoxPrintSatstattot->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(27,ui->checkBoxPrintSatdiff->toolTip(),Qt::ToolTipRole);
+    ui->comboBoxPlot4Condition->setItemData(28,ui->checkBoxPrintSatpvt->toolTip(),Qt::ToolTipRole);
 }
 
 // Function to Clear the Plots configurations
@@ -148,7 +254,6 @@ void gLAB_GUI::on_pushButtonPlotClear_clicked() {
     ui->lineEditPlot1Condition->setDisabled(false);
     ui->comboBoxPlot1TypeLine->setDisabled(false);
     ui->comboBoxPlot1ColorLine->setDisabled(false);
-    ui->comboBoxPlot1Xsbasout->setDisabled(false);
     ui->lineEditPlot1Xcolumn->setDisabled(false);
     ui->lineEditPlot1Ycolumn->setDisabled(false);
     ui->lineEditPlot1LegendLabel->setDisabled(false);
@@ -168,7 +273,7 @@ void gLAB_GUI::on_pushButtonPlotClear_clicked() {
     ui->comboBoxPlot1TypeLine->setCurrentIndex(0);
     ui->comboBoxPlot1ConditionOutput->setCurrentIndex(0);
     this->on_comboBoxPlot1Condition_currentIndexChanged(0);
-    ui->comboBoxPlot1ColorLine->setCurrentIndex(0);   
+    ui->comboBoxPlot1ColorLine->setCurrentIndex(0);
     ui->lineEditPlot1Xcolumn->setText("");
     ui->lineEditPlot1Ycolumn->setText("");
     ui->lineEditPlot1LegendLabel->setText("");
@@ -244,9 +349,9 @@ void gLAB_GUI::on_radioButtonPlotNr4_clicked() {
 // and write the proper condition in the line edit
 void gLAB_GUI::on_comboBoxPlot1Condition_currentIndexChanged(int index) {
     ui->comboBoxPlot1Condition->setCurrentIndex(index);
-    ui->stackedWidgetPlot1Xcolumn->setCurrentIndex(index);
-    ui->stackedWidgetPlot1Ycolumn->setCurrentIndex(index);
-    ui->comboBoxPlot1ConditionPrn->setCurrentIndex(0);
+    this->change_comboBoxPlot1Xcolumn_message(index);
+    this->change_comboBoxPlot1Ycolumn_message(index);
+    this->on_comboBoxPlot1ConditionGNSS_currentIndexChanged(0);
     ui->lineEditPlot1Xcolumn->setText("1"); // To make the change to "empty" effective
     ui->lineEditPlot1Ycolumn->setText("1"); // To make the change to "empty" effective
     ui->lineEditPlot1Xcolumn->setText("");
@@ -261,102 +366,147 @@ void gLAB_GUI::on_comboBoxPlot1Condition_currentIndexChanged(int index) {
     switch ( index ) {
         case 0 : { // Nothing
             ui->stackedWidgetPlot1Condition->setCurrentIndex(0);
-            ui->lineEditPlot1Condition->setText("");                        
+            ui->lineEditPlot1Condition->setText("");
             break;
         }
-        case 1 : { // Input
+        case 1 : { // USERADDEDERROR
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"USERADDEDERROR\")");
+            break;
+        }
+        case 2 : { // Input
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"INPUT\")");
             break;
         }
-        case 2 : { // Cycle slips
+        case 3 : { // Cycle slips
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"CS\")");
             break;
         }
-        case 3 : { // Model
+        case 4 : { // SF Cycle slips
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"SFCSDATA\")");
+            break;
+        }
+        case 5 : { // MW Cycle slips
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"MWCSDATA\")");
+            break;
+        }
+        case 6 : { // LI Cycle slips
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"LICSDATA\")");
+            break;
+        }
+        case 7 : { // IGF Cycle slips
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"IGFCSDATA\")");
+            break;
+        }
+        case 8 : { // Meas
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"MEAS\")");
+            break;
+        }
+        case 9 : { // Model
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"MODEL\")");
             break;
         }
-        case 4 : { // Epochsat
-            ui->stackedWidgetPlot1Condition->setCurrentIndex(0);
-            ui->lineEditPlot1Condition->setText("($1==\"EPOCHSAT\")");
+        case 10 : { // Satsel
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"SATSEL\")");
             break;
         }
-        case 5 : { // Prefit
+        case 11 : { // Prefit
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"PREFIT\")");
             break;
         }
-        case 6 : { // Postfit
+        case 12: { // Epochsat
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(0);
+            ui->lineEditPlot1Condition->setText("($1==\"EPOCHSAT\")");
+            break;
+        }
+        case 13 : { // Postfit
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"POSTFIT\")");
             break;
         }
-        case 7 : { // Filter
+        case 14 : { // Filter
             ui->stackedWidgetPlot1Condition->setCurrentIndex(0);
             ui->lineEditPlot1Condition->setText("($1==\"FILTER\")");
             break;
         }
-        case 8 : { // Output
+        case 15 : { // Output
             ui->stackedWidgetPlot1Condition->setCurrentIndex(2);
             ui->lineEditPlot1Condition->setText("($1==\"OUTPUT\")");
             break;
         }
-        case 9 : { // Satdiff
-            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
-            ui->lineEditPlot1Condition->setText("($1==\"SATDIFF\")");
-            break;
-        }
-        case 10 : { // Satstat
-            ui->stackedWidgetPlot1Condition->setCurrentIndex(0);
-            ui->lineEditPlot1Condition->setText("($1==\"SATSTAT\")");
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->stackedWidgetPlot1Condition->setCurrentIndex(0);
-            ui->lineEditPlot1Condition->setText("($1==\"SATSTATTOT\")");
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
-            ui->lineEditPlot1Condition->setText("($1==\"SATPVT\")");
-            break;
-        }
-        case 13 : { // SBASCORR
+        case 16 : { // SBASCORR
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"SBASCORR\")");
             break;
         }
-        case 14 : { // SBASVAR
+        case 17 : { // SBASVAR
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"SBASVAR\")");
             break;
         }
-        case 15 : { // SBASIONO
+        case 18 : { // SBASIONO
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"SBASIONO\")");
             break;
         }
-        case 16 : { // SBASUNSEL
+        case 19 : { // SBASUNSEL
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"SBASUNSEL\")");
             break;
         }
-        case 17 : { // SBASOUT
+        case 20 : { // SBASDFMCCORR
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"SBASDFMCCORR\")");
+            break;
+        }
+        case 21 : { // SBASDFMCVAR
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"SBASDFMCVAR\")");
+            break;
+        }
+        case 22 : { // SBASDFMCUNSEL
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"SBASDFMCUNSEL\")");
+            break;
+        }
+        case 23 : { // SBASOUT
             ui->stackedWidgetPlot1Condition->setCurrentIndex(2);
             ui->lineEditPlot1Condition->setText("($1==\"SBASOUT\")");
             break;
         }
-        case 18 : { // DGNSS
+        case 24 : { // DGNSS
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
             ui->lineEditPlot1Condition->setText("($1==\"DGNSS\")");
             break;
         }
-        case 19 : { // USERADDEDERROR
+        case 25 : { // Satstat
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(0);
+            ui->lineEditPlot1Condition->setText("($1==\"SATSTAT\")");
+            break;
+        }
+        case 26 : { // Satstattot
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(0);
+            ui->lineEditPlot1Condition->setText("($1==\"SATSTATTOT\")");
+            break;
+        }
+        case 27 : { // Satdiff
             ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
-            ui->lineEditPlot1Condition->setText("($1==\"USERADDEDERROR\")");
+            ui->lineEditPlot1Condition->setText("($1==\"SATDIFF\")");
+            break;
+        }
+        case 28 : { // Satpvt
+            ui->stackedWidgetPlot1Condition->setCurrentIndex(1);
+            ui->lineEditPlot1Condition->setText("($1==\"SATPVT\")");
             break;
         }
     }
@@ -364,7 +514,31 @@ void gLAB_GUI::on_comboBoxPlot1Condition_currentIndexChanged(int index) {
 
 // Function to set the correct stacked window in the condition of the Plot Nr 1
 // and write the proper condition in the line edit
-void gLAB_GUI::on_comboBoxPlot1ConditionPrn_currentIndexChanged(int index) {
+void gLAB_GUI::on_comboBoxPlot1ConditionGNSS_currentIndexChanged(int index){
+    ui->comboBoxPlot1ConditionGNSS->setCurrentIndex(index);
+    if (index==0){
+        ui->stackedWidgetPlot1ConditionGNSS->setCurrentIndex(0);
+        this->on_comboBoxPlot1ConditionGPS_currentIndexChanged(0);
+        ui->stackedWidgetPlot1ConditionGNSS->setEnabled(false);
+        // Delete previous second condition (from ampersand to the end)
+        QString text = ui->lineEditPlot1Condition->text();
+        int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+        if ( end != -1 ) text = text.mid(0, end-1);
+        ui->lineEditPlot1Condition->setText(text);
+    } else if ( index>0 && index<=MAX_GNSS ) {
+        ui->stackedWidgetPlot1ConditionGNSS->setEnabled(true);
+        ui->stackedWidgetPlot1ConditionGNSS->setCurrentIndex(index-1);
+        if (index==1) this->on_comboBoxPlot1ConditionGPS_currentIndexChanged(0);
+        else if (index==2) this->on_comboBoxPlot1ConditionGalileo_currentIndexChanged(0);
+        else if (index==3) this->on_comboBoxPlot1ConditionGLONASS_currentIndexChanged(0);
+        else if (index==4) this->on_comboBoxPlot1ConditionBDS_currentIndexChanged(0);
+        else if (index==5) this->on_comboBoxPlot1ConditionGEO_currentIndexChanged(0);
+        else if (index==6) this->on_comboBoxPlot1ConditionQZSS_currentIndexChanged(0);
+        else if (index==7) this->on_comboBoxPlot1ConditionIRNSS_currentIndexChanged(0);
+    }
+}
+void gLAB_GUI::on_comboBoxPlot1ConditionGPS_currentIndexChanged(int index) {
+    ui->comboBoxPlot1ConditionGPS->setCurrentIndex(index);
     // Get the condition text of the line edit
     QString text = ui->lineEditPlot1Condition->text();
     // Get the ampersand position in the string
@@ -373,7 +547,119 @@ void gLAB_GUI::on_comboBoxPlot1ConditionPrn_currentIndexChanged(int index) {
     if ( end != -1 ) text = text.mid(0, end-1);
     // Write the new second condition
     if ( index != 0 ) {
-        text = (text + " & ($6==%1)").arg(index);
+        if (ui->comboBoxPlot1Condition->currentIndex()!=19) text = (text + " & ($6==\"GPS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GPS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=19) text = (text + " & ($6==\"GPS\")");
+        else text = (text + " & (&8==\"GPS\")");
+    }
+    ui->lineEditPlot1Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot1ConditionGalileo_currentIndexChanged(int index){
+    ui->comboBoxPlot1ConditionGalileo->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot1Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"GAL\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GAL\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"GAL\")");
+        else text = (text + " & (&8==\"GAL\")");
+    }
+    ui->lineEditPlot1Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot1ConditionGLONASS_currentIndexChanged(int index){
+    ui->comboBoxPlot1ConditionGLONASS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot1Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"GLO\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GLO\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"GLO\")");
+        else text = (text + " & (&8==\"GLO\")");
+    }
+    ui->lineEditPlot1Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot1ConditionGEO_currentIndexChanged(int index){
+    ui->comboBoxPlot1ConditionGEO->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot1Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"GEO\") & ($7==%1)").arg(index+119);
+        else text = (text + " & (&8==\"GEO\") & ($9==%1)").arg(index+119);
+    } else {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"GEO\")");
+        else text = (text + " & (&8==\"GEO\")");
+    }
+    ui->lineEditPlot1Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot1ConditionBDS_currentIndexChanged(int index){
+    ui->comboBoxPlot1ConditionBDS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot1Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"BDS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"BDS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"BDS\")");
+        else text = (text + " & (&8==\"BDS\")");
+    }
+    ui->lineEditPlot1Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot1ConditionQZSS_currentIndexChanged(int index){
+    ui->comboBoxPlot1ConditionQZSS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot1Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"QZS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"QZS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"QZS\")");
+        else text = (text + " & (&8==\"QZS\")");
+    }
+    ui->lineEditPlot1Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot1ConditionIRNSS_currentIndexChanged(int index){
+    ui->comboBoxPlot1ConditionIRNSS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot1Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"IRN\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"IRN\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot1Condition->currentIndex()!=1) text = (text + " & ($6==\"IRN\")");
+        else text = (text + " & (&8==\"IRN\")");
     }
     ui->lineEditPlot1Condition->setText(text);
 }
@@ -389,7 +675,7 @@ void gLAB_GUI::on_comboBoxPlot1ConditionOutput_currentIndexChanged(int index) {
     if ( end != -1 ) text = text.mid(0, end-1);
     // Write the new second condition
     if ( index != 0 ) {
-        text = (text + " & ($33==%1)").arg(index-1);
+        text = (text + " & ($6==%1)").arg(index-1);
     }
     ui->lineEditPlot1Condition->setText(text);
 }
@@ -428,8 +714,6 @@ void gLAB_GUI::on_lineEditPlot1SourceFile_textChanged() {
     }
 }
 
-
-
 // Function to set the correct value of the combo box X column from line edit
 void gLAB_GUI::on_lineEditPlot1Xcolumn_textChanged() {
     int index;
@@ -438,164 +722,20 @@ void gLAB_GUI::on_lineEditPlot1Xcolumn_textChanged() {
     } else {
         index = ui->lineEditPlot1Xcolumn->text().toInt();
     }
-    switch ( ui->stackedWidgetPlot1Xcolumn->currentIndex() ) {
-        case 1 : { // Input
-            ui->comboBoxPlot1Xinput->setCurrentIndex(index);
-            break;
-        }
-        case 2 : { // Cycle slips
-            ui->comboBoxPlot1Xcs->setCurrentIndex(index);
-            break;
-        }
-        case 3 : { // Model
-            ui->comboBoxPlot1Xmodel->setCurrentIndex(index);
-            break;
-        }
-        case 4 : { // Epochsat
-            ui->comboBoxPlot1Xepochsat->setCurrentIndex(index);
-            break;
-        }
-        case 5 : { // Prefit
-            ui->comboBoxPlot1Xprefit->setCurrentIndex(index);
-            break;
-        }
-        case 6 : { // Postfit
-            ui->comboBoxPlot1Xpostfit->setCurrentIndex(index);
-            break;
-        }
-        case 7 : { // Filter
-            ui->comboBoxPlot1Xfilter->setCurrentIndex(index);
-            break;
-        }
-        case 8 : { // Output
-            ui->comboBoxPlot1Xoutput->setCurrentIndex(index);
-            break;
-        }
-        case 9 : { // Satdiff
-            ui->comboBoxPlot1Xsatdiff->setCurrentIndex(index);
-            break;
-        }
-        case 10 : { // Satstat
-            ui->comboBoxPlot1Xsatstat->setCurrentIndex(index);
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->comboBoxPlot1Xsatstattot->setCurrentIndex(index);
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->comboBoxPlot1Xsatpvt->setCurrentIndex(index);
-            break;
-        }
-        case 13 : { // SBASCORR
-            ui->comboBoxPlot1Xsbascorr->setCurrentIndex(index);
-            break;
-        }
-        case 14 : { // SBASVAR
-            ui->comboBoxPlot1Xsbasvar->setCurrentIndex(index);
-            break;
-        }
-        case 15 : { // SBASIONO
-            ui->comboBoxPlot1Xsbasiono->setCurrentIndex(index);
-            break;
-        }
-        case 16 : { // SBASUNSEL
-            ui->comboBoxPlot1Xsbasunsel->setCurrentIndex(index);
-            break;
-        }
-        case 17 : { // SBASOUT
-            ui->comboBoxPlot1Xsbasout->setCurrentIndex(index);
-            break;
-        }
-        case 18 : { // DGNSS
-            ui->comboBoxPlot1Xdgnss->setCurrentIndex(index);
-            break;
-        }
-        case 19 : { // USERADDEDERROR
-            ui->comboBoxPlot1Xuseraddederror->setCurrentIndex(index);
-            break;
-        }
-    }
+    ui->comboBoxPlot1Xcolumn->setCurrentIndex(index);
 }
-
-//// Functions to set the correct number in the X column line edit
-void gLAB_GUI::on_comboBoxPlot1Xinput_currentIndexChanged(int index) {
+// Function to change the message items
+void gLAB_GUI::change_comboBoxPlot1Xcolumn_message(int messageType){
+    // clean all the items
+    for (int i=ui->comboBoxPlot1Xcolumn->count()-1; i>=0; i--) ui->comboBoxPlot1Xcolumn->removeItem(i);
+    // add new items
+    for (int i=0; i<AllMessages[messageType].size(); i++) ui->comboBoxPlot1Xcolumn->addItem(AllMessages[messageType][i]);
+}
+// Functions to set the correct number in the X column line edit
+void gLAB_GUI::on_comboBoxPlot1Xcolumn_currentIndexChanged(int index){
     if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
     else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
 }
-void gLAB_GUI::on_comboBoxPlot1Xcs_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xmodel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xepochsat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xprefit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xpostfit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xfilter_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xoutput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xsatdiff_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xsatstat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xsatstattot_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xsatpvt_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xsbascorr_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xsbasvar_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xsbasiono_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xsbasunsel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xsbasout_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xdgnss_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Xuseraddederror_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Xcolumn->setText(QString::number(index));
-}
-//// End of Functions to set the correct number in the X column line edit
 
 // Function to set the correct value of the combo box Y column from line edit
 void gLAB_GUI::on_lineEditPlot1Ycolumn_textChanged() {
@@ -605,164 +745,20 @@ void gLAB_GUI::on_lineEditPlot1Ycolumn_textChanged() {
     } else {
         index = ui->lineEditPlot1Ycolumn->text().toInt();
     }
-    switch ( ui->stackedWidgetPlot1Ycolumn->currentIndex() ) {
-        case 1 : { // Input
-            ui->comboBoxPlot1Yinput->setCurrentIndex(index);
-            break;
-        }
-        case 2 : { // Cycle slips
-            ui->comboBoxPlot1Ycs->setCurrentIndex(index);
-            break;
-        }
-        case 3 : { // Model
-            ui->comboBoxPlot1Ymodel->setCurrentIndex(index);
-            break;
-        }
-        case 4 : { // Epochsat
-            ui->comboBoxPlot1Yepochsat->setCurrentIndex(index);
-            break;
-        }
-        case 5 : { // Prefit
-            ui->comboBoxPlot1Yprefit->setCurrentIndex(index);
-            break;
-        }
-        case 6 : { // Postfit
-            ui->comboBoxPlot1Ypostfit->setCurrentIndex(index);
-            break;
-        }
-        case 7 : { // Filter
-            ui->comboBoxPlot1Yfilter->setCurrentIndex(index);
-            break;
-        }
-        case 8 : { // Output
-            ui->comboBoxPlot1Youtput->setCurrentIndex(index);
-            break;
-        }
-        case 9 : { // Satdiff
-            ui->comboBoxPlot1Ysatdiff->setCurrentIndex(index);
-            break;
-        }
-        case 10 : { // Satstat
-            ui->comboBoxPlot1Ysatstat->setCurrentIndex(index);
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->comboBoxPlot1Ysatstattot->setCurrentIndex(index);
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->comboBoxPlot1Ysatpvt->setCurrentIndex(index);
-            break;
-        }
-        case 13 : { // SBASCORR
-            ui->comboBoxPlot1Ysbascorr->setCurrentIndex(index);
-            break;
-        }
-        case 14 : { // SBASVAR
-            ui->comboBoxPlot1Ysbasvar->setCurrentIndex(index);
-            break;
-        }
-        case 15 : { // SBASIONO
-            ui->comboBoxPlot1Ysbasiono->setCurrentIndex(index);
-            break;
-        }
-        case 16 : { // SBASUNSEL
-            ui->comboBoxPlot1Ysbasunsel->setCurrentIndex(index);
-            break;
-        }
-        case 17 : { // SBASOUT
-            ui->comboBoxPlot1Ysbasout->setCurrentIndex(index);
-            break;
-        }
-        case 18 : { // DGNSS
-            ui->comboBoxPlot1Ydgnss->setCurrentIndex(index);
-            break;
-        }
-        case 19 : { // USERADDEDERROR
-            ui->comboBoxPlot1Yuseraddederror->setCurrentIndex(index);
-            break;
-        }
-    }
+    ui->comboBoxPlot1Ycolumn->setCurrentIndex(index);
 }
-
-//// Functions to set the correct number in the Y column line edit
-void gLAB_GUI::on_comboBoxPlot1Yinput_currentIndexChanged(int index) {
+// Function to change the message items
+void gLAB_GUI::change_comboBoxPlot1Ycolumn_message(int messageType){
+    // clean all the items
+    for (int i=ui->comboBoxPlot1Ycolumn->count()-1; i>=0; i--) ui->comboBoxPlot1Ycolumn->removeItem(i);
+    // add new items
+    for (int i=0; i<AllMessages[messageType].size(); i++) ui->comboBoxPlot1Ycolumn->addItem(AllMessages[messageType][i]);
+}
+// Functions to set the correct number in the X column line edit
+void gLAB_GUI::on_comboBoxPlot1Ycolumn_currentIndexChanged(int index){
     if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
     else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
 }
-void gLAB_GUI::on_comboBoxPlot1Ycs_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ymodel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Yepochsat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Yprefit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ypostfit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Yfilter_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Youtput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ysatdiff_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ysatstat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ysatstattot_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ysatpvt_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ysbascorr_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ysbasvar_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ysbasiono_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ysbasunsel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ysbasout_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Ydgnss_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot1Yuseraddederror_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot1Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot1Ycolumn->setText(QString::number(index));
-}
-//// End of Functions to set the correct number in the Y column line edit
 
 
 ////////////////// Plot Nr 2 //////////////////
@@ -771,9 +767,9 @@ void gLAB_GUI::on_comboBoxPlot1Yuseraddederror_currentIndexChanged(int index) {
 // and write the proper condition in the line edit
 void gLAB_GUI::on_comboBoxPlot2Condition_currentIndexChanged(int index) {
     ui->comboBoxPlot2Condition->setCurrentIndex(index);
-    ui->stackedWidgetPlot2Xcolumn->setCurrentIndex(index);
-    ui->stackedWidgetPlot2Ycolumn->setCurrentIndex(index);
-    ui->comboBoxPlot2ConditionPrn->setCurrentIndex(0);
+    this->change_comboBoxPlot2Xcolumn_message(index);
+    this->change_comboBoxPlot2Ycolumn_message(index);
+    this->on_comboBoxPlot2ConditionGNSS_currentIndexChanged(0);
     ui->lineEditPlot2Xcolumn->setText("1"); // To make the change to "empty" effective
     ui->lineEditPlot2Ycolumn->setText("1"); // To make the change to "empty" effective
     ui->lineEditPlot2Xcolumn->setText("");
@@ -791,107 +787,176 @@ void gLAB_GUI::on_comboBoxPlot2Condition_currentIndexChanged(int index) {
             ui->lineEditPlot2Condition->setText("");
             break;
         }
-        case 1 : { // Input
+        case 1 : { // USERADDEDERROR
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"USERADDEDERROR\")");
+            break;
+        }
+        case 2 : { // Input
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"INPUT\")");
             break;
         }
-        case 2 : { // Cycle slips
+        case 3 : { // Cycle slips
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"CS\")");
             break;
         }
-        case 3 : { // Model
+        case 4 : { // SF Cycle slips
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"SFCSDATA\")");
+            break;
+        }
+        case 5 : { // MW Cycle slips
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"MWCSDATA\")");
+            break;
+        }
+        case 6 : { // LI Cycle slips
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"LICSDATA\")");
+            break;
+        }
+        case 7 : { // IGF Cycle slips
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"IGFCSDATA\")");
+            break;
+        }
+        case 8 : { // Meas
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"MEAS\")");
+            break;
+        }
+        case 9 : { // Model
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"MODEL\")");
             break;
         }
-        case 4 : { // Epochsat
-            ui->stackedWidgetPlot2Condition->setCurrentIndex(0);
-            ui->lineEditPlot2Condition->setText("($1==\"EPOCHSAT\")");
+        case 10 : { // Satsel
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"SATSEL\")");
             break;
         }
-        case 5 : { // Prefit
+        case 11 : { // Prefit
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"PREFIT\")");
             break;
         }
-        case 6 : { // Postfit
+        case 12: { // Epochsat
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(0);
+            ui->lineEditPlot2Condition->setText("($1==\"EPOCHSAT\")");
+            break;
+        }
+        case 13 : { // Postfit
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"POSTFIT\")");
             break;
         }
-        case 7 : { // Filter
+        case 14 : { // Filter
             ui->stackedWidgetPlot2Condition->setCurrentIndex(0);
             ui->lineEditPlot2Condition->setText("($1==\"FILTER\")");
             break;
         }
-        case 8 : { // Output
+        case 15 : { // Output
             ui->stackedWidgetPlot2Condition->setCurrentIndex(2);
             ui->lineEditPlot2Condition->setText("($1==\"OUTPUT\")");
             break;
         }
-        case 9 : { // Satdiff
-            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
-            ui->lineEditPlot2Condition->setText("($1==\"SATDIFF\")");
-            break;
-        }
-        case 10 : { // Satstat
-            ui->stackedWidgetPlot2Condition->setCurrentIndex(0);
-            ui->lineEditPlot2Condition->setText("($1==\"SATSTAT\")");
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->stackedWidgetPlot2Condition->setCurrentIndex(0);
-            ui->lineEditPlot2Condition->setText("($1==\"SATSTATTOT\")");
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
-            ui->lineEditPlot2Condition->setText("($1==\"SATPVT\")");
-            break;
-        }
-        case 13 : { // SBASCORR
+        case 16 : { // SBASCORR
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"SBASCORR\")");
             break;
         }
-        case 14 : { // SBASVAR
+        case 17 : { // SBASVAR
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"SBASVAR\")");
             break;
         }
-        case 15 : { // SBASIONO
+        case 18 : { // SBASIONO
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"SBASIONO\")");
             break;
         }
-        case 16 : { // SBASUNSEL
+        case 19 : { // SBASUNSEL
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"SBASUNSEL\")");
             break;
         }
-        case 17 : { // SBASOUT
+        case 20 : { // SBASDFMCCORR
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"SBASDFMCCORR\")");
+            break;
+        }
+        case 21 : { // SBASDFMCVAR
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"SBASDFMCVAR\")");
+            break;
+        }
+        case 22 : { // SBASDFMCUNSEL
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"SBASDFMCUNSEL\")");
+            break;
+        }
+        case 23 : { // SBASOUT
             ui->stackedWidgetPlot2Condition->setCurrentIndex(2);
             ui->lineEditPlot2Condition->setText("($1==\"SBASOUT\")");
             break;
         }
-        case 18 : { // DGNSS
+        case 24 : { // DGNSS
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
             ui->lineEditPlot2Condition->setText("($1==\"DGNSS\")");
             break;
         }
-        case 19 : { // USERADDEDERROR
+        case 25 : { // Satstat
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(0);
+            ui->lineEditPlot2Condition->setText("($1==\"SATSTAT\")");
+            break;
+        }
+        case 26 : { // Satstattot
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(0);
+            ui->lineEditPlot2Condition->setText("($1==\"SATSTATTOT\")");
+            break;
+        }
+        case 27 : { // Satdiff
             ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
-            ui->lineEditPlot2Condition->setText("($1==\"USERADDEDERROR\")");
+            ui->lineEditPlot2Condition->setText("($1==\"SATDIFF\")");
+            break;
+        }
+        case 28 : { // Satpvt
+            ui->stackedWidgetPlot2Condition->setCurrentIndex(1);
+            ui->lineEditPlot2Condition->setText("($1==\"SATPVT\")");
             break;
         }
     }
 }
 
-// Function to set the correct stacked window in the condition of the Plot Nr 2
+// Function to set the correct stacked window in the condition of the Plot Nr 1
 // and write the proper condition in the line edit
-void gLAB_GUI::on_comboBoxPlot2ConditionPrn_currentIndexChanged(int index) {
+void gLAB_GUI::on_comboBoxPlot2ConditionGNSS_currentIndexChanged(int index){
+    ui->comboBoxPlot2ConditionGNSS->setCurrentIndex(index);
+    if (index==0){
+        ui->stackedWidgetPlot2ConditionGNSS->setCurrentIndex(0);
+        this->on_comboBoxPlot2ConditionGPS_currentIndexChanged(0);
+        ui->stackedWidgetPlot2ConditionGNSS->setEnabled(false);
+        // Delete previous second condition (from ampersand to the end)
+        QString text = ui->lineEditPlot2Condition->text();
+        int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+        if ( end != -1 ) text = text.mid(0, end-1);
+        ui->lineEditPlot2Condition->setText(text);
+    } else if ( index>0 && index<=MAX_GNSS ) {
+        ui->stackedWidgetPlot2ConditionGNSS->setEnabled(true);
+        ui->stackedWidgetPlot2ConditionGNSS->setCurrentIndex(index-1);
+        if (index==1) this->on_comboBoxPlot2ConditionGPS_currentIndexChanged(0);
+        else if (index==2) this->on_comboBoxPlot2ConditionGalileo_currentIndexChanged(0);
+        else if (index==3) this->on_comboBoxPlot2ConditionGLONASS_currentIndexChanged(0);
+        else if (index==4) this->on_comboBoxPlot2ConditionBDS_currentIndexChanged(0);
+        else if (index==5) this->on_comboBoxPlot2ConditionGEO_currentIndexChanged(0);
+        else if (index==6) this->on_comboBoxPlot2ConditionQZSS_currentIndexChanged(0);
+        else if (index==7) this->on_comboBoxPlot2ConditionIRNSS_currentIndexChanged(0);
+    }
+}
+void gLAB_GUI::on_comboBoxPlot2ConditionGPS_currentIndexChanged(int index) {
+    ui->comboBoxPlot2ConditionGPS->setCurrentIndex(index);
     // Get the condition text of the line edit
     QString text = ui->lineEditPlot2Condition->text();
     // Get the ampersand position in the string
@@ -900,12 +965,124 @@ void gLAB_GUI::on_comboBoxPlot2ConditionPrn_currentIndexChanged(int index) {
     if ( end != -1 ) text = text.mid(0, end-1);
     // Write the new second condition
     if ( index != 0 ) {
-        text = (text + " & ($6==%1)").arg(index);
+        if (ui->comboBoxPlot2Condition->currentIndex()!=19) text = (text + " & ($6==\"GPS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GPS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=19) text = (text + " & ($6==\"GPS\")");
+        else text = (text + " & (&8==\"GPS\")");
+    }
+    ui->lineEditPlot2Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot2ConditionGalileo_currentIndexChanged(int index){
+    ui->comboBoxPlot2ConditionGalileo->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot2Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"GAL\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GAL\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"GAL\")");
+        else text = (text + " & (&8==\"GAL\")");
+    }
+    ui->lineEditPlot2Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot2ConditionGLONASS_currentIndexChanged(int index){
+    ui->comboBoxPlot2ConditionGLONASS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot2Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"GLO\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GLO\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"GLO\")");
+        else text = (text + " & (&8==\"GLO\")");
+    }
+    ui->lineEditPlot2Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot2ConditionGEO_currentIndexChanged(int index){
+    ui->comboBoxPlot2ConditionGEO->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot2Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"GEO\") & ($7==%1)").arg(index+119);
+        else text = (text + " & (&8==\"GEO\") & ($9==%1)").arg(index+119);
+    } else {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"GEO\")");
+        else text = (text + " & (&8==\"GEO\")");
+    }
+    ui->lineEditPlot2Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot2ConditionBDS_currentIndexChanged(int index){
+    ui->comboBoxPlot2ConditionBDS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot2Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"BDS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"BDS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"BDS\")");
+        else text = (text + " & (&8==\"BDS\")");
+    }
+    ui->lineEditPlot2Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot2ConditionQZSS_currentIndexChanged(int index){
+    ui->comboBoxPlot2ConditionQZSS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot2Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"QZS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"QZS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"QZS\")");
+        else text = (text + " & (&8==\"QZS\")");
+    }
+    ui->lineEditPlot2Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot2ConditionIRNSS_currentIndexChanged(int index){
+    ui->comboBoxPlot2ConditionIRNSS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot2Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"IRN\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"IRN\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot2Condition->currentIndex()!=1) text = (text + " & ($6==\"IRN\")");
+        else text = (text + " & (&8==\"IRN\")");
     }
     ui->lineEditPlot2Condition->setText(text);
 }
 
-// Function to set the correct stacked window in the condition of the Plot Nr 2
+// Function to set the correct stacked window in the condition of the Plot Nr 1
 // and write the proper condition in the line edit
 void gLAB_GUI::on_comboBoxPlot2ConditionOutput_currentIndexChanged(int index) {
     // Get the condition text of the line edit
@@ -916,7 +1093,7 @@ void gLAB_GUI::on_comboBoxPlot2ConditionOutput_currentIndexChanged(int index) {
     if ( end != -1 ) text = text.mid(0, end-1);
     // Write the new second condition
     if ( index != 0 ) {
-        text = (text + " & ($33==%1)").arg(index-1);
+        text = (text + " & ($6==%1)").arg(index-1);
     }
     ui->lineEditPlot2Condition->setText(text);
 }
@@ -926,7 +1103,7 @@ void gLAB_GUI::on_pushButtonPlot2SourceFile_clicked() {
     QFileDialog dialog(this);
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setViewMode(QFileDialog::Detail);
-    dialog.setNameFilter(tr("gLAB Output Files (*.out);;All Files (*.*)"));
+    dialog.setNameFilter(tr("gLAB Output Files (*.out *.txt);;All Files (*.*)"));
     QStringList fileName;
     if ( dialog.exec() ) {
         fileName = dialog.selectedFiles();
@@ -937,7 +1114,6 @@ void gLAB_GUI::on_pushButtonPlot2SourceFile_clicked() {
     if ( this->fileExists( ui->lineEditPlot2SourceFile->text() ) == true ) ui->pushButtonPlot->setEnabled(true);
     else ui->pushButtonPlot->setEnabled(false);
 }
-
 
 //This is to enable Plot button when the user manually sets a text file name
 void gLAB_GUI::on_lineEditPlot2SourceFile_textChanged() {
@@ -956,7 +1132,6 @@ void gLAB_GUI::on_lineEditPlot2SourceFile_textChanged() {
     }
 }
 
-
 // Function to set the correct value of the combo box X column from line edit
 void gLAB_GUI::on_lineEditPlot2Xcolumn_textChanged() {
     int index;
@@ -965,164 +1140,20 @@ void gLAB_GUI::on_lineEditPlot2Xcolumn_textChanged() {
     } else {
         index = ui->lineEditPlot2Xcolumn->text().toInt();
     }
-    switch ( ui->stackedWidgetPlot2Xcolumn->currentIndex() ) {
-        case 1 : { // Input
-            ui->comboBoxPlot2Xinput->setCurrentIndex(index);
-            break;
-        }
-        case 2 : { // Cycle slips
-            ui->comboBoxPlot2Xcs->setCurrentIndex(index);
-            break;
-        }
-        case 3 : { // Model
-            ui->comboBoxPlot2Xmodel->setCurrentIndex(index);
-            break;
-        }
-        case 4 : { // Epochsat
-            ui->comboBoxPlot2Xepochsat->setCurrentIndex(index);
-            break;
-        }
-        case 5 : { // Prefit
-            ui->comboBoxPlot2Xprefit->setCurrentIndex(index);
-            break;
-        }
-        case 6 : { // Postfit
-            ui->comboBoxPlot2Xpostfit->setCurrentIndex(index);
-            break;
-        }
-        case 7 : { // Filter
-            ui->comboBoxPlot2Xfilter->setCurrentIndex(index);
-            break;
-        }
-        case 8 : { // Output
-            ui->comboBoxPlot2Xoutput->setCurrentIndex(index);
-            break;
-        }
-        case 9 : { // Satdiff
-            ui->comboBoxPlot2Xsatdiff->setCurrentIndex(index);
-            break;
-        }
-        case 10 : { // Satstat
-            ui->comboBoxPlot2Xsatstat->setCurrentIndex(index);
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->comboBoxPlot2Xsatstattot->setCurrentIndex(index);
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->comboBoxPlot2Xsatpvt->setCurrentIndex(index);
-            break;
-        }
-        case 13 : { // SBASCORR
-            ui->comboBoxPlot2Xsbascorr->setCurrentIndex(index);
-            break;
-        }
-        case 14 : { // SBASVAR
-            ui->comboBoxPlot2Xsbasvar->setCurrentIndex(index);
-            break;
-        }
-        case 15 : { // SBASIONO
-            ui->comboBoxPlot2Xsbasiono->setCurrentIndex(index);
-            break;
-        }
-        case 16 : { // SBASUNSEL
-            ui->comboBoxPlot2Xsbasunsel->setCurrentIndex(index);
-            break;
-        }
-        case 17 : { // SBASOUT
-            ui->comboBoxPlot2Xsbasout->setCurrentIndex(index);
-            break;
-        }
-        case 18 : { // DGNSS
-            ui->comboBoxPlot2Xdgnss->setCurrentIndex(index);
-            break;
-        }
-        case 19 : { // USERADDEDERROR
-            ui->comboBoxPlot2Xuseraddederror->setCurrentIndex(index);
-            break;
-        }
-    }
+    ui->comboBoxPlot2Xcolumn->setCurrentIndex(index);
 }
-
-//// Functions to set the correct number in the X column line edit
-void gLAB_GUI::on_comboBoxPlot2Xinput_currentIndexChanged(int index) {
+// Function to change the message items
+void gLAB_GUI::change_comboBoxPlot2Xcolumn_message(int messageType){
+    // clean all the items
+    for (int i=ui->comboBoxPlot2Xcolumn->count()-1; i>=0; i--) ui->comboBoxPlot2Xcolumn->removeItem(i);
+    // add new items
+    for (int i=0; i<AllMessages[messageType].size(); i++) ui->comboBoxPlot2Xcolumn->addItem(AllMessages[messageType][i]);
+}
+// Functions to set the correct number in the X column line edit
+void gLAB_GUI::on_comboBoxPlot2Xcolumn_currentIndexChanged(int index){
     if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
     else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
 }
-void gLAB_GUI::on_comboBoxPlot2Xcs_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xmodel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xepochsat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xprefit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xpostfit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xfilter_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xoutput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xsatdiff_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xsatstat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xsatstattot_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xsatpvt_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xsbascorr_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xsbasvar_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xsbasiono_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xsbasunsel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xsbasout_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xdgnss_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Xuseraddederror_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Xcolumn->setText(QString::number(index));
-}
-//// End of Functions to set the correct number in the X column line edit
 
 // Function to set the correct value of the combo box Y column from line edit
 void gLAB_GUI::on_lineEditPlot2Ycolumn_textChanged() {
@@ -1132,164 +1163,20 @@ void gLAB_GUI::on_lineEditPlot2Ycolumn_textChanged() {
     } else {
         index = ui->lineEditPlot2Ycolumn->text().toInt();
     }
-    switch ( ui->stackedWidgetPlot2Ycolumn->currentIndex() ) {
-        case 1 : { // Input
-            ui->comboBoxPlot2Yinput->setCurrentIndex(index);
-            break;
-        }
-        case 2 : { // Cycle slips
-            ui->comboBoxPlot2Ycs->setCurrentIndex(index);
-            break;
-        }
-        case 3 : { // Model
-            ui->comboBoxPlot2Ymodel->setCurrentIndex(index);
-            break;
-        }
-        case 4 : { // Epochsat
-            ui->comboBoxPlot2Yepochsat->setCurrentIndex(index);
-            break;
-        }
-        case 5 : { // Prefit
-            ui->comboBoxPlot2Yprefit->setCurrentIndex(index);
-            break;
-        }
-        case 6 : { // Postfit
-            ui->comboBoxPlot2Ypostfit->setCurrentIndex(index);
-            break;
-        }
-        case 7 : { // Filter
-            ui->comboBoxPlot2Yfilter->setCurrentIndex(index);
-            break;
-        }
-        case 8 : { // Output
-            ui->comboBoxPlot2Youtput->setCurrentIndex(index);
-            break;
-        }
-        case 9 : { // Satdiff
-            ui->comboBoxPlot2Ysatdiff->setCurrentIndex(index);
-            break;
-        }
-        case 10 : { // Satstat
-            ui->comboBoxPlot2Ysatstat->setCurrentIndex(index);
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->comboBoxPlot2Ysatstattot->setCurrentIndex(index);
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->comboBoxPlot2Ysatpvt->setCurrentIndex(index);
-            break;
-        }
-        case 13 : { // SBASCORR
-            ui->comboBoxPlot2Ysbascorr->setCurrentIndex(index);
-            break;
-        }
-        case 14 : { // SBASVAR
-            ui->comboBoxPlot2Ysbasvar->setCurrentIndex(index);
-            break;
-        }
-        case 15 : { // SBASIONO
-            ui->comboBoxPlot2Ysbasiono->setCurrentIndex(index);
-            break;
-        }
-        case 16 : { // SBASUNSEL
-            ui->comboBoxPlot2Ysbasunsel->setCurrentIndex(index);
-            break;
-        }
-        case 17 : { // SBASOUT
-            ui->comboBoxPlot2Ysbasout->setCurrentIndex(index);
-            break;
-        }
-        case 18 : { // DGNSS
-            ui->comboBoxPlot2Ydgnss->setCurrentIndex(index);
-            break;
-        }
-        case 19 : { // USERADDEDERROR
-            ui->comboBoxPlot2Yuseraddederror->setCurrentIndex(index);
-            break;
-        }
-    }
+    ui->comboBoxPlot2Ycolumn->setCurrentIndex(index);
 }
-
-//// Functions to set the correct number in the Y column line edit
-void gLAB_GUI::on_comboBoxPlot2Yinput_currentIndexChanged(int index) {
+// Function to change the message items
+void gLAB_GUI::change_comboBoxPlot2Ycolumn_message(int messageType){
+    // clean all the items
+    for (int i=ui->comboBoxPlot2Ycolumn->count()-1; i>=0; i--) ui->comboBoxPlot2Ycolumn->removeItem(i);
+    // add new items
+    for (int i=0; i<AllMessages[messageType].size(); i++) ui->comboBoxPlot2Ycolumn->addItem(AllMessages[messageType][i]);
+}
+// Functions to set the correct number in the X column line edit
+void gLAB_GUI::on_comboBoxPlot2Ycolumn_currentIndexChanged(int index){
     if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
     else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
 }
-void gLAB_GUI::on_comboBoxPlot2Ycs_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ymodel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Yepochsat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Yprefit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ypostfit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Yfilter_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Youtput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ysatdiff_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ysatstat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ysatstattot_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ysatpvt_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ysbascorr_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ysbasvar_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ysbasiono_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ysbasunsel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ysbasout_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Ydgnss_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot2Yuseraddederror_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot2Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot2Ycolumn->setText(QString::number(index));
-}
-//// End of Functions to set the correct number in the Y column line edit
 
 
 ////////////////// Plot Nr 3 //////////////////
@@ -1298,9 +1185,9 @@ void gLAB_GUI::on_comboBoxPlot2Yuseraddederror_currentIndexChanged(int index) {
 // and write the proper condition in the line edit
 void gLAB_GUI::on_comboBoxPlot3Condition_currentIndexChanged(int index) {
     ui->comboBoxPlot3Condition->setCurrentIndex(index);
-    ui->stackedWidgetPlot3Xcolumn->setCurrentIndex(index);
-    ui->stackedWidgetPlot3Ycolumn->setCurrentIndex(index);
-    ui->comboBoxPlot3ConditionPrn->setCurrentIndex(0);
+    this->change_comboBoxPlot3Xcolumn_message(index);
+    this->change_comboBoxPlot3Ycolumn_message(index);
+    this->on_comboBoxPlot3ConditionGNSS_currentIndexChanged(0);
     ui->lineEditPlot3Xcolumn->setText("1"); // To make the change to "empty" effective
     ui->lineEditPlot3Ycolumn->setText("1"); // To make the change to "empty" effective
     ui->lineEditPlot3Xcolumn->setText("");
@@ -1318,107 +1205,176 @@ void gLAB_GUI::on_comboBoxPlot3Condition_currentIndexChanged(int index) {
             ui->lineEditPlot3Condition->setText("");
             break;
         }
-        case 1 : { // Input
+        case 1 : { // USERADDEDERROR
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"USERADDEDERROR\")");
+            break;
+        }
+        case 2 : { // Input
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"INPUT\")");
             break;
         }
-        case 2 : { // Cycle slips
+        case 3 : { // Cycle slips
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"CS\")");
             break;
         }
-        case 3 : { // Model
+        case 4 : { // SF Cycle slips
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"SFCSDATA\")");
+            break;
+        }
+        case 5 : { // MW Cycle slips
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"MWCSDATA\")");
+            break;
+        }
+        case 6 : { // LI Cycle slips
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"LICSDATA\")");
+            break;
+        }
+        case 7 : { // IGF Cycle slips
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"IGFCSDATA\")");
+            break;
+        }
+        case 8 : { // Meas
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"MEAS\")");
+            break;
+        }
+        case 9 : { // Model
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"MODEL\")");
             break;
         }
-        case 4 : { // Epochsat
-            ui->stackedWidgetPlot3Condition->setCurrentIndex(0);
-            ui->lineEditPlot3Condition->setText("($1==\"EPOCHSAT\")");
+        case 10 : { // Satsel
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"SATSEL\")");
             break;
         }
-        case 5 : { // Prefit
+        case 11 : { // Prefit
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"PREFIT\")");
             break;
         }
-        case 6 : { // Postfit
+        case 12: { // Epochsat
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(0);
+            ui->lineEditPlot3Condition->setText("($1==\"EPOCHSAT\")");
+            break;
+        }
+        case 13 : { // Postfit
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"POSTFIT\")");
             break;
         }
-        case 7 : { // Filter
+        case 14 : { // Filter
             ui->stackedWidgetPlot3Condition->setCurrentIndex(0);
             ui->lineEditPlot3Condition->setText("($1==\"FILTER\")");
             break;
         }
-        case 8 : { // Output
+        case 15 : { // Output
             ui->stackedWidgetPlot3Condition->setCurrentIndex(2);
             ui->lineEditPlot3Condition->setText("($1==\"OUTPUT\")");
             break;
         }
-        case 9 : { // Satdiff
-            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
-            ui->lineEditPlot3Condition->setText("($1==\"SATDIFF\")");
-            break;
-        }
-        case 10 : { // Satstat
-            ui->stackedWidgetPlot3Condition->setCurrentIndex(0);
-            ui->lineEditPlot3Condition->setText("($1==\"SATSTAT\")");
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->stackedWidgetPlot3Condition->setCurrentIndex(0);
-            ui->lineEditPlot3Condition->setText("($1==\"SATSTATTOT\")");
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
-            ui->lineEditPlot3Condition->setText("($1==\"SATPVT\")");
-            break;
-        }
-        case 13 : { // SBASCORR
+        case 16 : { // SBASCORR
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"SBASCORR\")");
             break;
         }
-        case 14 : { // SBASVAR
+        case 17 : { // SBASVAR
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"SBASVAR\")");
             break;
         }
-        case 15 : { // SBASIONO
+        case 18 : { // SBASIONO
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"SBASIONO\")");
             break;
         }
-        case 16 : { // SBASUNSEL
+        case 19 : { // SBASUNSEL
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"SBASUNSEL\")");
             break;
         }
-        case 17 : { // SBASOUT
+        case 20 : { // SBASDFMCCORR
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"SBASDFMCCORR\")");
+            break;
+        }
+        case 21 : { // SBASDFMCVAR
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"SBASDFMCVAR\")");
+            break;
+        }
+        case 22 : { // SBASDFMCUNSEL
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"SBASDFMCUNSEL\")");
+            break;
+        }
+        case 23 : { // SBASOUT
             ui->stackedWidgetPlot3Condition->setCurrentIndex(2);
             ui->lineEditPlot3Condition->setText("($1==\"SBASOUT\")");
             break;
         }
-        case 18 : { // DGNSS
+        case 24 : { // DGNSS
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
             ui->lineEditPlot3Condition->setText("($1==\"DGNSS\")");
             break;
         }
-        case 19 : { // USERADDEDERROR
+        case 25 : { // Satstat
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(0);
+            ui->lineEditPlot3Condition->setText("($1==\"SATSTAT\")");
+            break;
+        }
+        case 26 : { // Satstattot
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(0);
+            ui->lineEditPlot3Condition->setText("($1==\"SATSTATTOT\")");
+            break;
+        }
+        case 27 : { // Satdiff
             ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
-            ui->lineEditPlot3Condition->setText("($1==\"USERADDEDERROR\")");
+            ui->lineEditPlot3Condition->setText("($1==\"SATDIFF\")");
+            break;
+        }
+        case 28 : { // Satpvt
+            ui->stackedWidgetPlot3Condition->setCurrentIndex(1);
+            ui->lineEditPlot3Condition->setText("($1==\"SATPVT\")");
             break;
         }
     }
 }
 
-// Function to set the correct stacked window in the condition of the Plot Nr 3
+// Function to set the correct stacked window in the condition of the Plot Nr 1
 // and write the proper condition in the line edit
-void gLAB_GUI::on_comboBoxPlot3ConditionPrn_currentIndexChanged(int index) {
+void gLAB_GUI::on_comboBoxPlot3ConditionGNSS_currentIndexChanged(int index){
+    ui->comboBoxPlot3ConditionGNSS->setCurrentIndex(index);
+    if (index==0){
+        ui->stackedWidgetPlot3ConditionGNSS->setCurrentIndex(0);
+        this->on_comboBoxPlot3ConditionGPS_currentIndexChanged(0);
+        ui->stackedWidgetPlot3ConditionGNSS->setEnabled(false);
+        // Delete previous second condition (from ampersand to the end)
+        QString text = ui->lineEditPlot3Condition->text();
+        int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+        if ( end != -1 ) text = text.mid(0, end-1);
+        ui->lineEditPlot3Condition->setText(text);
+    } else if ( index>0 && index<=MAX_GNSS ) {
+        ui->stackedWidgetPlot3ConditionGNSS->setEnabled(true);
+        ui->stackedWidgetPlot3ConditionGNSS->setCurrentIndex(index-1);
+        if (index==1) this->on_comboBoxPlot3ConditionGPS_currentIndexChanged(0);
+        else if (index==2) this->on_comboBoxPlot3ConditionGalileo_currentIndexChanged(0);
+        else if (index==3) this->on_comboBoxPlot3ConditionGLONASS_currentIndexChanged(0);
+        else if (index==4) this->on_comboBoxPlot3ConditionBDS_currentIndexChanged(0);
+        else if (index==5) this->on_comboBoxPlot3ConditionGEO_currentIndexChanged(0);
+        else if (index==6) this->on_comboBoxPlot3ConditionQZSS_currentIndexChanged(0);
+        else if (index==7) this->on_comboBoxPlot3ConditionIRNSS_currentIndexChanged(0);
+    }
+}
+void gLAB_GUI::on_comboBoxPlot3ConditionGPS_currentIndexChanged(int index) {
+    ui->comboBoxPlot3ConditionGPS->setCurrentIndex(index);
     // Get the condition text of the line edit
     QString text = ui->lineEditPlot3Condition->text();
     // Get the ampersand position in the string
@@ -1427,12 +1383,124 @@ void gLAB_GUI::on_comboBoxPlot3ConditionPrn_currentIndexChanged(int index) {
     if ( end != -1 ) text = text.mid(0, end-1);
     // Write the new second condition
     if ( index != 0 ) {
-        text = (text + " & ($6==%1)").arg(index);
+        if (ui->comboBoxPlot3Condition->currentIndex()!=19) text = (text + " & ($6==\"GPS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GPS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=19) text = (text + " & ($6==\"GPS\")");
+        else text = (text + " & (&8==\"GPS\")");
+    }
+    ui->lineEditPlot3Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot3ConditionGalileo_currentIndexChanged(int index){
+    ui->comboBoxPlot3ConditionGalileo->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot3Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"GAL\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GAL\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"GAL\")");
+        else text = (text + " & (&8==\"GAL\")");
+    }
+    ui->lineEditPlot3Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot3ConditionGLONASS_currentIndexChanged(int index){
+    ui->comboBoxPlot3ConditionGLONASS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot3Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"GLO\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GLO\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"GLO\")");
+        else text = (text + " & (&8==\"GLO\")");
+    }
+    ui->lineEditPlot3Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot3ConditionGEO_currentIndexChanged(int index){
+    ui->comboBoxPlot3ConditionGEO->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot3Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"GEO\") & ($7==%1)").arg(index+119);
+        else text = (text + " & (&8==\"GEO\") & ($9==%1)").arg(index+119);
+    } else {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"GEO\")");
+        else text = (text + " & (&8==\"GEO\")");
+    }
+    ui->lineEditPlot3Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot3ConditionBDS_currentIndexChanged(int index){
+    ui->comboBoxPlot3ConditionBDS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot3Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"BDS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"BDS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"BDS\")");
+        else text = (text + " & (&8==\"BDS\")");
+    }
+    ui->lineEditPlot3Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot3ConditionQZSS_currentIndexChanged(int index){
+    ui->comboBoxPlot3ConditionQZSS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot3Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"QZS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"QZS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"QZS\")");
+        else text = (text + " & (&8==\"QZS\")");
+    }
+    ui->lineEditPlot3Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot3ConditionIRNSS_currentIndexChanged(int index){
+    ui->comboBoxPlot3ConditionIRNSS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot3Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"IRN\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"IRN\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot3Condition->currentIndex()!=1) text = (text + " & ($6==\"IRN\")");
+        else text = (text + " & (&8==\"IRN\")");
     }
     ui->lineEditPlot3Condition->setText(text);
 }
 
-// Function to set the correct stacked window in the condition of the Plot Nr 3
+// Function to set the correct stacked window in the condition of the Plot Nr 1
 // and write the proper condition in the line edit
 void gLAB_GUI::on_comboBoxPlot3ConditionOutput_currentIndexChanged(int index) {
     // Get the condition text of the line edit
@@ -1443,7 +1511,7 @@ void gLAB_GUI::on_comboBoxPlot3ConditionOutput_currentIndexChanged(int index) {
     if ( end != -1 ) text = text.mid(0, end-1);
     // Write the new second condition
     if ( index != 0 ) {
-        text = (text + " & ($33==%1)").arg(index-1);
+        text = (text + " & ($6==%1)").arg(index-1);
     }
     ui->lineEditPlot3Condition->setText(text);
 }
@@ -1453,7 +1521,7 @@ void gLAB_GUI::on_pushButtonPlot3SourceFile_clicked() {
     QFileDialog dialog(this);
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setViewMode(QFileDialog::Detail);
-    dialog.setNameFilter(tr("gLAB Output Files (*.out);;All Files (*.*)"));
+    dialog.setNameFilter(tr("gLAB Output Files (*.out *.txt);;All Files (*.*)"));
     QStringList fileName;
     if ( dialog.exec() ) {
         fileName = dialog.selectedFiles();
@@ -1464,8 +1532,6 @@ void gLAB_GUI::on_pushButtonPlot3SourceFile_clicked() {
     if ( this->fileExists( ui->lineEditPlot3SourceFile->text() ) == true ) ui->pushButtonPlot->setEnabled(true);
     else ui->pushButtonPlot->setEnabled(false);
 }
-
-
 
 //This is to enable Plot button when the user manually sets a text file name
 void gLAB_GUI::on_lineEditPlot3SourceFile_textChanged() {
@@ -1484,7 +1550,6 @@ void gLAB_GUI::on_lineEditPlot3SourceFile_textChanged() {
     }
 }
 
-
 // Function to set the correct value of the combo box X column from line edit
 void gLAB_GUI::on_lineEditPlot3Xcolumn_textChanged() {
     int index;
@@ -1493,166 +1558,22 @@ void gLAB_GUI::on_lineEditPlot3Xcolumn_textChanged() {
     } else {
         index = ui->lineEditPlot3Xcolumn->text().toInt();
     }
-    switch ( ui->stackedWidgetPlot3Xcolumn->currentIndex() ) {
-        case 1 : { // Input
-            ui->comboBoxPlot3Xinput->setCurrentIndex(index);
-            break;
-        }
-        case 2 : { // Cycle slips
-            ui->comboBoxPlot3Xcs->setCurrentIndex(index);
-            break;
-        }
-        case 3 : { // Model
-            ui->comboBoxPlot3Xmodel->setCurrentIndex(index);
-            break;
-        }
-        case 4 : { // Epochsat
-            ui->comboBoxPlot3Xepochsat->setCurrentIndex(index);
-            break;
-        }
-        case 5 : { // Prefit
-            ui->comboBoxPlot3Xprefit->setCurrentIndex(index);
-            break;
-        }
-        case 6 : { // Postfit
-            ui->comboBoxPlot3Xpostfit->setCurrentIndex(index);
-            break;
-        }
-        case 7 : { // Filter
-            ui->comboBoxPlot3Xfilter->setCurrentIndex(index);
-            break;
-        }
-        case 8 : { // Output
-            ui->comboBoxPlot3Xoutput->setCurrentIndex(index);
-            break;
-        }
-        case 9 : { // Satdiff
-            ui->comboBoxPlot3Xsatdiff->setCurrentIndex(index);
-            break;
-        }
-        case 10 : { // Satstat
-            ui->comboBoxPlot3Xsatstat->setCurrentIndex(index);
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->comboBoxPlot3Xsatstattot->setCurrentIndex(index);
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->comboBoxPlot3Xsatpvt->setCurrentIndex(index);
-            break;
-        }
-        case 13 : { // SBASCORR
-            ui->comboBoxPlot3Xsbascorr->setCurrentIndex(index);
-            break;
-        }
-        case 14 : { // SBASVAR
-            ui->comboBoxPlot3Xsbasvar->setCurrentIndex(index);
-            break;
-        }
-        case 15 : { // SBASIONO
-            ui->comboBoxPlot3Xsbasiono->setCurrentIndex(index);
-            break;
-        }
-        case 16 : { // SBASUNSEL
-            ui->comboBoxPlot3Xsbasunsel->setCurrentIndex(index);
-            break;
-        }
-        case 17 : { // SBASOUT
-            ui->comboBoxPlot3Xsbasout->setCurrentIndex(index);
-            break;
-        }
-        case 18 : { // DGNSS
-            ui->comboBoxPlot3Xdgnss->setCurrentIndex(index);
-            break;
-        }
-        case 19 : { // USERADDEDERROR
-            ui->comboBoxPlot3Xuseraddederror->setCurrentIndex(index);
-            break;
-        }
-    }
+    ui->comboBoxPlot3Xcolumn->setCurrentIndex(index);
+}
+// Function to change the message items
+void gLAB_GUI::change_comboBoxPlot3Xcolumn_message(int messageType){
+    // clean all the items
+    for (int i=ui->comboBoxPlot3Xcolumn->count()-1; i>=0; i--) ui->comboBoxPlot3Xcolumn->removeItem(i);
+    // add new items
+    for (int i=0; i<AllMessages[messageType].size(); i++) ui->comboBoxPlot3Xcolumn->addItem(AllMessages[messageType][i]);
+}
+// Functions to set the correct number in the X column line edit
+void gLAB_GUI::on_comboBoxPlot3Xcolumn_currentIndexChanged(int index){
+    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
+    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
 }
 
-//// Functions to set the correct number in the X column line edit
-void gLAB_GUI::on_comboBoxPlot3Xinput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xcs_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xmodel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xepochsat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xprefit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xpostfit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xfilter_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xoutput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xsatdiff_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xsatstat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xsatstattot_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xsatpvt_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xsbascorr_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xsbasvar_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xsbasiono_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xsbasunsel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xsbasout_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xdgnss_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Xuseraddederror_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Xcolumn->setText(QString::number(index));
-}
-//// End of Functions to set the correct number in the X column line edit
-
-// Function to set the correct value of the combo box X column from line edit
+// Function to set the correct value of the combo box Y column from line edit
 void gLAB_GUI::on_lineEditPlot3Ycolumn_textChanged() {
     int index;
     if (ui->lineEditPlot3Ycolumn->text().contains(QRegularExpression("[^0-9]"))==true) {
@@ -1660,164 +1581,20 @@ void gLAB_GUI::on_lineEditPlot3Ycolumn_textChanged() {
     } else {
         index = ui->lineEditPlot3Ycolumn->text().toInt();
     }
-    switch ( ui->stackedWidgetPlot3Ycolumn->currentIndex() ) {
-        case 1 : { // Input
-            ui->comboBoxPlot3Yinput->setCurrentIndex(index);
-            break;
-        }
-        case 2 : { // Cycle slips
-            ui->comboBoxPlot3Ycs->setCurrentIndex(index);
-            break;
-        }
-        case 3 : { // Model
-            ui->comboBoxPlot3Ymodel->setCurrentIndex(index);
-            break;
-        }
-        case 4 : { // Epochsat
-            ui->comboBoxPlot3Yepochsat->setCurrentIndex(index);
-            break;
-        }
-        case 5 : { // Prefit
-            ui->comboBoxPlot3Yprefit->setCurrentIndex(index);
-            break;
-        }
-        case 6 : { // Postfit
-            ui->comboBoxPlot3Ypostfit->setCurrentIndex(index);
-            break;
-        }
-        case 7 : { // Filter
-            ui->comboBoxPlot3Yfilter->setCurrentIndex(index);
-            break;
-        }
-        case 8 : { // Output
-            ui->comboBoxPlot3Youtput->setCurrentIndex(index);
-            break;
-        }
-        case 9 : { // Satdiff
-            ui->comboBoxPlot3Ysatdiff->setCurrentIndex(index);
-            break;
-        }
-        case 10 : { // Satstat
-            ui->comboBoxPlot3Ysatstat->setCurrentIndex(index);
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->comboBoxPlot3Ysatstattot->setCurrentIndex(index);
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->comboBoxPlot3Ysatpvt->setCurrentIndex(index);
-            break;
-        }
-        case 13 : { // SBASCORR
-            ui->comboBoxPlot3Ysbascorr->setCurrentIndex(index);
-            break;
-        }
-        case 14 : { // SBASVAR
-            ui->comboBoxPlot3Ysbasvar->setCurrentIndex(index);
-            break;
-        }
-        case 15 : { // SBASIONO
-            ui->comboBoxPlot3Ysbasiono->setCurrentIndex(index);
-            break;
-        }
-        case 16 : { // SBASUNSEL
-            ui->comboBoxPlot3Ysbasunsel->setCurrentIndex(index);
-            break;
-        }
-        case 17 : { // SBASOUT
-            ui->comboBoxPlot3Ysbasout->setCurrentIndex(index);
-            break;
-        }
-        case 18 : { // DGNSS
-            ui->comboBoxPlot3Ydgnss->setCurrentIndex(index);
-            break;
-        }
-        case 19 : { // USERADDEDERROR
-            ui->comboBoxPlot3Yuseraddederror->setCurrentIndex(index);
-            break;
-        }
-    }
+    ui->comboBoxPlot3Ycolumn->setCurrentIndex(index);
 }
-
-//// Functions to set the correct number in the Y column line edit
-void gLAB_GUI::on_comboBoxPlot3Yinput_currentIndexChanged(int index) {
+// Function to change the message items
+void gLAB_GUI::change_comboBoxPlot3Ycolumn_message(int messageType){
+    // clean all the items
+    for (int i=ui->comboBoxPlot3Ycolumn->count()-1; i>=0; i--) ui->comboBoxPlot3Ycolumn->removeItem(i);
+    // add new items
+    for (int i=0; i<AllMessages[messageType].size(); i++) ui->comboBoxPlot3Ycolumn->addItem(AllMessages[messageType][i]);
+}
+// Functions to set the correct number in the X column line edit
+void gLAB_GUI::on_comboBoxPlot3Ycolumn_currentIndexChanged(int index){
     if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
     else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
 }
-void gLAB_GUI::on_comboBoxPlot3Ycs_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ymodel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Yepochsat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Yprefit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ypostfit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Yfilter_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Youtput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ysatdiff_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ysatstat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ysatstattot_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ysatpvt_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ysbascorr_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ysbasvar_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ysbasiono_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ysbasunsel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ysbasout_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Ydgnss_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot3Yuseraddederror_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot3Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot3Ycolumn->setText(QString::number(index));
-}
-//// End of Functions to set the correct number in the Y column line edit
 
 
 ////////////////// Plot Nr 4 //////////////////
@@ -1826,9 +1603,9 @@ void gLAB_GUI::on_comboBoxPlot3Yuseraddederror_currentIndexChanged(int index) {
 // and write the proper condition in the line edit
 void gLAB_GUI::on_comboBoxPlot4Condition_currentIndexChanged(int index) {
     ui->comboBoxPlot4Condition->setCurrentIndex(index);
-    ui->stackedWidgetPlot4Xcolumn->setCurrentIndex(index);
-    ui->stackedWidgetPlot4Ycolumn->setCurrentIndex(index);
-    ui->comboBoxPlot4ConditionPrn->setCurrentIndex(0);
+    this->change_comboBoxPlot4Xcolumn_message(index);
+    this->change_comboBoxPlot4Ycolumn_message(index);
+    this->on_comboBoxPlot4ConditionGNSS_currentIndexChanged(0);
     ui->lineEditPlot4Xcolumn->setText("1"); // To make the change to "empty" effective
     ui->lineEditPlot4Ycolumn->setText("1"); // To make the change to "empty" effective
     ui->lineEditPlot4Xcolumn->setText("");
@@ -1846,107 +1623,176 @@ void gLAB_GUI::on_comboBoxPlot4Condition_currentIndexChanged(int index) {
             ui->lineEditPlot4Condition->setText("");
             break;
         }
-        case 1 : { // Input
+        case 1 : { // USERADDEDERROR
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"USERADDEDERROR\")");
+            break;
+        }
+        case 2 : { // Input
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"INPUT\")");
             break;
         }
-        case 2 : { // Cycle slips
+        case 3 : { // Cycle slips
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"CS\")");
             break;
         }
-        case 3 : { // Model
+        case 4 : { // SF Cycle slips
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"SFCSDATA\")");
+            break;
+        }
+        case 5 : { // MW Cycle slips
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"MWCSDATA\")");
+            break;
+        }
+        case 6 : { // LI Cycle slips
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"LICSDATA\")");
+            break;
+        }
+        case 7 : { // IGF Cycle slips
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"IGFCSDATA\")");
+            break;
+        }
+        case 8 : { // Meas
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"MEAS\")");
+            break;
+        }
+        case 9 : { // Model
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"MODEL\")");
             break;
         }
-        case 4 : { // Epochsat
-            ui->stackedWidgetPlot4Condition->setCurrentIndex(0);
-            ui->lineEditPlot4Condition->setText("($1==\"EPOCHSAT\")");
+        case 10 : { // Satsel
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"SATSEL\")");
             break;
         }
-        case 5 : { // Prefit
+        case 11 : { // Prefit
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"PREFIT\")");
             break;
         }
-        case 6 : { // Postfit
+        case 12: { // Epochsat
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(0);
+            ui->lineEditPlot4Condition->setText("($1==\"EPOCHSAT\")");
+            break;
+        }
+        case 13 : { // Postfit
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"POSTFIT\")");
             break;
         }
-        case 7 : { // Filter
+        case 14 : { // Filter
             ui->stackedWidgetPlot4Condition->setCurrentIndex(0);
             ui->lineEditPlot4Condition->setText("($1==\"FILTER\")");
             break;
         }
-        case 8 : { // Output
+        case 15 : { // Output
             ui->stackedWidgetPlot4Condition->setCurrentIndex(2);
             ui->lineEditPlot4Condition->setText("($1==\"OUTPUT\")");
             break;
         }
-        case 9 : { // Satdiff
-            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
-            ui->lineEditPlot4Condition->setText("($1==\"SATDIFF\")");
-            break;
-        }
-        case 10 : { // Satstat
-            ui->stackedWidgetPlot4Condition->setCurrentIndex(0);
-            ui->lineEditPlot4Condition->setText("($1==\"SATSTAT\")");
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->stackedWidgetPlot4Condition->setCurrentIndex(0);
-            ui->lineEditPlot4Condition->setText("($1==\"SATSTATTOT\")");
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
-            ui->lineEditPlot4Condition->setText("($1==\"SATPVT\")");
-            break;
-        }
-        case 13 : { // SBASCORR
+        case 16 : { // SBASCORR
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"SBASCORR\")");
             break;
         }
-        case 14 : { // SBASVAR
+        case 17 : { // SBASVAR
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"SBASVAR\")");
             break;
         }
-        case 15 : { // SBASIONO
+        case 18 : { // SBASIONO
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"SBASIONO\")");
             break;
         }
-        case 16 : { // SBASUNSEL
+        case 19 : { // SBASUNSEL
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"SBASUNSEL\")");
             break;
         }
-        case 17 : { // SBASOUT
+        case 20 : { // SBASDFMCCORR
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"SBASDFMCCORR\")");
+            break;
+        }
+        case 21 : { // SBASDFMCVAR
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"SBASDFMCVAR\")");
+            break;
+        }
+        case 22 : { // SBASDFMCUNSEL
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"SBASDFMCUNSEL\")");
+            break;
+        }
+        case 23 : { // SBASOUT
             ui->stackedWidgetPlot4Condition->setCurrentIndex(2);
             ui->lineEditPlot4Condition->setText("($1==\"SBASOUT\")");
             break;
         }
-        case 18 : { // DGNSS
+        case 24 : { // DGNSS
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
             ui->lineEditPlot4Condition->setText("($1==\"DGNSS\")");
             break;
         }
-        case 19 : { // USERADDEDERROR
+        case 25 : { // Satstat
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(0);
+            ui->lineEditPlot4Condition->setText("($1==\"SATSTAT\")");
+            break;
+        }
+        case 26 : { // Satstattot
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(0);
+            ui->lineEditPlot4Condition->setText("($1==\"SATSTATTOT\")");
+            break;
+        }
+        case 27 : { // Satdiff
             ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
-            ui->lineEditPlot4Condition->setText("($1==\"USERADDEDERROR\")");
+            ui->lineEditPlot4Condition->setText("($1==\"SATDIFF\")");
+            break;
+        }
+        case 28 : { // Satpvt
+            ui->stackedWidgetPlot4Condition->setCurrentIndex(1);
+            ui->lineEditPlot4Condition->setText("($1==\"SATPVT\")");
             break;
         }
     }
 }
 
-// Function to set the correct stacked window in the condition of the Plot Nr 4
+// Function to set the correct stacked window in the condition of the Plot Nr 1
 // and write the proper condition in the line edit
-void gLAB_GUI::on_comboBoxPlot4ConditionPrn_currentIndexChanged(int index) {
+void gLAB_GUI::on_comboBoxPlot4ConditionGNSS_currentIndexChanged(int index){
+    ui->comboBoxPlot4ConditionGNSS->setCurrentIndex(index);
+    if (index==0){
+        ui->stackedWidgetPlot4ConditionGNSS->setCurrentIndex(0);
+        this->on_comboBoxPlot4ConditionGPS_currentIndexChanged(0);
+        ui->stackedWidgetPlot4ConditionGNSS->setEnabled(false);
+        // Delete previous second condition (from ampersand to the end)
+        QString text = ui->lineEditPlot4Condition->text();
+        int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+        if ( end != -1 ) text = text.mid(0, end-1);
+        ui->lineEditPlot4Condition->setText(text);
+    } else if ( index>0 && index<=MAX_GNSS ) {
+        ui->stackedWidgetPlot4ConditionGNSS->setEnabled(true);
+        ui->stackedWidgetPlot4ConditionGNSS->setCurrentIndex(index-1);
+        if (index==1) this->on_comboBoxPlot4ConditionGPS_currentIndexChanged(0);
+        else if (index==2) this->on_comboBoxPlot4ConditionGalileo_currentIndexChanged(0);
+        else if (index==3) this->on_comboBoxPlot4ConditionGLONASS_currentIndexChanged(0);
+        else if (index==4) this->on_comboBoxPlot4ConditionBDS_currentIndexChanged(0);
+        else if (index==5) this->on_comboBoxPlot4ConditionGEO_currentIndexChanged(0);
+        else if (index==6) this->on_comboBoxPlot4ConditionQZSS_currentIndexChanged(0);
+        else if (index==7) this->on_comboBoxPlot4ConditionIRNSS_currentIndexChanged(0);
+    }
+}
+void gLAB_GUI::on_comboBoxPlot4ConditionGPS_currentIndexChanged(int index) {
+    ui->comboBoxPlot4ConditionGPS->setCurrentIndex(index);
     // Get the condition text of the line edit
     QString text = ui->lineEditPlot4Condition->text();
     // Get the ampersand position in the string
@@ -1955,12 +1801,124 @@ void gLAB_GUI::on_comboBoxPlot4ConditionPrn_currentIndexChanged(int index) {
     if ( end != -1 ) text = text.mid(0, end-1);
     // Write the new second condition
     if ( index != 0 ) {
-        text = (text + " & ($6==%1)").arg(index);
+        if (ui->comboBoxPlot4Condition->currentIndex()!=19) text = (text + " & ($6==\"GPS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GPS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=19) text = (text + " & ($6==\"GPS\")");
+        else text = (text + " & (&8==\"GPS\")");
+    }
+    ui->lineEditPlot4Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot4ConditionGalileo_currentIndexChanged(int index){
+    ui->comboBoxPlot4ConditionGalileo->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot4Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"GAL\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GAL\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"GAL\")");
+        else text = (text + " & (&8==\"GAL\")");
+    }
+    ui->lineEditPlot4Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot4ConditionGLONASS_currentIndexChanged(int index){
+    ui->comboBoxPlot4ConditionGLONASS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot4Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"GLO\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"GLO\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"GLO\")");
+        else text = (text + " & (&8==\"GLO\")");
+    }
+    ui->lineEditPlot4Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot4ConditionGEO_currentIndexChanged(int index){
+    ui->comboBoxPlot4ConditionGEO->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot4Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"GEO\") & ($7==%1)").arg(index+119);
+        else text = (text + " & (&8==\"GEO\") & ($9==%1)").arg(index+119);
+    } else {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"GEO\")");
+        else text = (text + " & (&8==\"GEO\")");
+    }
+    ui->lineEditPlot4Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot4ConditionBDS_currentIndexChanged(int index){
+    ui->comboBoxPlot4ConditionBDS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot4Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"BDS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"BDS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"BDS\")");
+        else text = (text + " & (&8==\"BDS\")");
+    }
+    ui->lineEditPlot4Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot4ConditionQZSS_currentIndexChanged(int index){
+    ui->comboBoxPlot4ConditionQZSS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot4Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"QZS\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"QZS\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"QZS\")");
+        else text = (text + " & (&8==\"QZS\")");
+    }
+    ui->lineEditPlot4Condition->setText(text);
+}
+void gLAB_GUI::on_comboBoxPlot4ConditionIRNSS_currentIndexChanged(int index){
+    ui->comboBoxPlot4ConditionIRNSS->setCurrentIndex(index);
+    // Get the condition text of the line edit
+    QString text = ui->lineEditPlot4Condition->text();
+    // Get the ampersand position in the string
+    int end = text.indexOf("&", 0, Qt::CaseInsensitive);
+    // Delete previous second condition (from ampersand to the end)
+    if ( end != -1 ) text = text.mid(0, end-1);
+    // Write the new second condition
+    if ( index != 0 ) {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"IRN\") & ($7==%1)").arg(index);
+        else text = (text + " & (&8==\"IRN\") & ($9==%1)").arg(index);
+    } else {
+        if (ui->comboBoxPlot4Condition->currentIndex()!=1) text = (text + " & ($6==\"IRN\")");
+        else text = (text + " & (&8==\"IRN\")");
     }
     ui->lineEditPlot4Condition->setText(text);
 }
 
-// Function to set the correct stacked window in the condition of the Plot Nr 4
+// Function to set the correct stacked window in the condition of the Plot Nr 1
 // and write the proper condition in the line edit
 void gLAB_GUI::on_comboBoxPlot4ConditionOutput_currentIndexChanged(int index) {
     // Get the condition text of the line edit
@@ -1971,7 +1929,7 @@ void gLAB_GUI::on_comboBoxPlot4ConditionOutput_currentIndexChanged(int index) {
     if ( end != -1 ) text = text.mid(0, end-1);
     // Write the new second condition
     if ( index != 0 ) {
-        text = (text + " & ($33==%1)").arg(index-1);
+        text = (text + " & ($6==%1)").arg(index-1);
     }
     ui->lineEditPlot4Condition->setText(text);
 }
@@ -1981,7 +1939,7 @@ void gLAB_GUI::on_pushButtonPlot4SourceFile_clicked() {
     QFileDialog dialog(this);
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setViewMode(QFileDialog::Detail);
-    dialog.setNameFilter(tr("gLAB Output Files (*.out);;All Files (*.*)"));
+    dialog.setNameFilter(tr("gLAB Output Files (*.out *.txt);;All Files (*.*)"));
     QStringList fileName;
     if ( dialog.exec() ) {
         fileName = dialog.selectedFiles();
@@ -2010,7 +1968,6 @@ void gLAB_GUI::on_lineEditPlot4SourceFile_textChanged() {
     }
 }
 
-
 // Function to set the correct value of the combo box X column from line edit
 void gLAB_GUI::on_lineEditPlot4Xcolumn_textChanged() {
     int index;
@@ -2019,166 +1976,22 @@ void gLAB_GUI::on_lineEditPlot4Xcolumn_textChanged() {
     } else {
         index = ui->lineEditPlot4Xcolumn->text().toInt();
     }
-    switch ( ui->stackedWidgetPlot4Xcolumn->currentIndex() ) {
-        case 1 : { // Input
-            ui->comboBoxPlot4Xinput->setCurrentIndex(index);
-            break;
-        }
-        case 2 : { // Cycle slips
-            ui->comboBoxPlot4Xcs->setCurrentIndex(index);
-            break;
-        }
-        case 3 : { // Model
-            ui->comboBoxPlot4Xmodel->setCurrentIndex(index);
-            break;
-        }
-        case 4 : { // Epochsat
-            ui->comboBoxPlot4Xepochsat->setCurrentIndex(index);
-            break;
-        }
-        case 5 : { // Prefit
-            ui->comboBoxPlot4Xprefit->setCurrentIndex(index);
-            break;
-        }
-        case 6 : { // Postfit
-            ui->comboBoxPlot4Xpostfit->setCurrentIndex(index);
-            break;
-        }
-        case 7 : { // Filter
-            ui->comboBoxPlot4Xfilter->setCurrentIndex(index);
-            break;
-        }
-        case 8 : { // Output
-            ui->comboBoxPlot4Xoutput->setCurrentIndex(index);
-            break;
-        }
-        case 9 : { // Satdiff
-            ui->comboBoxPlot4Xsatdiff->setCurrentIndex(index);
-            break;
-        }
-        case 10 : { // Satstat
-            ui->comboBoxPlot4Xsatstat->setCurrentIndex(index);
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->comboBoxPlot4Xsatstattot->setCurrentIndex(index);
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->comboBoxPlot4Xsatpvt->setCurrentIndex(index);
-            break;
-        }
-        case 13 : { // SBASCORR
-            ui->comboBoxPlot4Xsbascorr->setCurrentIndex(index);
-            break;
-        }
-        case 14 : { // SBASVAR
-            ui->comboBoxPlot4Xsbasvar->setCurrentIndex(index);
-            break;
-        }
-        case 15 : { // SBASIONO
-            ui->comboBoxPlot4Xsbasiono->setCurrentIndex(index);
-            break;
-        }
-        case 16 : { // SBASUNSEL
-            ui->comboBoxPlot4Xsbasunsel->setCurrentIndex(index);
-            break;
-        }
-        case 17 : { // SBASOUT
-            ui->comboBoxPlot4Xsbasout->setCurrentIndex(index);
-            break;
-        }
-        case 18 : { // DGNSS
-            ui->comboBoxPlot4Xdgnss->setCurrentIndex(index);
-            break;
-        }
-        case 19 : { // USERADDEDERROR
-            ui->comboBoxPlot4Xuseraddederror->setCurrentIndex(index);
-            break;
-        }
-    }
+    ui->comboBoxPlot4Xcolumn->setCurrentIndex(index);
+}
+// Function to change the message items
+void gLAB_GUI::change_comboBoxPlot4Xcolumn_message(int messageType){
+    // clean all the items
+    for (int i=ui->comboBoxPlot4Xcolumn->count()-1; i>=0; i--) ui->comboBoxPlot4Xcolumn->removeItem(i);
+    // add new items
+    for (int i=0; i<AllMessages[messageType].size(); i++) ui->comboBoxPlot4Xcolumn->addItem(AllMessages[messageType][i]);
+}
+// Functions to set the correct number in the X column line edit
+void gLAB_GUI::on_comboBoxPlot4Xcolumn_currentIndexChanged(int index){
+    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
+    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
 }
 
-//// Functions to set the correct number in the X column line edit
-void gLAB_GUI::on_comboBoxPlot4Xinput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xcs_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xmodel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xepochsat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xprefit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xpostfit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xfilter_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xoutput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xsatdiff_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xsatstat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xsatstattot_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xsatpvt_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xsbascorr_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xsbasvar_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xsbasiono_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xsbasunsel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xsbasout_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xdgnss_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Xuseraddederror_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Xcolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Xcolumn->setText(QString::number(index));
-}
-//// End of Functions to set the correct number in the X column line edit
-
-// Function to set the correct value of the combo box X column from line edit
+// Function to set the correct value of the combo box Y column from line edit
 void gLAB_GUI::on_lineEditPlot4Ycolumn_textChanged() {
     int index;
     if (ui->lineEditPlot4Ycolumn->text().contains(QRegularExpression("[^0-9]"))==true) {
@@ -2186,164 +1999,20 @@ void gLAB_GUI::on_lineEditPlot4Ycolumn_textChanged() {
     } else {
         index = ui->lineEditPlot4Ycolumn->text().toInt();
     }
-    switch ( ui->stackedWidgetPlot4Ycolumn->currentIndex() ) {
-        case 1 : { // Input
-            ui->comboBoxPlot4Yinput->setCurrentIndex(index);
-            break;
-        }
-        case 2 : { // Cycle slips
-            ui->comboBoxPlot4Ycs->setCurrentIndex(index);
-            break;
-        }
-        case 3 : { // Model
-            ui->comboBoxPlot4Ymodel->setCurrentIndex(index);
-            break;
-        }
-        case 4 : { // Epochsat
-            ui->comboBoxPlot4Yepochsat->setCurrentIndex(index);
-            break;
-        }
-        case 5 : { // Prefit
-            ui->comboBoxPlot4Yprefit->setCurrentIndex(index);
-            break;
-        }
-        case 6 : { // Postfit
-            ui->comboBoxPlot4Ypostfit->setCurrentIndex(index);
-            break;
-        }
-        case 7 : { // Filter
-            ui->comboBoxPlot4Yfilter->setCurrentIndex(index);
-            break;
-        }
-        case 8 : { // Output
-            ui->comboBoxPlot4Youtput->setCurrentIndex(index);
-            break;
-        }
-        case 9 : { // Satdiff
-            ui->comboBoxPlot4Ysatdiff->setCurrentIndex(index);
-            break;
-        }
-        case 10 : { // Satstat
-            ui->comboBoxPlot4Ysatstat->setCurrentIndex(index);
-            break;
-        }
-        case 11 : { // Satstattot
-            ui->comboBoxPlot4Ysatstattot->setCurrentIndex(index);
-            break;
-        }
-        case 12 : { // Satpvt
-            ui->comboBoxPlot4Ysatpvt->setCurrentIndex(index);
-            break;
-        }
-        case 13 : { // SBASCORR
-            ui->comboBoxPlot4Ysbascorr->setCurrentIndex(index);
-            break;
-        }
-        case 14 : { // SBASVAR
-            ui->comboBoxPlot4Ysbasvar->setCurrentIndex(index);
-            break;
-        }
-        case 15 : { // SBASIONO
-            ui->comboBoxPlot4Ysbasiono->setCurrentIndex(index);
-            break;
-        }
-        case 16 : { // SBASUNSEL
-            ui->comboBoxPlot4Ysbasunsel->setCurrentIndex(index);
-            break;
-        }
-        case 17 : { // SBASOUT
-            ui->comboBoxPlot4Ysbasout->setCurrentIndex(index);
-            break;
-        }
-        case 18 : { // DGNSS
-            ui->comboBoxPlot4Ydgnss->setCurrentIndex(index);
-            break;
-        }
-        case 19 : { // USERADDEDERROR
-            ui->comboBoxPlot4Yuseraddederror->setCurrentIndex(index);
-            break;
-        }
-    }
+    ui->comboBoxPlot4Ycolumn->setCurrentIndex(index);
 }
-
-//// Functions to set the correct number in the Y column line edit
-void gLAB_GUI::on_comboBoxPlot4Yinput_currentIndexChanged(int index) {
+// Function to change the message items
+void gLAB_GUI::change_comboBoxPlot4Ycolumn_message(int messageType){
+    // clean all the items
+    for (int i=ui->comboBoxPlot4Ycolumn->count()-1; i>=0; i--) ui->comboBoxPlot4Ycolumn->removeItem(i);
+    // add new items
+    for (int i=0; i<AllMessages[messageType].size(); i++) ui->comboBoxPlot4Ycolumn->addItem(AllMessages[messageType][i]);
+}
+// Functions to set the correct number in the X column line edit
+void gLAB_GUI::on_comboBoxPlot4Ycolumn_currentIndexChanged(int index){
     if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
     else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
 }
-void gLAB_GUI::on_comboBoxPlot4Ycs_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ymodel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Yepochsat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Yprefit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ypostfit_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Yfilter_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Youtput_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ysatdiff_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ysatstat_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ysatstattot_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ysatpvt_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ysbascorr_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ysbasvar_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ysbasiono_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ysbasunsel_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ysbasout_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Ydgnss_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-void gLAB_GUI::on_comboBoxPlot4Yuseraddederror_currentIndexChanged(int index) {
-    if ( index == 0 ) ui->lineEditPlot4Ycolumn->setText("");
-    else if (index>0) ui->lineEditPlot4Ycolumn->setText(QString::number(index));
-}
-//// End of Functions to set the correct number in the Y column line edit
 
 // Template for NEU Positioning Error
 void gLAB_GUI::on_pushButtonTemplateNeuPositioningError_clicked() {
@@ -2358,25 +2027,25 @@ void gLAB_GUI::on_pushButtonTemplateNeuPositioningError_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(8);
+    ui->comboBoxPlot1Condition->setCurrentIndex(15);
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("18");
+    ui->lineEditPlot1Ycolumn->setText("24");
     ui->lineEditPlot1LegendLabel->setText("North error");
     // Plot Nr. 2
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot2Condition->setCurrentIndex(8);
+    ui->comboBoxPlot2Condition->setCurrentIndex(15);
     ui->lineEditPlot2Xcolumn->setText("4");
-    ui->lineEditPlot2Ycolumn->setText("19");
+    ui->lineEditPlot2Ycolumn->setText("25");
     ui->lineEditPlot2LegendLabel->setText("East error");
     // Plot Nr. 3
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot3SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot3SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot3TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot3Condition->setCurrentIndex(8);
+    ui->comboBoxPlot3Condition->setCurrentIndex(15);
     ui->lineEditPlot3Xcolumn->setText("4");
-    ui->lineEditPlot3Ycolumn->setText("20");
+    ui->lineEditPlot3Ycolumn->setText("26");
     ui->lineEditPlot3LegendLabel->setText("Up error");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
@@ -2395,9 +2064,9 @@ void gLAB_GUI::on_pushButtonTemplateHorizontalError_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot1Condition->setCurrentIndex(8);
-    ui->lineEditPlot1Xcolumn->setText("19");
-    ui->lineEditPlot1Ycolumn->setText("18");
+    ui->comboBoxPlot1Condition->setCurrentIndex(15);
+    ui->lineEditPlot1Xcolumn->setText("25");
+    ui->lineEditPlot1Ycolumn->setText("24");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
 }
@@ -2415,9 +2084,9 @@ void gLAB_GUI::on_pushButtonTemplateZenithTroposphericDelay_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(7);
+    ui->comboBoxPlot1Condition->setCurrentIndex(14);
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("9");
+    ui->lineEditPlot1Ycolumn->setText("20");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
 }
@@ -2438,19 +2107,20 @@ void gLAB_GUI::on_pushButtonTemplateIonosphericCombinations_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(3);
-    ui->comboBoxPlot1Condition->setCurrentIndex(1);
+    ui->comboBoxPlot1Condition->setCurrentIndex(2);
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("($10-$9)");
+    ui->lineEditPlot1Ycolumn->setText("($12-$11)");
     ui->lineEditPlot1LegendLabel->setText("All PRN : PI=(P2-P1)");
     // Plot Nr. 2
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(3);
     ui->comboBoxPlot2ColorLine->setCurrentIndex(2);
-    ui->comboBoxPlot2Condition->setCurrentIndex(1);
-    ui->comboBoxPlot2ConditionPrn->setCurrentIndex(13);
+    ui->comboBoxPlot2Condition->setCurrentIndex(2);
+    this->on_comboBoxPlot2ConditionGNSS_currentIndexChanged(1);
+    ui->comboBoxPlot2ConditionGPS->setCurrentIndex(13);
     ui->lineEditPlot2Xcolumn->setText("4");
-    ui->lineEditPlot2Ycolumn->setText("($10-$9)");
+    ui->lineEditPlot2Ycolumn->setText("($12-$11)");
     ui->lineEditPlot2LegendLabel->setText("PRN 13 : PI=(P2-P1)");
     // Plot Nr. 3
     ui->comboBoxPlot3ColorLine->setCurrentIndex(1);
@@ -2471,33 +2141,33 @@ void gLAB_GUI::on_pushButtonTemplateDOP_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(8);
+    ui->comboBoxPlot1Condition->setCurrentIndex(15);
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("24");
+    ui->lineEditPlot1Ycolumn->setText("36");
     ui->lineEditPlot1LegendLabel->setText("Geometric DOP");
     // Plot Nr. 2
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot2Condition->setCurrentIndex(8);
+    ui->comboBoxPlot2Condition->setCurrentIndex(15);
     ui->lineEditPlot2Xcolumn->setText("4");
-    ui->lineEditPlot2Ycolumn->setText("27");
+    ui->lineEditPlot2Ycolumn->setText("39");
     ui->lineEditPlot2LegendLabel->setText("Horizontal DOP");
     // Plot Nr. 3
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot3SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot3SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot3TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot3Condition->setCurrentIndex(8);
+    ui->comboBoxPlot3Condition->setCurrentIndex(15);
     ui->lineEditPlot3Xcolumn->setText("4");
-    ui->lineEditPlot3Ycolumn->setText("28");
+    ui->lineEditPlot3Ycolumn->setText("40");
     ui->lineEditPlot3LegendLabel->setText("Vertical DOP");
     // Plot Nr. 4
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot4SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot4SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot4TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot4Condition->setCurrentIndex(8);
+    ui->comboBoxPlot4Condition->setCurrentIndex(15);
     ui->lineEditPlot4Xcolumn->setText("4");
-    ui->lineEditPlot4Ycolumn->setText("26");
+    ui->lineEditPlot4Ycolumn->setText("38");
     ui->lineEditPlot4LegendLabel->setText("Time DOP");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
@@ -2519,19 +2189,20 @@ void gLAB_GUI::on_pushButtonTemplateSatelliteSkyplot_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(3);
-    ui->comboBoxPlot1Condition->setCurrentIndex(5);
-    ui->lineEditPlot1Xcolumn->setText("(math.sin($16*math.pi/180)*(90-$15)/90)");
-    ui->lineEditPlot1Ycolumn->setText("(math.cos($16*math.pi/180)*(90-$15)/90)");
+    ui->comboBoxPlot1Condition->setCurrentIndex(11);
+    ui->lineEditPlot1Xcolumn->setText("(math.sin($13*math.pi/180)*(90-$12)/90)");
+    ui->lineEditPlot1Ycolumn->setText("(math.cos($13*math.pi/180)*(90-$12)/90)");
     ui->lineEditPlot1LegendLabel->setText("All PRN");
     // Plot Nr. 2
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(3);
     ui->comboBoxPlot2ColorLine->setCurrentIndex(2);
-    ui->comboBoxPlot2Condition->setCurrentIndex(5);
-    ui->comboBoxPlot2ConditionPrn->setCurrentIndex(3);
-    ui->lineEditPlot2Xcolumn->setText("(math.sin($16*math.pi/180)*(90-$15)/90)");
-    ui->lineEditPlot2Ycolumn->setText("(math.cos($16*math.pi/180)*(90-$15)/90)");
+    ui->comboBoxPlot2Condition->setCurrentIndex(11);
+    this->on_comboBoxPlot2ConditionGNSS_currentIndexChanged(1);
+    ui->comboBoxPlot2ConditionGPS->setCurrentIndex(3);
+    ui->lineEditPlot2Xcolumn->setText("(math.sin($13*math.pi/180)*(90-$12)/90)");
+    ui->lineEditPlot2Ycolumn->setText("(math.cos($13*math.pi/180)*(90-$12)/90)");
     ui->lineEditPlot2LegendLabel->setText("PRN 3");
     // Plot Nr. 3
     ui->comboBoxPlot3ColorLine->setCurrentIndex(1);
@@ -2552,10 +2223,10 @@ void gLAB_GUI::on_pushButtonTemplateCarrierPhaseAmbiguities_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot1Condition->setCurrentIndex(6);
-    ui->lineEditPlot1Condition->setText("($1==\"POSTFIT\") & ($7[0]==\"L\")");
+    ui->comboBoxPlot1Condition->setCurrentIndex(13);
+    ui->lineEditPlot1Condition->setText("($1==\"POSTFIT\") & ($14[0]==\"L\")");
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("13");
+    ui->lineEditPlot1Ycolumn->setText("21");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
 }
@@ -2576,28 +2247,31 @@ void gLAB_GUI::on_pushButtonTemplateMeasurementMultipath_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot1Condition->setCurrentIndex(1);
-    ui->comboBoxPlot1ConditionPrn->setCurrentIndex(31);
+    ui->comboBoxPlot1Condition->setCurrentIndex(2);
+    this->on_comboBoxPlot1ConditionGNSS_currentIndexChanged(1);
+    ui->comboBoxPlot1ConditionGPS->setCurrentIndex(31);
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("($8-$11-3.09*($11-$12))");
+    ui->lineEditPlot1Ycolumn->setText("($10-$13-3.09*($13-$14))");
     ui->lineEditPlot1LegendLabel->setText("C1 Multipath");
     // Plot Nr. 2
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot2Condition->setCurrentIndex(1);
-    ui->comboBoxPlot2ConditionPrn->setCurrentIndex(31);
+    ui->comboBoxPlot2Condition->setCurrentIndex(2);
+    this->on_comboBoxPlot2ConditionGNSS_currentIndexChanged(1);
+    ui->comboBoxPlot2ConditionGPS->setCurrentIndex(31);
     ui->lineEditPlot2Xcolumn->setText("4");
-    ui->lineEditPlot2Ycolumn->setText("( ( 154*154 ) * $9  - ( 120*120 )*$10 ) / ( ( 154*154 ) - ( 120*120 ) ) - ( ( 154*154 ) * $11 - ( 120*120 )*$12 ) / ( ( 154*154 ) - ( 120*120 ) )");
+    ui->lineEditPlot2Ycolumn->setText("( ( 154*154 ) * $11  - ( 120*120 )*$12 ) / ( ( 154*154 ) - ( 120*120 ) ) - ( ( 154*154 ) * $13 - ( 120*120 )*$14 ) / ( ( 154*154 ) - ( 120*120 ) )");
     ui->lineEditPlot2LegendLabel->setText("PC Multipath");
     // Plot Nr. 3
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot3SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot3SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot3TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot3Condition->setCurrentIndex(1);
-    ui->comboBoxPlot3ConditionPrn->setCurrentIndex(31);
+    ui->comboBoxPlot3Condition->setCurrentIndex(2);
+    this->on_comboBoxPlot3ConditionGNSS_currentIndexChanged(1);
+    ui->comboBoxPlot3ConditionGPS->setCurrentIndex(31);
     ui->lineEditPlot3Xcolumn->setText("4");
-    ui->lineEditPlot3Ycolumn->setText("( 154 * $9 + 120 * $10 ) / ( 154 + 120 ) - ( 154 * $11  - 120 * $12 ) / ( 154 - 120 )");
+    ui->lineEditPlot3Ycolumn->setText("( 154 * $11 + 120 * $12 ) / ( 154 + 120 ) - ( 154 * $13  - 120 * $14 ) / ( 154 - 120 )");
     ui->lineEditPlot3LegendLabel->setText("MW Multipath");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
@@ -2616,9 +2290,9 @@ void gLAB_GUI::on_pushButtonTemplateModelComponents_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot1Condition->setCurrentIndex(3);
+    ui->comboBoxPlot1Condition->setCurrentIndex(9);
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("22");
+    ui->lineEditPlot1Ycolumn->setText("34");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
 }
@@ -2636,19 +2310,19 @@ void gLAB_GUI::on_pushButtonTemplatePrefitResiduals_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot1Condition->setCurrentIndex(5);
-    ui->lineEditPlot1Condition->setText("($1==\"PREFIT\") & ($7[0]==\"P\")");
-    ui->lineEditPlot1Xcolumn->setText("15");
-    ui->lineEditPlot1Ycolumn->setText("8");
+    ui->comboBoxPlot1Condition->setCurrentIndex(11);
+    ui->lineEditPlot1Condition->setText("($1==\"PREFIT\") & ($14[0]==\"C\")");
+    ui->lineEditPlot1Xcolumn->setText("12");
+    ui->lineEditPlot1Ycolumn->setText("16");
     ui->lineEditPlot1LegendLabel->setText("Pseudorange Prefit Residuals");
     // Plot Nr. 2
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot2Condition->setCurrentIndex(5);
-    ui->lineEditPlot2Condition->setText("($1==\"PREFIT\") & ($7[0]==\"L\")");
-    ui->lineEditPlot2Xcolumn->setText("15");
-    ui->lineEditPlot2Ycolumn->setText("8");
+    ui->comboBoxPlot2Condition->setCurrentIndex(11);
+    ui->lineEditPlot2Condition->setText("($1==\"PREFIT\") & ($14[0]==\"L\")");
+    ui->lineEditPlot2Xcolumn->setText("12");
+    ui->lineEditPlot2Ycolumn->setText("16");
     ui->lineEditPlot2LegendLabel->setText("Carrier Phase Prefit Residuals");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
@@ -2667,19 +2341,19 @@ void gLAB_GUI::on_pushButtonTemplatePostfitResiduals_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot1Condition->setCurrentIndex(6);
-    ui->lineEditPlot1Condition->setText("($1==\"POSTFIT\") & ($7[0]==\"P\")");
-    ui->lineEditPlot1Xcolumn->setText("11");
-    ui->lineEditPlot1Ycolumn->setText("8");
+    ui->comboBoxPlot1Condition->setCurrentIndex(13);
+    ui->lineEditPlot1Condition->setText("($1==\"POSTFIT\") & ($14[0]==\"C\")");
+    ui->lineEditPlot1Xcolumn->setText("12");
+    ui->lineEditPlot1Ycolumn->setText("16");
     ui->lineEditPlot1LegendLabel->setText("Pseudorange Postfit Residuals");
     // Plot Nr. 2
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot2Condition->setCurrentIndex(6);
-    ui->lineEditPlot2Condition->setText("($1==\"POSTFIT\") & ($7[0]==\"L\")");
-    ui->lineEditPlot2Xcolumn->setText("11");
-    ui->lineEditPlot2Ycolumn->setText("8");
+    ui->comboBoxPlot2Condition->setCurrentIndex(13);
+    ui->lineEditPlot2Condition->setText("($1==\"POSTFIT\") & ($14[0]==\"L\")");
+    ui->lineEditPlot2Xcolumn->setText("12");
+    ui->lineEditPlot2Ycolumn->setText("16");
     ui->lineEditPlot2LegendLabel->setText("Carrier Phase Postfit Residuals");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
@@ -2699,25 +2373,25 @@ void gLAB_GUI::on_pushButtonTemplateOrbitAndClockComparison_clicked() {
     if ( ui->lineEditOutputFileCompare->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators((OutputFile.filePath() + "/diff.out")));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputFileCompare->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot1Condition->setCurrentIndex(9);
+    ui->comboBoxPlot1Condition->setCurrentIndex(27);
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("11");
+    ui->lineEditPlot1Ycolumn->setText("13");
     ui->lineEditPlot1LegendLabel->setText("Radial");
     // Plot Nr. 2
     if ( ui->lineEditOutputFileCompare->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators((OutputFile.filePath() + "/diff.out")));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputFileCompare->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot2Condition->setCurrentIndex(9);
+    ui->comboBoxPlot2Condition->setCurrentIndex(27);
     ui->lineEditPlot2Xcolumn->setText("4");
-    ui->lineEditPlot2Ycolumn->setText("12");
+    ui->lineEditPlot2Ycolumn->setText("14");
     ui->lineEditPlot2LegendLabel->setText("Along-Track");
     // Plot Nr. 3
     if ( ui->lineEditOutputFileCompare->text() == "" ) ui->lineEditPlot3SourceFile->setText(QDir::toNativeSeparators((OutputFile.filePath() + "/diff.out")));
     else ui->lineEditPlot3SourceFile->setText(ui->lineEditOutputFileCompare->text());
     ui->comboBoxPlot3TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot3Condition->setCurrentIndex(9);
+    ui->comboBoxPlot3Condition->setCurrentIndex(27);
     ui->lineEditPlot3Xcolumn->setText("4");
-    ui->lineEditPlot3Ycolumn->setText("13");
+    ui->lineEditPlot3Ycolumn->setText("15");
     ui->lineEditPlot3LegendLabel->setText("Cross-Track");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
@@ -2736,9 +2410,9 @@ void gLAB_GUI::on_pushButtonTemplateDifferentialCorrections_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot1Condition->setCurrentIndex(18);
+    ui->comboBoxPlot1Condition->setCurrentIndex(24);
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("7");
+    ui->lineEditPlot1Ycolumn->setText("8");
     ui->lineEditPlot1LegendLabel->setText("All PRN");
     // Plot Nr. 2
     ui->comboBoxPlot2ColorLine->setCurrentIndex(1);    // Plot Nr. 3
@@ -2760,9 +2434,9 @@ void gLAB_GUI::on_pushButtonTemplateSigmaPRC_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(1);
-    ui->comboBoxPlot1Condition->setCurrentIndex(18);
+    ui->comboBoxPlot1Condition->setCurrentIndex(24);
     ui->lineEditPlot1Xcolumn->setText("4");
-    ui->lineEditPlot1Ycolumn->setText("13");
+    ui->lineEditPlot1Ycolumn->setText("14");
     ui->lineEditPlot1LegendLabel->setText("All PRN");
     // Plot Nr. 2
     ui->comboBoxPlot2ColorLine->setCurrentIndex(2);
@@ -2785,25 +2459,25 @@ void gLAB_GUI::on_pushButtonTemplateHplHpeSat_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(17);
-    ui->lineEditPlot1Xcolumn->setText("6");
-    ui->lineEditPlot1Ycolumn->setText("13");
+    ui->comboBoxPlot1Condition->setCurrentIndex(23);
+    ui->lineEditPlot1Xcolumn->setText("4");
+    ui->lineEditPlot1Ycolumn->setText("15");
     ui->lineEditPlot1LegendLabel->setText("HPE");
     // Plot Nr. 2
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot2Condition->setCurrentIndex(17);
-    ui->lineEditPlot2Xcolumn->setText("6");
-    ui->lineEditPlot2Ycolumn->setText("14");
+    ui->comboBoxPlot2Condition->setCurrentIndex(23);
+    ui->lineEditPlot2Xcolumn->setText("4");
+    ui->lineEditPlot2Ycolumn->setText("16");
     ui->lineEditPlot2LegendLabel->setText("HPL");
     // Plot Nr. 3
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot3SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot3SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot3TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot3Condition->setCurrentIndex(17);
-    ui->lineEditPlot3Xcolumn->setText("6");
-    ui->lineEditPlot3Ycolumn->setText("19");
+    ui->comboBoxPlot3Condition->setCurrentIndex(23);
+    ui->lineEditPlot3Xcolumn->setText("4");
+    ui->lineEditPlot3Ycolumn->setText("24");
     ui->lineEditPlot3LegendLabel->setText("NSAT");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
@@ -2822,25 +2496,25 @@ void gLAB_GUI::on_pushButtonTemplateVplVpeSat_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(17);
-    ui->lineEditPlot1Xcolumn->setText("6");
-    ui->lineEditPlot1Ycolumn->setText("15");
+    ui->comboBoxPlot1Condition->setCurrentIndex(23);
+    ui->lineEditPlot1Xcolumn->setText("4");
+    ui->lineEditPlot1Ycolumn->setText("18");
     ui->lineEditPlot1LegendLabel->setText("VPE");
     // Plot Nr. 2
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot2SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot2SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot2TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot2Condition->setCurrentIndex(17);
-    ui->lineEditPlot2Xcolumn->setText("6");
-    ui->lineEditPlot2Ycolumn->setText("16");
+    ui->comboBoxPlot2Condition->setCurrentIndex(23);
+    ui->lineEditPlot2Xcolumn->setText("4");
+    ui->lineEditPlot2Ycolumn->setText("19");
     ui->lineEditPlot2LegendLabel->setText("VPL");
     // Plot Nr. 3
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot3SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot3SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot3TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot3Condition->setCurrentIndex(17);
-    ui->lineEditPlot3Xcolumn->setText("6");
-    ui->lineEditPlot3Ycolumn->setText("19");
+    ui->comboBoxPlot3Condition->setCurrentIndex(23);
+    ui->lineEditPlot3Xcolumn->setText("4");
+    ui->lineEditPlot3Ycolumn->setText("24");
     ui->lineEditPlot3LegendLabel->setText("NSAT");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
@@ -2860,9 +2534,9 @@ void gLAB_GUI::on_pushButtonHorStanfordPlot_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(17);
-    ui->lineEditPlot1Xcolumn->setText("13");
-    ui->lineEditPlot1Ycolumn->setText("14");
+    ui->comboBoxPlot1Condition->setCurrentIndex(23);
+    ui->lineEditPlot1Xcolumn->setText("15");
+    ui->lineEditPlot1Ycolumn->setText("16");
 
     //Disable options not available for Stanford-Plot
     ui->radioButtonPlotNr2->setDisabled(true);
@@ -2873,7 +2547,6 @@ void gLAB_GUI::on_pushButtonHorStanfordPlot_clicked() {
     ui->lineEditPlot1Condition->setDisabled(true);
     ui->comboBoxPlot1TypeLine->setDisabled(true);
     ui->comboBoxPlot1ColorLine->setDisabled(true);
-    ui->comboBoxPlot1Xsbasout->setDisabled(true);
     ui->lineEditPlot1Xcolumn->setDisabled(true);
     ui->lineEditPlot1Ycolumn->setDisabled(true);
     ui->lineEditPlot1LegendLabel->setDisabled(true);
@@ -2904,9 +2577,9 @@ void gLAB_GUI::on_pushButtonVerStanfordPlot_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(17);
-    ui->lineEditPlot1Xcolumn->setText("15");
-    ui->lineEditPlot1Ycolumn->setText("16");
+    ui->comboBoxPlot1Condition->setCurrentIndex(23);
+    ui->lineEditPlot1Xcolumn->setText("18");
+    ui->lineEditPlot1Ycolumn->setText("19");
 
     //Disable options not available for Stanford-Plot
     ui->radioButtonPlotNr2->setDisabled(true);
@@ -2917,7 +2590,6 @@ void gLAB_GUI::on_pushButtonVerStanfordPlot_clicked() {
     ui->lineEditPlot1Condition->setDisabled(true);
     ui->comboBoxPlot1TypeLine->setDisabled(true);
     ui->comboBoxPlot1ColorLine->setDisabled(true);
-    ui->comboBoxPlot1Xsbasout->setDisabled(true);
     ui->lineEditPlot1Xcolumn->setDisabled(true);
     ui->lineEditPlot1Ycolumn->setDisabled(true);
     ui->lineEditPlot1LegendLabel->setDisabled(true);
@@ -2961,7 +2633,6 @@ void gLAB_GUI::on_pushButtonStanfordESAPlot_clicked() {
     ui->lineEditPlot1Condition->setDisabled(true);
     ui->comboBoxPlot1TypeLine->setDisabled(true);
     ui->comboBoxPlot1ColorLine->setDisabled(true);
-    ui->comboBoxPlot1Xsbasout->setDisabled(true);
     ui->lineEditPlot1Xcolumn->setDisabled(true);
     ui->lineEditPlot1Ycolumn->setDisabled(true);
     ui->lineEditPlot1LegendLabel->setDisabled(true);
@@ -2986,7 +2657,6 @@ void gLAB_GUI::on_pushButtonStanfordESAPlot_clicked() {
 void gLAB_GUI::on_pushButtonTemplateSBASModelComponents_clicked() {
     // Global Graphic Configuration
     this->on_pushButtonPlotClear_clicked();
-    ui->lineEditPlotTitle->setText("SBAS Model Components");
     ui->lineEditPlotXLabel->setText("Time (s)");
     ui->lineEditPlotYLabel->setText("Model (m)");
     //Hide options for Stanford-Plot percentiles
@@ -2994,10 +2664,20 @@ void gLAB_GUI::on_pushButtonTemplateSBASModelComponents_clicked() {
     // Plot Nr. 1
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
-    ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(13);
-    ui->lineEditPlot1Xcolumn->setText("8");
-    ui->lineEditPlot1Ycolumn->setText("23");
+
+    if (ui->labelCurrentTemplate->text()=="SBAS 1F") {
+        ui->lineEditPlotTitle->setText("SBAS 1F Model Components");
+        ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
+        ui->comboBoxPlot1Condition->setCurrentIndex(16);
+        ui->lineEditPlot1Xcolumn->setText("4");
+        ui->lineEditPlot1Ycolumn->setText("27");
+    } else if (ui->labelCurrentTemplate->text()=="SBAS DFMC") {
+        ui->lineEditPlotTitle->setText("SBAS DFMC Model Components");
+        ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
+        ui->comboBoxPlot1Condition->setCurrentIndex(20);
+        ui->lineEditPlot1Xcolumn->setText("4");
+        ui->lineEditPlot1Ycolumn->setText("27");
+    }
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
 }
@@ -3006,7 +2686,6 @@ void gLAB_GUI::on_pushButtonTemplateSBASModelComponents_clicked() {
 void gLAB_GUI::on_pushButtonTemplateSBASSigmaComponents_clicked() {
     // Global Graphic Configuration
     this->on_pushButtonPlotClear_clicked();
-    ui->lineEditPlotTitle->setText("SBAS Sigma Components");
     ui->lineEditPlotXLabel->setText("Time (s)");
     ui->lineEditPlotYLabel->setText("Sigma (m)");
     //Hide options for Stanford-Plot percentiles
@@ -3014,10 +2693,19 @@ void gLAB_GUI::on_pushButtonTemplateSBASSigmaComponents_clicked() {
     // Plot Nr. 1
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
-    ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(14);
-    ui->lineEditPlot1Xcolumn->setText("8");
-    ui->lineEditPlot1Ycolumn->setText("12");
+    if (ui->labelCurrentTemplate->text()=="SBAS 1F") {
+        ui->lineEditPlotTitle->setText("SBAS 1F Sigma Components");
+        ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
+        ui->comboBoxPlot1Condition->setCurrentIndex(17);
+        ui->lineEditPlot1Xcolumn->setText("4");
+        ui->lineEditPlot1Ycolumn->setText("16");
+    } else if (ui->labelCurrentTemplate->text()=="SBAS DFMC") {
+        ui->lineEditPlotTitle->setText("SBAS DFMC Sigma Components");
+        ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
+        ui->comboBoxPlot1Condition->setCurrentIndex(21);
+        ui->lineEditPlot1Xcolumn->setText("4");
+        ui->lineEditPlot1Ycolumn->setText("16");
+    }
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
 }
@@ -3035,8 +2723,8 @@ void gLAB_GUI::on_pushButtonTemplateSBASIonoComponents_clicked() {
     if ( ui->lineEditOutputDestination->text() == "" ) ui->lineEditPlot1SourceFile->setText(QDir::toNativeSeparators(qApp->applicationDirPath() + "/gLAB.out"));
     else ui->lineEditPlot1SourceFile->setText(ui->lineEditOutputDestination->text());
     ui->comboBoxPlot1TypeLine->setCurrentIndex(8);
-    ui->comboBoxPlot1Condition->setCurrentIndex(15);
-    ui->lineEditPlot1Xcolumn->setText("8");
+    ui->comboBoxPlot1Condition->setCurrentIndex(18);
+    ui->lineEditPlot1Xcolumn->setText("4");
     ui->lineEditPlot1Ycolumn->setText("64");
     // Enable the plot button
     ui->pushButtonPlot->setEnabled(true);
@@ -3052,6 +2740,7 @@ void gLAB_GUI::labelPlot1SourceFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Plot 1 Source File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -3076,15 +2765,15 @@ void gLAB_GUI::labelPlot1SourceFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditPlot1SourceFile->text() == "") {
-            messageBox.warning(0, "Error","Plot 1 file is empty\n");
+            messageBox.warning(nullptr, "Error","Plot 1 file is empty\n");
         } else if (this->fileExists(ui->lineEditPlot1SourceFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPlot1SourceFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPlot1SourceFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPlot1SourceFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPlot1SourceFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -3100,6 +2789,7 @@ void gLAB_GUI::labelPlot2SourceFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Plot 2 Source File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -3124,15 +2814,15 @@ void gLAB_GUI::labelPlot2SourceFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditPlot2SourceFile->text() == "") {
-            messageBox.warning(0, "Error","Plot 2 file is empty\n");
+            messageBox.warning(nullptr, "Error","Plot 2 file is empty\n");
         } else if (this->fileExists(ui->lineEditPlot2SourceFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPlot2SourceFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPlot2SourceFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPlot2SourceFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPlot2SourceFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -3148,6 +2838,7 @@ void gLAB_GUI::labelPlot3SourceFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Plot 3 Source File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -3170,17 +2861,17 @@ void gLAB_GUI::labelPlot3SourceFileMenu(const QPoint& pos) { // this is a slot
             arguments << "-t" << ui->lineEditPlot3SourceFile->text();
         #endif
 
-        // Execute the program            
+        // Execute the program
         if (ui->lineEditPlot3SourceFile->text() == "") {
-            messageBox.warning(0, "Error","Plot 3 file is empty\n");
+            messageBox.warning(nullptr, "Error","Plot 3 file is empty\n");
         } else if (this->fileExists(ui->lineEditPlot3SourceFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPlot3SourceFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPlot3SourceFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPlot3SourceFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPlot3SourceFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -3196,6 +2887,7 @@ void gLAB_GUI::labelPlot4SourceFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Plot 4 Source File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -3220,15 +2912,15 @@ void gLAB_GUI::labelPlot4SourceFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditPlot4SourceFile->text() == "") {
-            messageBox.warning(0, "Error","Plot 4 file is empty\n");
+            messageBox.warning(nullptr, "Error","Plot 4 file is empty\n");
         } else if (this->fileExists(ui->lineEditPlot4SourceFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPlot4SourceFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPlot4SourceFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPlot4SourceFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPlot4SourceFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }

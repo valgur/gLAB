@@ -15,13 +15,25 @@
 
 #include "glab_gui.h"
 #include "ui_glab_gui.h"
+#include "math.h"
+
+
+
+//Function to show or hide start time
+void gLAB_GUI::on_checkBoxStartTimeShowOrbits_clicked(bool checked) {
+    ui->frame_StartTimeCalendar_ShowOrbits->setHidden(!checked);
+}
+
+//Function to show or hide end time
+void gLAB_GUI::on_checkBoxEndTimeShowOrbits_clicked(bool checked) {
+    ui->frame_EndTimeCalendar_ShowOrbits->setHidden(!checked);
+}
 
 // Function to show or hide the ANTEX input
 void gLAB_GUI::on_checkBoxAntexShowOrbitFile_clicked(bool checked) {
     ui->checkBoxAntexShowOrbitFile->setChecked(checked);
     ui->frameAntexShowOrbitLineEditFile->setHidden(!checked);
 }
-
 
 // Function for showing lineEdit for Navigation File
 void gLAB_GUI::on_radioButtonOrbitNavShowOrbitFile_clicked() {
@@ -31,6 +43,8 @@ void gLAB_GUI::on_radioButtonOrbitNavShowOrbitFile_clicked() {
     ui->radioButtonOrbitPrecise2filesShowOrbitFile->setChecked(false);
     ui->groupBoAntexFileShowOrbit->setHidden(true);
     ui->groupBoxPreciseProductsInterpolationShowOrbit->setHidden(true);
+    ui->groupBoxShowNavMessageTypes->setHidden(false);
+    this->on_pushButtonShowNavMessageTypesSetDefault_clicked();
 }
 
 // Function for showing lineEdit for SP3 File
@@ -41,6 +55,7 @@ void gLAB_GUI::on_radioButtonOrbitPrecise1filesShowOrbitFile_clicked() {
     ui->radioButtonOrbitPrecise2filesShowOrbitFile->setChecked(false);
     ui->groupBoAntexFileShowOrbit->setHidden(false);
     ui->groupBoxPreciseProductsInterpolationShowOrbit->setHidden(false);
+    ui->groupBoxShowNavMessageTypes->setHidden(true);
 }
 
 // Function for showing lineEdit for SP3+CLK File
@@ -51,6 +66,7 @@ void gLAB_GUI::on_radioButtonOrbitPrecise2filesShowOrbitFile_clicked() {
     ui->radioButtonOrbitPrecise2filesShowOrbitFile->setChecked(true);
     ui->groupBoAntexFileShowOrbit->setHidden(false);
     ui->groupBoxPreciseProductsInterpolationShowOrbit->setHidden(false);
+    ui->groupBoxShowNavMessageTypes->setHidden(true);
 }
 
 //Function to show or hide concatenated SP3/CLK options
@@ -66,7 +82,7 @@ void gLAB_GUI::on_pushButtonRinexNavShowOrbitFile_clicked() {
     QFileDialog dialog(this);
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setViewMode(QFileDialog::Detail);
-    dialog.setNameFilter(tr("Broadcast Files (*.[0-9][0-9][np] *n.rnx);;All Files (*.*)"));
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
     QStringList fileName;
     if ( dialog.exec() ) {
         fileName = dialog.selectedFiles();
@@ -192,6 +208,7 @@ void gLAB_GUI::labelShowOrbitRinexNavFileMenu(const QPoint& pos) { // this is a 
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open RINEX Navigation File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -216,15 +233,15 @@ void gLAB_GUI::labelShowOrbitRinexNavFileMenu(const QPoint& pos) { // this is a 
 
         // Execute the program
         if (ui->lineEditNavShowOrbitFile->text() == "") {
-            messageBox.warning(0, "Error","RINEX Navigation file is empty\n");
+            messageBox.warning(nullptr, "Error","RINEX Navigation file is empty\n");
         } else if (this->fileExists(ui->lineEditNavShowOrbitFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditNavShowOrbitFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditNavShowOrbitFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditNavShowOrbitFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditNavShowOrbitFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -240,6 +257,7 @@ void gLAB_GUI::labelShowOrbitSP3OrbitsClocksFileMenu(const QPoint& pos) { // thi
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SP3 File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -264,15 +282,15 @@ void gLAB_GUI::labelShowOrbitSP3OrbitsClocksFileMenu(const QPoint& pos) { // thi
 
         // Execute the program
         if (ui->lineEditPreciseFilesShowOrbitSP3File->text() == "") {
-            messageBox.warning(0, "Error","SP3 file is empty\n");
+            messageBox.warning(nullptr, "Error","SP3 file is empty\n");
         } else if  (this->fileExists(ui->lineEditPreciseFilesShowOrbitSP3File->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitSP3File->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitSP3File->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitSP3File->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitSP3File->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -288,6 +306,7 @@ void gLAB_GUI::labelShowOrbitSP3OrbitsFileMenu(const QPoint& pos) { // this is a
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SP3 File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -312,15 +331,15 @@ void gLAB_GUI::labelShowOrbitSP3OrbitsFileMenu(const QPoint& pos) { // this is a
 
         // Execute the program
         if (ui->lineEditPreciseFilesShowOrbitOrbFile->text() == "") {
-            messageBox.warning(0, "Error","SP3 file is empty\n");
+            messageBox.warning(nullptr, "Error","SP3 file is empty\n");
         } else if (this->fileExists(ui->lineEditPreciseFilesShowOrbitOrbFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitOrbFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitOrbFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitOrbFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitOrbFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -336,6 +355,7 @@ void gLAB_GUI::labelShowOrbitClocksFileMenu(const QPoint& pos) { // this is a sl
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Clock File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -360,15 +380,15 @@ void gLAB_GUI::labelShowOrbitClocksFileMenu(const QPoint& pos) { // this is a sl
 
         // Execute the program
         if (ui->lineEditPreciseFilesShowOrbitClkFile->text() == "") {
-            messageBox.warning(0, "Error","Clock file is empty\n");
+            messageBox.warning(nullptr, "Error","Clock file is empty\n");
         } else if (this->fileExists(ui->lineEditPreciseFilesShowOrbitClkFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitClkFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitClkFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitClkFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPreciseFilesShowOrbitClkFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -384,6 +404,7 @@ void gLAB_GUI::checkBoxAntexShowOrbitFileMenu(const QPoint& pos) { // this is a 
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open ANTEX File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -408,15 +429,15 @@ void gLAB_GUI::checkBoxAntexShowOrbitFileMenu(const QPoint& pos) { // this is a 
 
         // Execute the program
         if (ui->lineEditAntexShowOrbitFile->text() == "") {
-            messageBox.warning(0, "Error","ANTEX file is empty\n");
+            messageBox.warning(nullptr, "Error","ANTEX file is empty\n");
         } else if (this->fileExists(ui->lineEditAntexShowOrbitFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditAntexShowOrbitFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditAntexShowOrbitFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditAntexShowOrbitFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditAntexShowOrbitFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -432,6 +453,7 @@ void gLAB_GUI::labelShowOrbitOutputFileMenu(const QPoint& pos) { // this is a sl
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Output File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -457,26 +479,332 @@ void gLAB_GUI::labelShowOrbitOutputFileMenu(const QPoint& pos) { // this is a sl
 
         // Execute the program
         if (ui->lineEditOutputFileShowOrbit->text() == "") {
-            messageBox.warning(0, "Error","Output file is empty\n");
+            messageBox.warning(nullptr, "Error","Output file is empty\n");
         } else if (this->fileExists(ui->lineEditOutputFileShowOrbit->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputFileShowOrbit->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputFileShowOrbit->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditOutputFileShowOrbit->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditOutputFileShowOrbit->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
     }
 }
+
+void gLAB_GUI::on_groupBoxEleAziSpecify_clicked(bool checked){
+    ui->groupBoxEleAziSpecify->setChecked(checked);
+    ui->frameEleAziSpecify->setHidden(!checked);
+}
+void gLAB_GUI::on_radioButtonEleAziSpecifyUserCartesian_clicked() {
+    ui->radioButtonEleAziSpecifyUserCartesian->setChecked(true);
+    ui->stackedWidgetEleAziSpecifyCoordinatesType->setCurrentIndex(0);
+}
+
+void gLAB_GUI::on_radioButtonEleAziSpecifyUserGeodetic_clicked() {
+    ui->radioButtonEleAziSpecifyUserGeodetic->setChecked(true);
+    ui->stackedWidgetEleAziSpecifyCoordinatesType->setCurrentIndex(1);
+}
+
+void gLAB_GUI::selectGNSS_ShowNavMessageTypes(int selectFlag,int iGNSS){
+    if (selectFlag>0){
+        //GPS
+        if (iGNSS==GPS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeGPS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeGPS->item(0,i)->setText(NavMessageTypes[GPS][0][i]);
+            ui->tableWidgetShowNavMessageTypeGPS->item(0,i)->setBackground(gnssSelected);
+        }
+        //Galileo
+        if (iGNSS==Galileo) for (int i=0; i<ui->tableWidgetShowNavMessageTypeGalileo->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->setText(NavMessageTypes[Galileo][0][i]);
+            ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->setBackground(gnssSelected);
+        }
+        //GLONASS
+        if (iGNSS==GLONASS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeGLONASS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeGLONASS->item(0,i)->setText(NavMessageTypes[GLONASS][0][i]);
+            ui->tableWidgetShowNavMessageTypeGLONASS->item(0,i)->setBackground(gnssSelected);
+        }
+        //GEO
+        if (iGNSS==GEO) for (int i=0; i<ui->tableWidgetShowNavMessageTypeGEO->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeGEO->item(0,i)->setText(NavMessageTypes[GEO][0][i]);
+            ui->tableWidgetShowNavMessageTypeGEO->item(0,i)->setBackground(gnssSelected);
+        }
+        //BDS
+        if (iGNSS==BDS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeBDS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeBDS->item(0,i)->setText(NavMessageTypes[BDS][0][i]);
+            ui->tableWidgetShowNavMessageTypeBDS->item(0,i)->setBackground(gnssSelected);
+        }
+        //QZSS
+        if (iGNSS==QZSS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeQZSS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeQZSS->item(0,i)->setText(NavMessageTypes[QZSS][0][i]);
+            ui->tableWidgetShowNavMessageTypeQZSS->item(0,i)->setBackground(gnssSelected);
+        }
+        //IRNSS
+        if (iGNSS==IRNSS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeIRNSS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeIRNSS->item(0,i)->setText(NavMessageTypes[IRNSS][0][i]);
+            ui->tableWidgetShowNavMessageTypeIRNSS->item(0,i)->setBackground(gnssSelected);
+        }
+    } else {
+        //GPS
+        if (iGNSS==GPS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeGPS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeGPS->item(0,i)->setText(NavMessageTypes[GPS][0][i]);
+            ui->tableWidgetShowNavMessageTypeGPS->item(0,i)->setBackground(gnssUnSelected);
+        }
+        //Galileo
+        if (iGNSS==Galileo) for (int i=0; i<ui->tableWidgetShowNavMessageTypeGalileo->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->setText(NavMessageTypes[Galileo][0][i]);
+            ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->setBackground(gnssUnSelected);
+        }
+        //GLONASS
+        if (iGNSS==GLONASS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeGLONASS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeGLONASS->item(0,i)->setText(NavMessageTypes[GLONASS][0][i]);
+            ui->tableWidgetShowNavMessageTypeGLONASS->item(0,i)->setBackground(gnssUnSelected);
+        }
+        //GEO
+        if (iGNSS==GEO) for (int i=0; i<ui->tableWidgetShowNavMessageTypeGEO->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeGEO->item(0,i)->setText(NavMessageTypes[GEO][0][i]);
+            ui->tableWidgetShowNavMessageTypeGEO->item(0,i)->setBackground(gnssUnSelected);
+        }
+        //BDS
+        if (iGNSS==BDS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeBDS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeBDS->item(0,i)->setText(NavMessageTypes[BDS][0][i]);
+            ui->tableWidgetShowNavMessageTypeBDS->item(0,i)->setBackground(gnssUnSelected);
+        }
+        //QZSS
+        if (iGNSS==QZSS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeQZSS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeQZSS->item(0,i)->setText(NavMessageTypes[QZSS][0][i]);
+            ui->tableWidgetShowNavMessageTypeQZSS->item(0,i)->setBackground(gnssUnSelected);
+        }
+        //IRNSS
+        if (iGNSS==IRNSS) for (int i=0; i<ui->tableWidgetShowNavMessageTypeIRNSS->columnCount();i++){
+            ui->tableWidgetShowNavMessageTypeIRNSS->item(0,i)->setText(NavMessageTypes[IRNSS][0][i]);
+            ui->tableWidgetShowNavMessageTypeIRNSS->item(0,i)->setBackground(gnssUnSelected);
+        }
+    }
+}
+void gLAB_GUI::on_pushButtonShowNavMessageTypesSetDefault_clicked(){
+    //GPS
+    for (int i=0; i<ui->tableWidgetShowNavMessageTypeGPS->columnCount();i++){
+        ui->tableWidgetShowNavMessageTypeGPS->item(0,i)->setText(NavMessageTypes[GPS][0][i]);
+        ui->tableWidgetShowNavMessageTypeGPS->item(0,i)->setBackground(gnssSelected);
+    }
+    //Galileo
+    for (int i=0; i<ui->tableWidgetShowNavMessageTypeGalileo->columnCount();i++){
+        ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->setText(NavMessageTypes[Galileo][0][i]);
+        ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->setBackground(gnssSelected);
+    }
+    //GLONASS
+    for (int i=0; i<ui->tableWidgetShowNavMessageTypeGLONASS->columnCount();i++){
+        ui->tableWidgetShowNavMessageTypeGLONASS->item(0,i)->setText(NavMessageTypes[GLONASS][0][i]);
+        ui->tableWidgetShowNavMessageTypeGLONASS->item(0,i)->setBackground(gnssSelected);
+    }
+    //GEO
+    for (int i=0; i<ui->tableWidgetShowNavMessageTypeGEO->columnCount();i++){
+        ui->tableWidgetShowNavMessageTypeGEO->item(0,i)->setText(NavMessageTypes[GEO][0][i]);
+        ui->tableWidgetShowNavMessageTypeGEO->item(0,i)->setBackground(gnssSelected);
+    }
+    //BDS
+    for (int i=0; i<ui->tableWidgetShowNavMessageTypeBDS->columnCount();i++){
+        ui->tableWidgetShowNavMessageTypeBDS->item(0,i)->setText(NavMessageTypes[BDS][0][i]);
+        ui->tableWidgetShowNavMessageTypeBDS->item(0,i)->setBackground(gnssSelected);
+    }
+    //QZSS
+    for (int i=0; i<ui->tableWidgetShowNavMessageTypeQZSS->columnCount();i++){
+        ui->tableWidgetShowNavMessageTypeQZSS->item(0,i)->setText(NavMessageTypes[QZSS][0][i]);
+        ui->tableWidgetShowNavMessageTypeQZSS->item(0,i)->setBackground(gnssSelected);
+    }
+    //IRNSS
+    for (int i=0; i<ui->tableWidgetShowNavMessageTypeIRNSS->columnCount();i++){
+        ui->tableWidgetShowNavMessageTypeIRNSS->item(0,i)->setText(NavMessageTypes[IRNSS][0][i]);
+        ui->tableWidgetShowNavMessageTypeIRNSS->item(0,i)->setBackground(gnssSelected);
+    }
+
+    on_checkBoxShowNavMessageTypeGPS_clicked(true);
+    on_checkBoxShowNavMessageTypeGalileo_clicked(true);
+    on_checkBoxShowNavMessageTypeGLONASS_clicked(true);
+    on_checkBoxShowNavMessageTypeGEO_clicked(true);
+    on_checkBoxShowNavMessageTypeBDS_clicked(true);
+    on_checkBoxShowNavMessageTypeQZSS_clicked(true);
+    on_checkBoxShowNavMessageTypeIRNSS_clicked(true);
+    ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGLONASS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGEO->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeBDS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeQZSS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeIRNSS->setCurrentItem(nullptr);
+    ui->lineEditShowNavFreshTime->setText(DEFAULT_PREFERRED_NAV_TIME);
+}
+void gLAB_GUI::on_pushButtonShowNavMessageTypesBoost_clicked(){
+    //GPS
+    if (ui->tableWidgetShowNavMessageTypeGPS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGPS,ui->tableWidgetShowNavMessageTypeGPS->currentColumn(),ui->tableWidgetShowNavMessageTypeGPS->currentColumn()-1,0);
+    }
+    //Galileo
+    if (ui->tableWidgetShowNavMessageTypeGalileo->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGalileo,ui->tableWidgetShowNavMessageTypeGalileo->currentColumn(),ui->tableWidgetShowNavMessageTypeGalileo->currentColumn()-1,0);
+    }
+    //GLONASS
+    if (ui->tableWidgetShowNavMessageTypeGLONASS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGLONASS,ui->tableWidgetShowNavMessageTypeGLONASS->currentColumn(),ui->tableWidgetShowNavMessageTypeGLONASS->currentColumn()-1,0);
+    }
+    //GEO
+    if (ui->tableWidgetShowNavMessageTypeGEO->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGEO,ui->tableWidgetShowNavMessageTypeGEO->currentColumn(),ui->tableWidgetShowNavMessageTypeGEO->currentColumn()-1,0);
+    }
+    //BDS
+    if (ui->tableWidgetShowNavMessageTypeBDS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeBDS,ui->tableWidgetShowNavMessageTypeBDS->currentColumn(),ui->tableWidgetShowNavMessageTypeBDS->currentColumn()-1,0);
+    }
+    //QZSS
+    if (ui->tableWidgetShowNavMessageTypeQZSS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeQZSS,ui->tableWidgetShowNavMessageTypeQZSS->currentColumn(),ui->tableWidgetShowNavMessageTypeQZSS->currentColumn()-1,0);
+    }
+    //IRNSS
+    if (ui->tableWidgetShowNavMessageTypeIRNSS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeIRNSS,ui->tableWidgetShowNavMessageTypeIRNSS->currentColumn(),ui->tableWidgetShowNavMessageTypeIRNSS->currentColumn()-1,0);
+    }
+}
+void gLAB_GUI::on_pushButtonShowNavMessageTypesLower_clicked(){
+    //GPS
+    if (ui->tableWidgetShowNavMessageTypeGPS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGPS,ui->tableWidgetShowNavMessageTypeGPS->currentColumn(),ui->tableWidgetShowNavMessageTypeGPS->currentColumn()+1,0);
+    }
+    //Galileo
+    if (ui->tableWidgetShowNavMessageTypeGalileo->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGalileo,ui->tableWidgetShowNavMessageTypeGalileo->currentColumn(),ui->tableWidgetShowNavMessageTypeGalileo->currentColumn()+1,0);
+    }
+    //GLONASS
+    if (ui->tableWidgetShowNavMessageTypeGLONASS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGLONASS,ui->tableWidgetShowNavMessageTypeGLONASS->currentColumn(),ui->tableWidgetShowNavMessageTypeGLONASS->currentColumn()+1,0);
+    }
+    //GEO
+    if (ui->tableWidgetShowNavMessageTypeGEO->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGEO,ui->tableWidgetShowNavMessageTypeGEO->currentColumn(),ui->tableWidgetShowNavMessageTypeGEO->currentColumn()+1,0);
+    }
+    //BDS
+    if (ui->tableWidgetShowNavMessageTypeBDS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeBDS,ui->tableWidgetShowNavMessageTypeBDS->currentColumn(),ui->tableWidgetShowNavMessageTypeBDS->currentColumn()+1,0);
+    }
+    //QZSS
+    if (ui->tableWidgetShowNavMessageTypeQZSS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeQZSS,ui->tableWidgetShowNavMessageTypeQZSS->currentColumn(),ui->tableWidgetShowNavMessageTypeQZSS->currentColumn()+1,0);
+    }
+    //IRNSS
+    if (ui->tableWidgetShowNavMessageTypeIRNSS->currentColumn()>=0){
+        this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeIRNSS,ui->tableWidgetShowNavMessageTypeIRNSS->currentColumn(),ui->tableWidgetShowNavMessageTypeIRNSS->currentColumn()-1,0);
+    }
+}
+void gLAB_GUI::on_checkBoxShowNavMessageTypeGPS_clicked(bool checked){
+    ui->checkBoxShowNavMessageTypeGPS->setChecked(checked);
+    if (checked==true) ui->tableWidgetShowNavMessageTypeGPS->setHidden(false);
+    else ui->tableWidgetShowNavMessageTypeGPS->setHidden(true);
+    ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_checkBoxShowNavMessageTypeGLONASS_clicked(bool checked){
+    ui->checkBoxShowNavMessageTypeGLONASS->setChecked(checked);
+    if (checked==true) ui->tableWidgetShowNavMessageTypeGLONASS->setHidden(false);
+    else ui->tableWidgetShowNavMessageTypeGLONASS->setHidden(true);
+    ui->tableWidgetShowNavMessageTypeGLONASS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_checkBoxShowNavMessageTypeGalileo_clicked(bool checked){
+    ui->checkBoxShowNavMessageTypeGalileo->setChecked(checked);
+    if (checked==true) ui->tableWidgetShowNavMessageTypeGalileo->setHidden(false);
+    else ui->tableWidgetShowNavMessageTypeGalileo->setHidden(true);
+    ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_checkBoxShowNavMessageTypeGEO_clicked(bool checked){
+    ui->checkBoxShowNavMessageTypeGEO->setChecked(checked);
+    if (checked==true) ui->tableWidgetShowNavMessageTypeGEO->setHidden(false);
+    else ui->tableWidgetShowNavMessageTypeGEO->setHidden(true);
+    ui->tableWidgetShowNavMessageTypeGEO->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_checkBoxShowNavMessageTypeBDS_clicked(bool checked){
+    ui->checkBoxShowNavMessageTypeBDS->setChecked(checked);
+    if (checked==true) ui->tableWidgetShowNavMessageTypeBDS->setHidden(false);
+    else ui->tableWidgetShowNavMessageTypeBDS->setHidden(true);
+    ui->tableWidgetShowNavMessageTypeBDS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_checkBoxShowNavMessageTypeQZSS_clicked(bool checked){
+    ui->checkBoxShowNavMessageTypeQZSS->setChecked(checked);
+    if (checked==true) ui->tableWidgetShowNavMessageTypeQZSS->setHidden(false);
+    else ui->tableWidgetShowNavMessageTypeQZSS->setHidden(true);
+    ui->tableWidgetShowNavMessageTypeQZSS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_checkBoxShowNavMessageTypeIRNSS_clicked(bool checked){
+    ui->checkBoxShowNavMessageTypeIRNSS->setChecked(checked);
+    if (checked==true) ui->tableWidgetShowNavMessageTypeIRNSS->setHidden(false);
+    else ui->tableWidgetShowNavMessageTypeIRNSS->setHidden(true);
+    ui->tableWidgetShowNavMessageTypeIRNSS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_tableWidgetShowNavMessageTypeGPS_clicked(){
+    ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGLONASS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGEO->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeBDS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeQZSS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeIRNSS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_tableWidgetShowNavMessageTypeGalileo_clicked(){
+    ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGLONASS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGEO->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeBDS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeQZSS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeIRNSS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_tableWidgetShowNavMessageTypeGLONASS_clicked(){
+    ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGEO->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeBDS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeQZSS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeIRNSS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_tableWidgetShowNavMessageTypeGEO_clicked(){
+    ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGLONASS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeBDS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeQZSS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeIRNSS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_tableWidgetShowNavMessageTypeBDS_clicked(){
+    ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGLONASS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGEO->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeQZSS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeIRNSS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_tableWidgetShowNavMessageTypeQZSS_clicked(){
+    ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGLONASS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGEO->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeBDS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeIRNSS->setCurrentItem(nullptr);
+}
+void gLAB_GUI::on_tableWidgetShowNavMessageTypeIRNSS_clicked(){
+    ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGLONASS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeGEO->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeBDS->setCurrentItem(nullptr);
+    ui->tableWidgetShowNavMessageTypeQZSS->setCurrentItem(nullptr);
+}
+
 ///////////////// End of Context menus (right-click menus) //////////////////
 
 void gLAB_GUI::getshowOrbitOptions(QString *errorString, QString *warningString, QString *saveString, QStringList *runString) {
 
-    int NumMessages=1;
-    int SP3File=0;
+    QDate       date;
+    QTime       time;
+    int         NumMessages=1;
+    int         SP3File=0;
+    int         badDate=0;
+
     *errorString = "";
     *warningString="";
     *saveString = "";
@@ -491,8 +819,196 @@ void gLAB_GUI::getshowOrbitOptions(QString *errorString, QString *warningString,
         } else if (this->checknonASCIIcharacters(ui->lineEditNavShowOrbitFile->text())==1) {
             *errorString += "Navigation source file has non ASCII characters\n";
         } else {
-            *saveString += "-input:nav " + ui->lineEditNavShowOrbitFile->text()+ "\n";
+            *saveString += "-input:nav " + ui->lineEditNavShowOrbitFile->text() + "\n";
             *runString <<  "-input:nav" << ui->lineEditNavShowOrbitFile->text();
+        }
+        //Navigation Message Type
+        //GPS
+        QString cmdNavMT="",cmdNavMT2="";
+        int cmdOK=0,nOk=0;
+        if (ui->checkBoxShowNavMessageTypeGPS->isChecked()) {
+            for (int i=0; i<ui->tableWidgetShowNavMessageTypeGPS->columnCount();i++){
+                if (ui->tableWidgetShowNavMessageTypeGPS->item(0,i)->text()!=NavMessageTypes[GPS][0][i]) cmdOK=1;
+                if (ui->tableWidgetShowNavMessageTypeGPS->item(0,i)->background().color().name()==RedColor) {
+                    if (i>0) cmdOK=1;
+                    break;
+                }
+                cmdNavMT += ui->tableWidgetShowNavMessageTypeGPS->item(0,i)->text() + ",";
+                nOk++;
+            }
+            if (cmdOK==1){
+                cmdNavMT.chop(1);
+                if ( nOk==ui->tableWidgetShowNavMessageTypeGPS->columnCount() && ui->tableWidgetShowNavMessageTypeGPS->item(0,0)->text()=="CNAV" ) {
+                    *saveString += "-model:brdc:gps PreferCNAV\n";
+                    *runString << "-model:brdc:gps" << "PreferCNAV";
+                } else {
+                    *saveString += "-model:brdc:gps " + cmdNavMT + "\n";
+                    *runString << "-model:brdc:gps" << cmdNavMT;
+                }
+            }
+            else if (WriteAllParameters){
+                *saveString += "-model:brdc:gps PreferLNAV\n";
+                *runString << "-model:brdc:gps" << "PreferLNAV";
+            }
+        }
+        //Galileo
+        if (ui->checkBoxShowNavMessageTypeGalileo->isChecked()) {
+            cmdNavMT="";
+            cmdNavMT2="";
+            cmdOK=0;
+            nOk=0;
+            for (int i=0; i<ui->tableWidgetShowNavMessageTypeGalileo->columnCount();i++){
+                if (ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->text()!=NavMessageTypes[Galileo][0][i]) cmdOK=1;
+                if (ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->background().color().name()==RedColor) {
+                    if (i>0) cmdOK=1;
+                    break;
+                }
+                cmdNavMT += ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->text() + ",";
+                if (i>0) {
+                    cmdNavMT2 += ui->tableWidgetShowNavMessageTypeGalileo->item(0,i)->text() + ",";
+                }
+                nOk++;
+            }
+            if (cmdOK==1){
+                cmdNavMT.chop(1);
+                cmdNavMT2.chop(1);
+                if ( nOk==ui->tableWidgetShowNavMessageTypeGalileo->columnCount() && ui->tableWidgetShowNavMessageTypeGalileo->item(0,0)->text()=="FNAV" && cmdNavMT2== GalINAVDefaultOrder ) {
+                    *saveString += "-model:brdc:gal PreferFNAV\n";
+                    *runString << "-model:brdc:gal" << "PreferFNAV";
+                } else {
+                    if (cmdNavMT==GalINAVDefaultOrder) {
+                        *saveString += "-model:brdc:gal INAV\n";
+                        *runString << "-model:brdc:gal" << "INAV";
+                    } else {
+                        *saveString += "-model:brdc:gal " + cmdNavMT + "\n";
+                        *runString << "-model:brdc:gal" << cmdNavMT;
+                    }
+                }
+            }
+            else if (WriteAllParameters){
+                *saveString += "-model:brdc:gal PreferINAV\n";
+                *runString << "-model:brdc:gal" << "PreferINAV";
+            }
+        }
+        //GLONASS
+        if ( 0 ){
+            cmdNavMT="";
+            cmdOK=0;
+            nOk=0;
+            for (int i=0; i<ui->tableWidgetShowNavMessageTypeGLONASS->columnCount();i++){
+                if (ui->tableWidgetShowNavMessageTypeGLONASS->item(0,i)->text()!=NavMessageTypes[GLONASS][0][i]) cmdOK=1;
+                if (ui->tableWidgetShowNavMessageTypeGLONASS->item(0,i)->background().color().name()==RedColor) {
+                    if (i>0) cmdOK=1;
+                    break;
+                }
+                cmdNavMT += ui->tableWidgetShowNavMessageTypeGLONASS->item(0,i)->text() + ",";
+                nOk++;
+            }
+            if (cmdOK==1){
+                cmdNavMT.chop(1);
+                *saveString += "-model:brdc:glo " + cmdNavMT + "\n";
+                *runString << "-model:brdc:glo" << cmdNavMT;
+            }
+            else if (WriteAllParameters){
+                *saveString += "-model:brdc:glo FDMA\n";
+                *runString << "-model:brdc:glo" << "FDMA";
+            }
+        }
+        //GEO
+        if ( 0 ){
+            cmdNavMT="";
+            cmdOK=0;
+            nOk=0;
+            for (int i=0; i<ui->tableWidgetShowNavMessageTypeGEO->columnCount();i++){
+                if (ui->tableWidgetShowNavMessageTypeGEO->item(0,i)->text()!=NavMessageTypes[GEO][0][i]) cmdOK=1;
+                if (ui->tableWidgetShowNavMessageTypeGEO->item(0,i)->background().color().name()==RedColor) {
+                    if (i>0) cmdOK=1;
+                    break;
+                }
+                cmdNavMT += ui->tableWidgetShowNavMessageTypeGEO->item(0,i)->text() + ",";
+                nOk++;
+            }
+            if (cmdOK==1){
+                cmdNavMT.chop(1);
+                *saveString += "-model:brdc:geo " + cmdNavMT + "\n";
+                *runString << "-model:brdc:geo" << cmdNavMT;
+            }
+            else if (WriteAllParameters){
+                *saveString += "-model:brdc:geo CNAV\n";
+                *runString << "-model:brdc:geo" << "CNAV";
+            }
+        }
+        //BDS
+        if (ui->checkBoxShowNavMessageTypeBDS->isChecked()) {
+            cmdNavMT="";
+            cmdOK=0;
+            nOk=0;
+            for (int i=0; i<ui->tableWidgetShowNavMessageTypeBDS->columnCount();i++){
+                if (ui->tableWidgetShowNavMessageTypeBDS->item(0,i)->text()!=NavMessageTypes[BDS][0][i]) cmdOK=1;
+                if (ui->tableWidgetShowNavMessageTypeBDS->item(0,i)->background().color().name()==RedColor) {
+                    if (i>0) cmdOK=1;
+                    break;
+                }
+                cmdNavMT += ui->tableWidgetShowNavMessageTypeBDS->item(0,i)->text() + ",";
+                nOk++;
+            }
+            if (cmdOK==1){
+                cmdNavMT.chop(1);
+                *saveString += "-model:brdc:bds " + cmdNavMT + "\n";
+                *runString << "-model:brdc:bds" << cmdNavMT;
+            }
+            else if (WriteAllParameters){
+                *saveString += "-model:brdc:bds D1\n";
+                *runString << "-model:brdc:bds" << "D1";
+            }
+        }
+        //QZSS
+        if (ui->checkBoxShowNavMessageTypeQZSS->isChecked()) {
+            cmdNavMT="";
+            cmdOK=0;
+            nOk=0;
+            for (int i=0; i<ui->tableWidgetShowNavMessageTypeQZSS->columnCount();i++){
+                if (ui->tableWidgetShowNavMessageTypeQZSS->item(0,i)->text()!=NavMessageTypes[QZSS][0][i]) cmdOK=1;
+                if (ui->tableWidgetShowNavMessageTypeQZSS->item(0,i)->background().color().name()==RedColor) {
+                    if (i>0) cmdOK=1;
+                    break;
+                }
+                cmdNavMT += ui->tableWidgetShowNavMessageTypeQZSS->item(0,i)->text() + ",";
+                nOk++;
+            }
+            if (cmdOK==1){
+                cmdNavMT.chop(1);
+                *saveString += "-model:brdc:qzs " + cmdNavMT + "\n";
+                *runString << "-model:brdc:qzs" << cmdNavMT;
+            }
+            else if (WriteAllParameters){
+                *saveString += "-model:brdc:qzs LNAV\n";
+                *runString << "-model:brdc:qzs" << "LNAV";
+            }
+        }
+        //IRNSS
+        if ( 0 ){
+            cmdNavMT="";
+            cmdOK=0;
+            nOk=0;
+            for (int i=0; i<ui->tableWidgetShowNavMessageTypeIRNSS->columnCount();i++){
+                if (ui->tableWidgetShowNavMessageTypeIRNSS->item(0,i)->text()!=NavMessageTypes[IRNSS][0][i]) cmdOK=1;
+                if (ui->tableWidgetShowNavMessageTypeIRNSS->item(0,i)->background().color().name()==RedColor) {
+                    if (i>0) cmdOK=1;
+                    break;
+                }
+                cmdNavMT += ui->tableWidgetShowNavMessageTypeIRNSS->item(0,i)->text() + ",";
+                nOk++;
+            }
+            if (cmdOK==1){
+                cmdNavMT.chop(1);
+                *saveString += "-model:brdc:irnss " + cmdNavMT + "\n";
+                *runString << "-model:brdc:irnss" << cmdNavMT;
+            }
+            else if (WriteAllParameters){
+                *saveString += "-model:brdc:irnss CNAV\n";
+                *runString << "-model:brdc:irnss" << "CNAV";
+            }
         }
     } else if ( ui->radioButtonOrbitPrecise1filesShowOrbitFile->isChecked()==true) {
         //File is SP3
@@ -564,6 +1080,33 @@ void gLAB_GUI::getshowOrbitOptions(QString *errorString, QString *warningString,
         }
     }
 
+    //Reference Position
+    if (ui->groupBoxEleAziSpecify->isChecked()){
+        if (ui->radioButtonEleAziSpecifyUserCartesian->isChecked()==true) {
+            if ( ui->lineEditEleAziSpecifyX->text() == "" || ui->lineEditEleAziSpecifyY->text() == "" || ui->lineEditEleAziSpecifyZ->text() == "" ) {
+                *errorString += "X Y and Z coordinates are required inputs if 'Specify - User defined' is set [In the Input Section - A Priori Receiver Position From].\n";
+            } else if (ui->lineEditEleAziSpecifyX->text().toDouble() == 0. || ui->lineEditEleAziSpecifyY->text().toDouble() == 0. || ui->lineEditEleAziSpecifyZ->text().toDouble() == 0.) {
+                *errorString += "X Y and Z coordinates cannot be 0,0,0.\n";
+            } else {
+                *saveString += "-pre:setrecpos Set " + ui->lineEditEleAziSpecifyX->text() + " " + ui->lineEditEleAziSpecifyY->text() + " " + ui->lineEditEleAziSpecifyZ->text() + "\n";
+                *runString << "-pre:setrecpos" << "Set"<< ui->lineEditEleAziSpecifyX->text() << ui->lineEditEleAziSpecifyY->text() << ui->lineEditEleAziSpecifyZ->text();
+            }
+        } else {
+            if ( ui->lineEditEleAziSpecifyLon->text() == "" || ui->lineEditEleAziSpecifyLat->text() == "" || ui->lineEditEleAziSpecifyHeight->text() == "" ) {
+                *errorString += "Longitude, latitude and height coordinates are required inputs if 'Specify - User defined' is set [In the Input Section - A Priori Receiver Position From].\n";
+            } else if  (ui->lineEditEleAziSpecifyLon->text().toDouble()<-180. || ui->lineEditEleAziSpecifyLon->text().toDouble()>180) {
+                    *errorString += "Longitude coordinate must be in the range [-180..180] degrees.\n";
+            } else if  (ui->lineEditEleAziSpecifyLat->text().toDouble()<-90. || ui->lineEditEleAziSpecifyLat->text().toDouble()>90) {
+                    *errorString += "Latitude coordinate must be in the range [-90..90] degrees.\n";
+            } else if ( ui->lineEditEleAziSpecifyHeight->text().toDouble() < -10000. ) {
+                    *errorString += "Height coordinate cannot be lower than -10 kilometres.\n";
+            } else {
+                *saveString += "-pre:setrecpos SetGeod " + ui->lineEditEleAziSpecifyLon->text() + " " + ui->lineEditEleAziSpecifyLat->text() + " " + ui->lineEditEleAziSpecifyHeight->text() + "\n";
+                *runString << "-pre:setrecpos" << "SetGeod" << ui->lineEditEleAziSpecifyLon->text() << ui->lineEditEleAziSpecifyLat->text() << ui->lineEditEleAziSpecifyHeight->text();
+            }
+        }
+    }
+
     ///Check modeling options
     //Decimation
     if (ui->lineEditDecimationShowOrbit->text()=="") {
@@ -576,6 +1119,61 @@ void gLAB_GUI::getshowOrbitOptions(QString *errorString, QString *warningString,
         *runString <<  "-pre:dec" << ui->lineEditDecimationShowOrbit->text();
     }
 
+    //Check start time is greater than end time (if both are enabled)
+    if ( ui->checkBoxStartTimeShowOrbits->isChecked()==true && ui->checkBoxEndTimeShowOrbits->isChecked()==true) {
+        date = ui->StartTimeShowOrbits->date();
+        time = ui->StartTimeShowOrbits->time();
+        if ( date.day() == 31 && date.month() == 12 && date.year() == 1979 && time.hour() == 0 && time.minute()==0 && time.second()==0) {
+            *errorString += "Date (DD/MM/YYYY) and GPS Time (HH:MM:SS) are a required input if 'Start Time' is set.\n";
+            badDate=1;
+        }
+        date = ui->EndTimeShowOrbits->date();
+        time = ui->EndTimeShowOrbits->time();
+        if ( date.day() == 31 && date.month() == 12 && date.year() == 1979 && time.hour() == 0 && time.minute()==0 && time.second()==0) {
+            *errorString += "Date (DD/MM/YYYY) and GPS Time (HH:MM:SS) are a required input if 'End Time' is set.\n";
+            badDate=1;
+        }
+        if (badDate==0) {
+            if (ui->StartTimeShowOrbits->date().operator >(ui->EndTimeShowOrbits->date()) ) {
+                *errorString += "'End Time' must be greater than the 'Start Time' if both are set.\n";
+                badDate=1;
+            } else if (ui->StartTimeShowOrbits->date().operator ==(ui->EndTimeShowOrbits->date()) ) {
+                if (ui->StartTimeShowOrbits->time().operator >(ui->EndTimeShowOrbits->time()) ) {
+                    *errorString += "'End Time' must be greater than the 'Start Time' if both are set.\n";
+                    badDate=1;
+                }
+            }
+        }
+    }
+
+    //Start time
+    if (ui->checkBoxStartTimeShowOrbits->isChecked()==true) {
+        date = ui->StartTimeShowOrbits->date();
+        time = ui->StartTimeShowOrbits->time();
+        if ( date.day() == 31 && date.month() == 12 && date.year() == 1979 && time.hour() == 0 && time.minute()==0 && time.second()==0) {
+            if (badDate==0) {
+                *errorString += "Date (DD/MM/YYYY) and GPS Time (HH:MM:SS) are a required input if 'Start Time' is set.\n";
+            }
+        } else {
+                *saveString += "-pre:starttime " + date.toString("yyyy/MM/dd") + " " + time.toString("HH:mm:ss") + "\n";
+                *runString << "-pre:starttime" << date.toString("yyyy/MM/dd") << time.toString("HH:mm:ss");
+        }
+    }
+
+    //End time
+    if (ui->checkBoxEndTimeShowOrbits->isChecked()==true) {
+        date = ui->EndTimeShowOrbits->date();
+        time = ui->EndTimeShowOrbits->time();
+        if ( date.day() == 31 && date.month() == 12 && date.year() == 1979 && time.hour() == 0 && time.minute()==0 && time.second()==0) {
+            if (badDate==0) {
+                *errorString += "Date (DD/MM/YYYY) and GPS Time (HH:MM:SS) are a required input if 'End time' is set.\n";
+            }
+        } else {
+            *saveString += "-pre:endtime " + date.toString("yyyy/MM/dd") + " " + time.toString("HH:mm:ss") + "\n";
+            *runString << "-pre:endtime" << date.toString("yyyy/MM/dd") << time.toString("HH:mm:ss");
+        }
+    }
+
     //Clock correction. By default enabled
     if (ui->checkBoxSatClockOffsetShowOrbit->isChecked()==false) {
         *saveString +=  "--model:satclocks\n";
@@ -586,12 +1184,6 @@ void gLAB_GUI::getshowOrbitOptions(QString *errorString, QString *warningString,
     if (ui->checkBoxCheckBroadcastTransmissionTimeShowOrbit->isChecked()==false) {
         *saveString +=  "--model:brdctranstime\n";
         *runString <<  "--model:brdctranstime";
-    }
-
-    //Check unhealthy flag. By default enabled
-    if (ui->checkBoxDiscardUnhealthyShowOrbit->isChecked()==false) {
-        *saveString +=  "--model:satellitehealth\n";
-        *runString <<  "--model:satellitehealth";
     }
 
     // Precise products interpolation data (only when a precise product is given)
@@ -627,7 +1219,7 @@ void gLAB_GUI::getshowOrbitOptions(QString *errorString, QString *warningString,
                 *saveString += "-model:orbtotmaxgaps " + ui->lineEditOrbitMaxGapsShowOrbit->text() + "\n";
                 *runString << "-model:orbtotmaxgaps" << ui->lineEditOrbitMaxGapsShowOrbit->text();
             }
-            if ( ui->lineEditClockInterpolationDegreeShowOrbit->text().toInt()!=0) {
+            if ( ui->lineEditClockInterpolationDegreeShowOrbit->text().toInt()!=1) {
                 *saveString += "-model:clock:deg " + ui->lineEditClockInterpolationDegreeShowOrbit->text() + "\n";
                 *runString << "-model:clock:deg" << ui->lineEditClockInterpolationDegreeShowOrbit->text();
             }
@@ -674,6 +1266,21 @@ void gLAB_GUI::getshowOrbitOptions(QString *errorString, QString *warningString,
        *runString << "--print:satpvt";
        NumMessages--;
     }
+
+    //Clock units
+    if (ui->radioButtonNanosecondsUnitOutputClockSATPVT->isChecked()==true) {
+        *saveString += "-print:clkns\n";
+        *runString << "-print:clkns";
+    } else if (WriteAllParameters==1) {
+        *saveString += "--print:clkns\n";
+        *runString << "--print:clkns";
+    }
+
+    //V5 messages
+    if (this->v5Message>0) {
+        *saveString += "-print:v5format\n";
+        *runString << "-print:v5format";
+    }
     if (NumMessages==0) {
         *errorString += "Output Message SATPVT must be selected.\n";
     }
@@ -689,8 +1296,11 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
     QString userInputSingleSpace;
     QStringList ParametersList;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     QTextStream InputFile(file);
     InputFile.setAutoDetectUnicode(true);
+    QDate date;
+    QTime hour;
 
     int numNav=0;
     int numSP3=0;
@@ -700,6 +1310,10 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
     int numInputOrbFiles=0;
     int noAntParameter=0;
     int HashPos;
+    int year, month,day, doy, hour2, minute, second,sod,GPSWeek,sow;
+    int ValidDate, addDay, leapYear;
+    int daysmonth[13] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int daysmonthLeapYear[13] = {0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
     //First loop: Check for errors
     while ( !InputFile.atEnd() ) {
@@ -793,8 +1407,13 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
 
     //If errors ocurred, show them and return
     if (!errorString.isEmpty()) {
-        messageBox.critical(0, "Errors found",
-                            "gLAB did not load the the configuration file due to the following errors:\n\n" + errorString);
+        messageBox.setWindowTitle("Errors found");
+        messageBox.setText("gLAB did not load the the configuration file due to the following errors:\n\n" + errorString);
+        messageBox.setIcon(QMessageBox::Critical);
+        QSpacerItem* horizontalSpacer = new QSpacerItem(800, 0, QSizePolicy::Minimum, QSizePolicy::Expanding);
+        QGridLayout* layout = static_cast<QGridLayout*>(messageBox.layout());
+        layout->addItem(horizontalSpacer, layout->rowCount(), 0, 1, layout->columnCount());
+        messageBox.exec();
         return;
     }
     //Second loop: Load parameters
@@ -852,7 +1471,7 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else {
-                extraParametersToWarningStr(1,&warningString,option,ParametersList);
+                extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
                 if (userInputSingleSpace.section(" ", 0,0).replace(",","").toDouble()<=0.) {
                     warningString += "Parameter '" + option + "' has to be greater than 0. It was skipped.\n";
                 } else {
@@ -861,27 +1480,435 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
             }
         } else if ( QString::compare(option, "--pre:dec", Qt::CaseInsensitive)==0 ) {
             warningString += "Parameter '" + option + "' is not valid in show orbit mode. It was skipped.\n";
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
+        } else if ( QString::compare(option, "-pre:setrecpos", Qt::CaseInsensitive)==0 ) {
+            if (ParametersList.count()<3) {
+                warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+            }
+            double radius=0;
+            if (QString::compare(ParametersList[0], "Set", Qt::CaseInsensitive)==0 ) {
+                //Specify User defined Cartesian
+                if (ParametersList.count()<4) {
+                    warningString += "Parameter '" + option + "' Set has missing values. It was skipped.\n";
+                } else {
+                    extraArgumentsToWarningStr(4,&warningString,option,ParametersList);
+                    radius=sqrt(pow(QString("%1").arg(ParametersList[1]).replace(",","").toDouble(),2)+pow(QString("%1").arg(ParametersList[2]).replace(",","").toDouble(),2)+pow(QString("%1").arg(ParametersList[3]).replace(",","").toDouble(),2));
+                    if(radius<MIN_EARTH_RADIUS-1000.) {
+                        warningString += "Parameter '" + option + " Set' cannot have a reference position below Earth surface. It was skipped.\n";
+                    } else {
+                        this->on_groupBoxEleAziSpecify_clicked(true);
+                        this->on_radioButtonEleAziSpecifyUserCartesian_clicked();
+                        ui->lineEditEleAziSpecifyX->setText(QString("%1").arg(ParametersList[1]).replace(",",""));
+                        ui->lineEditEleAziSpecifyY->setText(QString("%1").arg(ParametersList[2]).replace(",",""));
+                        ui->lineEditEleAziSpecifyZ->setText(QString("%1").arg(ParametersList[3]).replace(",",""));
+                    }
+                }
+            } else if (QString::compare(ParametersList[0], "SetGeod", Qt::CaseInsensitive)==0 ) {
+                //Specify User defined Geodetic
+                if (ParametersList.count()<4) {
+                    warningString += "Parameter '" + option + " SetGeod' has missing values. It was skipped.\n";
+                } else {
+                    extraArgumentsToWarningStr(4,&warningString,option,ParametersList);
+                    if (QString("%1").arg(ParametersList[1]).replace(",","").toDouble()<-180||QString("%1").arg(ParametersList[1]).replace(",","").toDouble()>180) {
+                        warningString += "Parameter '" + option + " SetGeod' must have a longitude range of [-180..180] degrees. It was skipped.\n";
+                    } else if (QString("%1").arg(ParametersList[2]).replace(",","").toDouble()<-90||QString("%1").arg(ParametersList[2]).replace(",","").toDouble()>90) {
+                        warningString += "Parameter '" + option + " SetGeod' must have a latitude range of [-90..90] degrees. It was skipped.\n";
+                    } else if (QString("%1").arg(ParametersList[3]).replace(",","").toDouble()<-10000) {
+                        warningString += "Parameter '" + option + " SetGeod' must have a height value greater than -10 kilometres. It was skipped.\n";
+                    } else {
+                        this->on_groupBoxEleAziSpecify_clicked(true);
+                        this->on_radioButtonEleAziSpecifyUserGeodetic_clicked();
+                        ui->lineEditEleAziSpecifyLon->setText(QString("%1").arg(ParametersList[1]).replace(",",""));
+                        ui->lineEditEleAziSpecifyLat->setText(QString("%1").arg(ParametersList[2]).replace(",",""));
+                        ui->lineEditEleAziSpecifyHeight->setText(QString("%1").arg(ParametersList[3]).replace(",",""));
+                    }
+                }
+            } else {
+                //Specify User defined Cartesian
+                if (ParametersList.count()<3) {
+                    warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+                } else {
+                    extraArgumentsToWarningStr(3,&warningString,option,ParametersList);
+                    radius=sqrt(pow(QString("%1").arg(ParametersList[0]).replace(",","").toDouble(),2)+pow(QString("%1").arg(ParametersList[1]).replace(",","").toDouble(),2)+pow(QString("%1").arg(ParametersList[2]).replace(",","").toDouble(),2));
+                    if(radius<MIN_EARTH_RADIUS-1000.) {
+                        warningString += "Parameter '" + option + "' cannot have a reference position below Earth surface. It was skipped.\n";
+                    } else {
+                        this->on_groupBoxEleAziSpecify_clicked(true);
+                        this->on_radioButtonEleAziSpecifyUserCartesian_clicked();
+                        ui->lineEditEleAziSpecifyX->setText(QString("%1").arg(ParametersList[0]).replace(",",""));
+                        ui->lineEditEleAziSpecifyY->setText(QString("%1").arg(ParametersList[1]).replace(",",""));
+                        ui->lineEditEleAziSpecifyZ->setText(QString("%1").arg(ParametersList[2]).replace(",",""));
+                    }
+                }
+            }
+        } else if ( QString::compare(option, "-pre:starttime", Qt::CaseInsensitive)==0 ) {
+            if (ParametersList.count()<2) {
+                warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+            } else {
+                ValidDate=1;
+                addDay=0;
+                leapYear=0;
+                year=0;
+                month=0;
+                day=0;
+                hour2=-1;
+                minute=-1;
+                second=-1;
+                extraArgumentsToWarningStr(2,&warningString,option,ParametersList);
+                if(userInputSingleSpace.section(" ", 1,1).contains(":")==true) {
+                    //Time has ":" symbol.
+                    if(userInputSingleSpace.section(" ", 0,0).contains("/")==true) {
+                        //Time is in YYYY/MM/DD HH:MM:SS format
+                        if(userInputSingleSpace.section(" ", 0,0).length()!=10) {
+                            //Invalid date
+                            warningString += "Parameter '" + option + "' has an invalid date. It was skipped.\n";
+                            ValidDate=0;
+                        } else {
+                             if(userInputSingleSpace.section(" ", 1,1).length()!=8) {
+                                 warningString += "Parameter '" + option + "' has an invalid time. It was skipped.\n";
+                                 ValidDate=0;
+                             } else {
+                                 year=userInputSingleSpace.section(" ", 0,0).left(4).toInt();
+                                 month=userInputSingleSpace.section(" ", 0,0).mid(5,2).toInt();
+                                 day=userInputSingleSpace.section(" ", 0,0).mid(8,2).toInt();
+                             }
+                        }
+                    } else {
+                        //Time is in YYYYMMDD HH:MM:SS format
+                        if(userInputSingleSpace.section(" ", 0,0).length()!=8) {
+                            //Invalid date
+                            warningString += "Parameter '" + option + "' has an invalid date. It was skipped.\n";
+                            ValidDate=0;
+                        } else {
+                            if(userInputSingleSpace.section(" ", 1,1).length()!=8) {
+                                warningString += "Parameter '" + option + "' has an invalid time. It was skipped.\n";
+                                ValidDate=0;
+                            } else {
+                                year=userInputSingleSpace.section(" ", 0,0).left(4).toInt();
+                                month=userInputSingleSpace.section(" ", 0,0).mid(4,2).toInt();
+                                day=userInputSingleSpace.section(" ", 0,0).mid(6,2).toInt();
+                            }
+                        }
+                    }
+                    if (ValidDate==1) {
+                        //Check date values and time length
+                        if(year<=1970) {
+                            warningString += "Parameter '" + option + "' has date prior to 1970. It was skipped.\n";
+                            ValidDate=0;
+                        } else {
+                            //Check leap year
+                            if ( (( year%4 == 0 ) && ( year%100 != 0 )) || year%400 == 0 ) {
+                                leapYear=1;
+                            }
+                        }
+                        if(month<1||month>12) {
+                            warningString += "Parameter '" + option + "' has an invalid month. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if (day<1||day>31|| (leapYear==1 && day>daysmonthLeapYear[month]) || (leapYear==0 && day>daysmonth[month])) {
+                            warningString += "Parameter '" + option + "' has an invalid day. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(userInputSingleSpace.section(" ", 1,1).length()!=8) {
+                            warningString += "Parameter '" + option + "' has an invalid time. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                    }
+                    if (ValidDate==1) {
+                        //Read time in HH:MM:SS format and check values
+                        hour2=userInputSingleSpace.section(" ", 1,1).left(2).toInt();
+                        minute=userInputSingleSpace.section(" ", 1,1).mid(3,2).toInt();
+                        second=userInputSingleSpace.section(" ", 1,1).mid(6,2).toInt();
+                        if(hour2<0||hour2>24) {
+                            warningString += "Parameter '" + option + "' has an invalid hour. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(minute<0||minute>60) {
+                            warningString += "Parameter '" + option + "' has an invalid minute. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(second<0||second>60) {
+                            warningString += "Parameter '" + option + "' has an invalid second. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                    }
+                     if (ValidDate==1) {
+                         if(second==60) {
+                             second-=60;
+                             minute++;
+                         }
+                         if(minute==60) {
+                             minute-=60;
+                             hour2++;
+                         }
+                         if(hour2==24) {
+                             hour2-=24;
+                             addDay=1;
+                         }
+                         date=QDate(year,month,day);
+                         if(addDay==1) {
+                            date=date.addDays(qint64(1));
+                         }
+                         hour=QTime(hour2,minute,second);
+                         ui->StartTimeShowOrbits->setDate(date);
+                         ui->StartTimeShowOrbits->setTime(hour);
+                         this->on_checkBoxStartTimeShowOrbits_clicked(true);
+                     }
+                } else {
+                    //Time can be in YYYY/DoY or GPSWeek
+                    if(userInputSingleSpace.section(" ", 0,0).contains("/")==true) {
+                        //Date is in YYYY/DoY SoD format
+                        year=userInputSingleSpace.section(" ", 0,0).left(4).toInt();
+                        doy=userInputSingleSpace.section(" ", 0,0).mid(5).toInt();
+                        sod=userInputSingleSpace.section(" ", 1,1).replace(",","").section(".",0,0).toInt();
+                        if(year<=1970) {
+                            warningString += "Parameter '" + option + "' has date prior to 1970. It was skipped.\n";
+                            ValidDate=0;
+                        } else {
+                            //Check leap year
+                            if ( (( year%4 == 0 ) && ( year%100 != 0 )) || year%400 == 0 ) {
+                                leapYear=1;
+                            }
+                        }
+                        if(doy<0||(doy>366 && leapYear==1)|| (doy>365 && leapYear==0)) {
+                            warningString += "Parameter '" + option + "' has an invalid day of year. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(sod<0||sod>86400) {
+                            warningString += "Parameter '" + option + "' has an invalid second of day. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if (ValidDate==1) {
+                            if(sod==86400) {
+                                sod-=86400;
+                                doy++;
+                            }
+                            if((doy>366 && leapYear==1)|| (doy>365 && leapYear==0)) {
+                                doy=1;
+                                year++;
+                            }
+                            doy2date(year,doy,&date);
+                            SoD2time(sod,&hour);
+                            ui->StartTimeShowOrbits->setDate(date);
+                            ui->StartTimeShowOrbits->setTime(hour);
+                            this->on_checkBoxStartTimeShowOrbits_clicked(true);
+                        }
+                    } else {
+                        //Date is in GPSWeek SoW format
+                        GPSWeek=userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt();
+                        sow=userInputSingleSpace.section(" ", 1,1).replace(",","").section(".",0,0).toInt();
+                        if(GPSWeek<1) {
+                            warningString += "Parameter '" + option + "' has an invalid GPS week. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(sow<0||sow>604800) {
+                            warningString += "Parameter '" + option + "' has an invalid second of week. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if (ValidDate==1) {
+                            if(sow==604800) {
+                                sow-=604800;
+                                GPSWeek++;
+                            }
+                            GPSTime2DateTime(GPSWeek,sow,&date,&hour);
+                            ui->StartTimeShowOrbits->setDate(date);
+                            ui->StartTimeShowOrbits->setTime(hour);
+                            this->on_checkBoxStartTimeShowOrbits_clicked(true);
+                        }
+                    }
+                }
+            }
+        } else if ( QString::compare(option, "-pre:endtime", Qt::CaseInsensitive)==0 ) {
+            if (ParametersList.count()<2) {
+                warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+            } else {
+                ValidDate=1;
+                addDay=0;
+                leapYear=0;
+                year=0;
+                month=0;
+                day=0;
+                hour2=-1;
+                minute=-1;
+                second=-1;
+                extraArgumentsToWarningStr(2,&warningString,option,ParametersList);
+                if(userInputSingleSpace.section(" ", 1,1).contains(":")==true) {
+                    //Time has ":" symbol.
+                    if(userInputSingleSpace.section(" ", 0,0).contains("/")==true) {
+                        //Time is in YYYY/MM/DD HH:MM:SS format
+                        if(userInputSingleSpace.section(" ", 0,0).length()!=10) {
+                            //Invalid date
+                            warningString += "Parameter '" + option + "' has an invalid date. It was skipped.\n";
+                            ValidDate=0;
+                        } else {
+                             if(userInputSingleSpace.section(" ", 1,1).length()!=8) {
+                                 warningString += "Parameter '" + option + "' has an invalid time. It was skipped.\n";
+                                 ValidDate=0;
+                             } else {
+                                 year=userInputSingleSpace.section(" ", 0,0).left(4).toInt();
+                                 month=userInputSingleSpace.section(" ", 0,0).mid(5,2).toInt();
+                                 day=userInputSingleSpace.section(" ", 0,0).mid(8,2).toInt();
+                             }
+                        }
+                    } else {
+                        //Time is in YYYYMMDD HH:MM:SS format
+                        if(userInputSingleSpace.section(" ", 0,0).length()!=8) {
+                            //Invalid date
+                            warningString += "Parameter '" + option + "' has an invalid date. It was skipped.\n";
+                            ValidDate=0;
+                        } else {
+                            if(userInputSingleSpace.section(" ", 1,1).length()!=8) {
+                                warningString += "Parameter '" + option + "' has an invalid time. It was skipped.\n";
+                                ValidDate=0;
+                            } else {
+                                year=userInputSingleSpace.section(" ", 0,0).left(4).toInt();
+                                month=userInputSingleSpace.section(" ", 0,0).mid(4,2).toInt();
+                                day=userInputSingleSpace.section(" ", 0,0).mid(6,2).toInt();
+                            }
+                        }
+                    }
+                    if (ValidDate==1) {
+                        //Check date values and time length
+                        if(year<=1970) {
+                            warningString += "Parameter '" + option + "' has date prior to 1970. It was skipped.\n";
+                            ValidDate=0;
+                        } else {
+                            //Check leap year
+                            if ( (( year%4 == 0 ) && ( year%100 != 0 )) || year%400 == 0 ) {
+                                leapYear=1;
+                            }
+                        }
+                        if(month<1||month>12) {
+                            warningString += "Parameter '" + option + "' has an invalid month. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if (day<1||day>31|| (leapYear==1 && day>daysmonthLeapYear[month]) || (leapYear==0 && day>daysmonth[month])) {
+                            warningString += "Parameter '" + option + "' has an invalid day. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(userInputSingleSpace.section(" ", 1,1).length()!=8) {
+                            warningString += "Parameter '" + option + "' has an invalid time. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                    }
+                    if (ValidDate==1) {
+                        //Read time in HH:MM:SS format and check values
+                        hour2=userInputSingleSpace.section(" ", 1,1).left(2).toInt();
+                        minute=userInputSingleSpace.section(" ", 1,1).mid(3,2).toInt();
+                        second=userInputSingleSpace.section(" ", 1,1).mid(6,2).toInt();
+                        if(hour2<0||hour2>24) {
+                            warningString += "Parameter '" + option + "' has an invalid hour. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(minute<0||minute>60) {
+                            warningString += "Parameter '" + option + "' has an invalid minute. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(second<0||second>60) {
+                            warningString += "Parameter '" + option + "' has an invalid second. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                    }
+                     if (ValidDate==1) {
+                         if(second==60) {
+                             second-=60;
+                             minute++;
+                         }
+                         if(minute==60) {
+                             minute-=60;
+                             hour2++;
+                         }
+                         if(hour2==24) {
+                             hour2-=24;
+                             addDay=1;
+                         }
+                         date=QDate(year,month,day);
+                         if(addDay==1) {
+                            date=date.addDays(qint64(1));
+                         }
+                         hour=QTime(hour2,minute,second);
+                         ui->EndTimeShowOrbits->setDate(date);
+                         ui->EndTimeShowOrbits->setTime(hour);
+                         this->on_checkBoxEndTimeShowOrbits_clicked(true);
+                     }
+                } else {
+                    //Time can be in YYYY/DoY or GPSWeek
+                    if(userInputSingleSpace.section(" ", 0,0).contains("/")==true) {
+                        //Date is in YYYY/DoY SoD format
+                        year=userInputSingleSpace.section(" ", 0,0).left(4).toInt();
+                        doy=userInputSingleSpace.section(" ", 0,0).mid(5).toInt();
+                        sod=userInputSingleSpace.section(" ", 1,1).replace(",","").section(".",0,0).toInt();
+                        if(year<=1970) {
+                            warningString += "Parameter '" + option + "' has date prior to 1970. It was skipped.\n";
+                            ValidDate=0;
+                        } else {
+                            //Check leap year
+                            if ( (( year%4 == 0 ) && ( year%100 != 0 )) || year%400 == 0 ) {
+                                leapYear=1;
+                            }
+                        }
+                        if(doy<0||(doy>366 && leapYear==1)|| (doy>365 && leapYear==0)) {
+                            warningString += "Parameter '" + option + "' has an invalid day of year. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(sod<0||sod>86400) {
+                            warningString += "Parameter '" + option + "' has an invalid second of day. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if (ValidDate==1) {
+                            if(sod==86400) {
+                                sod-=86400;
+                                doy++;
+                            }
+                            if((doy>366 && leapYear==1)|| (doy>365 && leapYear==0)) {
+                                doy=1;
+                                year++;
+                            }
+                            doy2date(year,doy,&date);
+                            SoD2time(sod,&hour);
+                            ui->EndTimeShowOrbits->setDate(date);
+                            ui->EndTimeShowOrbits->setTime(hour);
+                            this->on_checkBoxEndTimeShowOrbits_clicked(true);
+                        }
+                    } else {
+                        //Date is in GPSWeek SoW format
+                        GPSWeek=userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt();
+                        sow=userInputSingleSpace.section(" ", 1,1).replace(",","").section(".",0,0).toInt();
+                        if(GPSWeek<1) {
+                            warningString += "Parameter '" + option + "' has an invalid GPS week. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if(sow<0||sow>604800) {
+                            warningString += "Parameter '" + option + "' has an invalid second of week. It was skipped.\n";
+                            ValidDate=0;
+                        }
+                        if (ValidDate==1) {
+                            if(sow==604800) {
+                                sow-=604800;
+                                GPSWeek++;
+                            }
+                            GPSTime2DateTime(GPSWeek,sow,&date,&hour);
+                            ui->EndTimeShowOrbits->setDate(date);
+                            ui->EndTimeShowOrbits->setTime(hour);
+                            this->on_checkBoxEndTimeShowOrbits_clicked(true);
+                        }
+                    }
+                }
+            }
         } else if ( QString::compare(option, "-model:satclocks", Qt::CaseInsensitive)==0 ) {
             ui->checkBoxSatClockOffsetShowOrbit->setChecked(true);
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
         } else if ( QString::compare(option, "--model:satclocks", Qt::CaseInsensitive)==0 ) {
             ui->checkBoxSatClockOffsetShowOrbit->setChecked(false);
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
         } else if ( QString::compare(option, "-model:brdctranstime", Qt::CaseInsensitive)==0 ) {
             ui->checkBoxCheckBroadcastTransmissionTimeShowOrbit->setChecked(true);
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
         } else if ( QString::compare(option, "--model:brdctranstime", Qt::CaseInsensitive)==0 ) {
             ui->checkBoxCheckBroadcastTransmissionTimeShowOrbit->setChecked(false);
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
-        } else if ( QString::compare(option, "-model:satellitehealth", Qt::CaseInsensitive)==0 ) {
-            ui->checkBoxDiscardUnhealthyShowOrbit->setChecked(false);
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
-        } else if ( QString::compare(option, "--model:satellitehealth", Qt::CaseInsensitive)==0 ) {
-            ui->checkBoxDiscardUnhealthyShowOrbit->setChecked(false);
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
         } else if ( QString::compare(option, "-model:orbit:deg", Qt::CaseInsensitive)==0 || QString::compare(option, "-model:orb:deg", Qt::CaseInsensitive)==0) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else if (userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt()<=0) {
@@ -890,7 +1917,7 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
                ui->lineEditOrbitInterpolationDegreeShowOrbit->setText(QString("%1").arg(userInput.section(" ", 0,0).replace(",","").section(".",0,0)));
             }
         } else if ( QString::compare(option, "-model:orbmaxgaps", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else if (userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt()<0) {
@@ -899,10 +1926,10 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
                ui->lineEditOrbitConsecutiveGapsShowOrbit->setText(QString("%1").arg(userInput.section(" ", 0,0).replace(",","").section(".",0,0)));
             }
         } else if ( QString::compare(option, "--model:orbmaxgaps", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->lineEditOrbitConsecutiveGapsShowOrbit->setText("0");
         } else if ( QString::compare(option, "-model:orbtotmaxgaps", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else if (userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt()<0) {
@@ -911,10 +1938,10 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
                ui->lineEditOrbitMaxGapsShowOrbit->setText(QString("%1").arg(userInput.section(" ", 0,0).replace(",","").section(".",0,0)));
             }
         } else if ( QString::compare(option, "--model:orbtotmaxgaps", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->lineEditOrbitMaxGapsShowOrbit->setText("0");
         } else if ( QString::compare(option, "-model:clock:deg", Qt::CaseInsensitive)==0  || QString::compare(option, "-model:clk:deg", Qt::CaseInsensitive)==0) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else if (userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt()<0) {
@@ -923,7 +1950,7 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
                ui->lineEditClockInterpolationDegreeShowOrbit->setText(QString("%1").arg(userInput.section(" ", 0,0).replace(",","").section(".",0,0)));
             }
         } else if ( QString::compare(option, "-model:clkmaxgaps", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else if (userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt()<0) {
@@ -932,10 +1959,10 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
                ui->lineEditClockConsecutiveGapsShowOrbit->setText(QString("%1").arg(userInput.section(" ", 0,0).replace(",","").section(".",0,0)));
             }
         } else if ( QString::compare(option, "--model:clkmaxgaps", Qt::CaseInsensitive)==0 ) {
-             extraParametersToWarningStr(0,&warningString,option,ParametersList);
+             extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
              ui->lineEditClockConsecutiveGapsShowOrbit->setText("0");
         } else if ( QString::compare(option, "-model:clktotmaxgaps", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
             } else if (userInputSingleSpace.section(" ", 0,0).replace(",","").section(".",0,0).toInt()<0) {
@@ -944,39 +1971,186 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
                ui->lineEditClockMaxGapsShowOrbit->setText(QString("%1").arg(userInput.section(" ", 0,0).replace(",","").section(".",0,0)));
             }
         } else if ( QString::compare(option, "--model:clktotmaxgaps", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->lineEditClockMaxGapsShowOrbit->setText("0");
         } else if ( QString::compare(option, "-model:satphasecenter", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             this->on_checkBoxAntexShowOrbitFile_clicked(true);
         } else if ( QString::compare(option, "--model:satphasecenter", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             this->on_checkBoxAntexShowOrbitFile_clicked(false);
         } else if ( QString::compare(option, "-model:orbprevsample", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->radioButtonOrbitCurrentDayShowOrbit->setChecked(true);
             ui->radioButtonOrbitNextDayShowOrbit->setChecked(false);
             this->on_groupBoxConcatenedPreciseFilesShowOrbit_clicked(true);
         } else if ( QString::compare(option, "--model:orbprevsample", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->radioButtonOrbitCurrentDayShowOrbit->setChecked(false);
             ui->radioButtonOrbitNextDayShowOrbit->setChecked(true);
         } else if ( QString::compare(option, "-model:clkprevsample", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->radioButtonClockCurrentDayShowOrbit->setChecked(true);
             ui->radioButtonClockNextDayShowOrbit->setChecked(false);
             this->on_groupBoxConcatenedPreciseFilesShowOrbit_clicked(true);
         } else if ( QString::compare(option, "--model:clkprevsample", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->radioButtonClockCurrentDayShowOrbit->setChecked(false);
             ui->radioButtonClockNextDayShowOrbit->setChecked(true);
+        } else if ( QString::compare(option, "-model:brdc:gps", Qt::CaseInsensitive)==0 ){ //GPS Nav
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
+            if (ParametersList.count()<1) {
+                warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+            } else{
+
+            }
+            if ( QString::compare(ParametersList[0], "PreferLNAV", Qt::CaseInsensitive)==0 ){
+                this->selectGNSS_ShowNavMessageTypes(1,GPS);
+            } else if ( QString::compare(ParametersList[0], "PreferCNAV", Qt::CaseInsensitive)==0 ){
+                this->selectGNSS_ShowNavMessageTypes(1,GPS);
+                ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(ui->tableWidgetShowNavMessageTypeGPS->item(0,1));
+                this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGPS,1,0,0);
+                ui->tableWidgetShowNavMessageTypeGPS->clearSelection();
+            } else {
+                int typeOK=0;
+                QStringList strNavMT=ParametersList[0].split(",", QString::SkipEmptyParts);
+                this->selectGNSS_ShowNavMessageTypes(0,GPS);
+                for (int i=0; i<strNavMT.count(); i++){
+                    int itemTab=0;
+                    for (itemTab=0; itemTab<ui->tableWidgetShowNavMessageTypeGPS->columnCount(); itemTab++){
+                        if ( QString::compare(strNavMT[i], ui->tableWidgetShowNavMessageTypeGPS->item(0,itemTab)->text(), Qt::CaseInsensitive)==0 && ui->tableWidgetShowNavMessageTypeGPS->item(0,itemTab)->background().color().name()==RedColor ) {
+                            //Select item to be moved (this is necessary otherwise navMessageTypesItem_doubleClicked function does not move the item)
+                            ui->tableWidgetShowNavMessageTypeGPS->setCurrentItem(ui->tableWidgetShowNavMessageTypeGPS->item(0,itemTab));
+                            navMessageTypesItem_doubleClicked(ui->tableWidgetShowNavMessageTypeGPS->item(0,itemTab));
+                            typeOK++;
+                            break;
+                        }
+                    }
+                    if ( itemTab>=ui->tableWidgetShowNavMessageTypeGPS->columnCount() ){
+                        warningString += "Parameter '-model:brdc:gps' has unknown type '" + strNavMT[i] +"'. It was skipped.\n";
+                    }
+                }
+                if ( typeOK<1 ){
+                    warningString += "Parameter '-model:brdc:gps' has no available value. It was set as Default.\n";
+                    this->selectGNSS_ShowNavMessageTypes(1,GPS);
+                }
+            }
+        }
+        else if ( QString::compare(option, "-model:brdc:gal", Qt::CaseInsensitive)==0 ){ //Galileo Nav
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
+            if (ParametersList.count()<1) {
+                warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+            } else {
+                if ( QString::compare(ParametersList[0], "PreferINAV", Qt::CaseInsensitive)==0 ){
+                    this->selectGNSS_ShowNavMessageTypes(1,Galileo);
+                } else if ( QString::compare(ParametersList[0], "PreferFNAV", Qt::CaseInsensitive)==0 ){
+                    this->selectGNSS_ShowNavMessageTypes(1,Galileo);
+                    ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(ui->tableWidgetShowNavMessageTypeGalileo->item(0,3));
+                    this->moveNavMessageTypesColumn(ui->tableWidgetShowNavMessageTypeGalileo,3,0,0);
+                    ui->tableWidgetShowNavMessageTypeGalileo->clearSelection();
+                } else if ( QString::compare(ParametersList[0], "INAV", Qt::CaseInsensitive)==0 ){
+                    //INAV is INAVE1E5b, INAVE1, INAVE5b
+                    this->selectGNSS_ShowNavMessageTypes(1,Galileo);
+                    //Disable FNAV
+                    ui->tableWidgetShowNavMessageTypeGalileo->item(0,3)->setBackgroundColor(RedColor);
+                } else {
+                    int typeOK=0;
+                    QStringList strNavMT=ParametersList[0].split(",", QString::SkipEmptyParts);
+                    this->selectGNSS_ShowNavMessageTypes(0,Galileo);
+                    for (int i=0; i<strNavMT.count(); i++){
+                        int itemTab=0;
+                        for (itemTab=0; itemTab<ui->tableWidgetShowNavMessageTypeGalileo->columnCount(); itemTab++){
+                            if ( QString::compare(strNavMT[i], ui->tableWidgetShowNavMessageTypeGalileo->item(0,itemTab)->text(), Qt::CaseInsensitive)==0 && ui->tableWidgetShowNavMessageTypeGalileo->item(0,itemTab)->background().color().name()==RedColor ) {
+                                //Select item to be moved (this is necessary otherwise navMessageTypesItem_doubleClicked function does not move the item)
+                                ui->tableWidgetShowNavMessageTypeGalileo->setCurrentItem(ui->tableWidgetShowNavMessageTypeGalileo->item(0,itemTab));
+                                navMessageTypesItem_doubleClicked(ui->tableWidgetShowNavMessageTypeGalileo->item(0,itemTab));
+                                typeOK++;
+                                break;
+                            }
+                        }
+                        if ( itemTab>=ui->tableWidgetShowNavMessageTypeGalileo->columnCount() ){
+                            warningString += "Parameter '-model:brdc:gal' has unknown type '" + strNavMT[i] +"'. It was skipped.\n";
+                        }
+                    }
+                    if ( typeOK<1 ){
+                        warningString += "Parameter '-model:brdc:gal' has no available value. It was set as Default.\n";
+                        this->selectGNSS_ShowNavMessageTypes(1,Galileo);
+                    }
+                }
+            }
+        }
+        else if ( QString::compare(option, "-model:brdc:bds", Qt::CaseInsensitive)==0 ){ //BDS Nav
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
+            if (ParametersList.count()<1) {
+                warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+            } else {
+                if ( QString::compare(ParametersList[0], "PreferD1", Qt::CaseInsensitive)==0 ){
+                    this->selectGNSS_ShowNavMessageTypes(1,BDS);
+                } else {
+                    int typeOK=0;
+                    QStringList strNavMT=ParametersList[0].split(",", QString::SkipEmptyParts);
+                    this->selectGNSS_ShowNavMessageTypes(0,BDS);
+                    for (int i=0; i<strNavMT.count(); i++){
+                        int itemTab=0;
+                        for (itemTab=0; itemTab<ui->tableWidgetShowNavMessageTypeBDS->columnCount(); itemTab++){
+                            if ( QString::compare(strNavMT[i], ui->tableWidgetShowNavMessageTypeBDS->item(0,itemTab)->text(), Qt::CaseInsensitive)==0 && ui->tableWidgetShowNavMessageTypeBDS->item(0,itemTab)->background().color().name()==RedColor ) {
+                                //Select item to be moved (this is necessary otherwise navMessageTypesItem_doubleClicked function does not move the item)
+                                ui->tableWidgetShowNavMessageTypeBDS->setCurrentItem(ui->tableWidgetShowNavMessageTypeBDS->item(0,itemTab));
+                                navMessageTypesItem_doubleClicked(ui->tableWidgetShowNavMessageTypeBDS->item(0,itemTab));
+                                typeOK++;
+                                break;
+                            }
+                        }
+                        if ( itemTab>=ui->tableWidgetShowNavMessageTypeBDS->columnCount() ){
+                            warningString += "Parameter '-model:brdc:bds' has unknown type '" + strNavMT[i] +"'. It was skipped.\n";
+                        }
+                    }
+                    if ( typeOK<1 ){
+                        warningString += "Parameter '-model:brdc:bds' has no available value. It was set as Default.\n";
+                        this->selectGNSS_ShowNavMessageTypes(1,BDS);
+                    }
+                }
+            }
+        }
+        else if ( QString::compare(option, "-model:brdc:qzss", Qt::CaseInsensitive)==0 || QString::compare(option, "-model:brdc:qzs", Qt::CaseInsensitive)==0 ){ //QZSS Nav
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
+            if (ParametersList.count()<1) {
+                warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
+            } else {
+                if ( QString::compare(ParametersList[0], "PreferLNAV", Qt::CaseInsensitive)==0 ){
+                    this->selectGNSS_ShowNavMessageTypes(1,QZSS);
+                } else {
+                    int typeOK=0;
+                    QStringList strNavMT=ParametersList[0].split(",", QString::SkipEmptyParts);
+                    this->selectGNSS_ShowNavMessageTypes(0,QZSS);
+                    for (int i=0; i<strNavMT.count(); i++){
+                        int itemTab=0;
+                        for (itemTab=0; itemTab<ui->tableWidgetShowNavMessageTypeQZSS->columnCount(); itemTab++){
+                            if ( QString::compare(strNavMT[i], ui->tableWidgetShowNavMessageTypeQZSS->item(0,itemTab)->text(), Qt::CaseInsensitive)==0 && ui->tableWidgetShowNavMessageTypeQZSS->item(0,itemTab)->background().color().name()==RedColor ) {
+                                //Select item to be moved (this is necessary otherwise navMessageTypesItem_doubleClicked function does not move the item)
+                                ui->tableWidgetShowNavMessageTypeQZSS->setCurrentItem(ui->tableWidgetShowNavMessageTypeQZSS->item(0,itemTab));
+                                navMessageTypesItem_doubleClicked(ui->tableWidgetShowNavMessageTypeQZSS->item(0,itemTab));
+                                typeOK++;
+                                break;
+                            }
+                        }
+                        if ( itemTab>=ui->tableWidgetShowNavMessageTypeQZSS->columnCount() ){
+                            warningString += "Parameter '" + option + "' has unknown type '" + strNavMT[i] +"'. It was skipped.\n";
+                        }
+                    }
+                    if ( typeOK<1 ){
+                        warningString += "Parameter '" + option + "' has no available value. It was set as Default.\n";
+                        this->selectGNSS_ShowNavMessageTypes(1,QZSS);
+                    }
+                }
+            }
         } else if ( QString::compare(option, "-output:file", Qt::CaseInsensitive)==0 ) {
             ui->lineEditOutputFileShowOrbit->setText(userInput);
         } else if ( QString::compare(option, "--output:file", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             warningString += "Parameter '" + option + "' is for setting output messages to standard output, which will be lost after execution finishes. It was skipped.\n";
         } else if ( QString::compare(option, "-output:satvel", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(1,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(1,&warningString,option,ParametersList);
             //This parameter is hidden in the GUI, due to "Inertial" velocity is not the completely in inertial coordinates
             if (ParametersList.count()<1) {
                 warningString += "Parameter '" + option + "' has missing values. It was skipped.\n";
@@ -987,19 +2161,19 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
                  warningString += "Parameter '" + option + "' is not used in the GUI. It was skipped.\n";
                  ui->radioButtonSatVelECEFShowOrbit->setChecked(true);
             } else {
-                warningString += "'" + ParametersList[0] + "' is not a valid option for parameter '" + option + "'. It was skipped.\n";
+                warningString += "'" + ParametersList[0] + "' is not a valid argument for parameter '" + option + "'. It was skipped.\n";
             }
         } else if ( QString::compare(option, "-print:info", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBoxPrintInfoShowOrbit->setChecked(true);
         } else if ( QString::compare(option, "--print:info", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBoxPrintInfoShowOrbit->setChecked(false);
         } else if ( QString::compare(option, "-print:satpvt", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBoxPrintSatpvtShowOrbit->setChecked(true);
         } else if ( QString::compare(option, "--print:satpvt", Qt::CaseInsensitive)==0 ) {
-            extraParametersToWarningStr(0,&warningString,option,ParametersList);
+            extraArgumentsToWarningStr(0,&warningString,option,ParametersList);
             ui->checkBoxPrintSatpvtShowOrbit->setChecked(false);
         } else if ( QString::compare(option, "-print:all", Qt::CaseInsensitive)==0 ) {
             ui->checkBoxPrintInfoShowOrbit->setChecked(true);
@@ -1007,6 +2181,12 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
         } else if ( QString::compare(option, "-print:none", Qt::CaseInsensitive)==0||QString::compare(option, "--print:none", Qt::CaseInsensitive)==0 ) {
             ui->checkBoxPrintInfoShowOrbit->setChecked(false);
             ui->checkBoxPrintSatpvtShowOrbit->setChecked(false);
+        } else if ( QString::compare(option, "-print:clkns", Qt::CaseInsensitive)==0 ) {
+            ui->radioButtonNanosecondsUnitOutputClockSATPVT->setChecked(true);
+        } else if ( QString::compare(option, "--print:clkns", Qt::CaseInsensitive)==0 ) {
+            ui->radioButtonMetresUnitOutputClockSATPVT->setChecked(true);
+        } else if ( QString::compare(option, "-print:v5format", Qt::CaseInsensitive)==0 ) {
+            this->v5Message=1;
         }
     }
 
@@ -1017,7 +2197,12 @@ void gLAB_GUI::showOrbitsLoadParameters(QFile *file) {
     }
 
     if (!warningString.isEmpty()) {
-        messageBox.warning(0, "Errors found",
-                            "gLAB loaded the configuration file, but found the following errors:\n\n" + warningString);
+        messageBox.setWindowTitle("Errors found");
+        messageBox.setText("gLAB loaded the configuration file, but found the following errors:\n\n" + warningString);
+        messageBox.setIcon(QMessageBox::Warning);
+        QSpacerItem* horizontalSpacer = new QSpacerItem(800, 0, QSizePolicy::Minimum, QSizePolicy::Expanding);
+        QGridLayout* layout = static_cast<QGridLayout*>(messageBox.layout());
+        layout->addItem(horizontalSpacer, layout->rowCount(), 0, 1, layout->columnCount());
+        messageBox.exec();
     }
 }

@@ -1,7 +1,7 @@
 GNSS-Lab Tool (gLAB)
 ====================
 
-This is an unofficial mirror of the [GNSS-Lab Tool (gLAB)](https://gage.upc.edu/en/learning-materials/software-tools/glab) v5.5.1, an interactive educational software tool suite to process and analyse GNSS data. gLAB has been developed under an [European Space Agency (ESA)](https://www.esa.int/navigation) contract by the [Research Group of Astronomy and Geomatics (gAGE)](https://gage.upc.edu/) from the [Universitat Politecnica de Catalunya (UPC)](https://www.upc.edu/).
+This is an unofficial mirror of the source code for [GNSS-Lab Tool (gLAB)](https://gage.upc.edu/en/learning-materials/software-tools/glab) v6.0.0, an interactive educational software tool suite to process and analyse GNSS data. gLAB has been developed under an [European Space Agency (ESA)](https://www.esa.int/navigation) contract by the [Research Group of Astronomy and Geomatics (gAGE)](https://gage.upc.edu/) from the [Universitat Politecnica de Catalunya (UPC)](https://www.upc.edu/).
 
 gLAB performs precise modeling of GNSS observables (pseudorange and carrier phase) at the centimetre level, allowing both standalone GPS positioning and PPP. Every single error contributor may be assessed independently, which, in turn, provides a major educational benefit. gLAB is adapted to a variety of standard formats like RINEX-3.00, SP3, ANTEX and SINEX files, among others. Moreover, functionality is also included for GPS, Galileo and GLONASS, allowing performing some data analysis with real multi-constellation data.
 

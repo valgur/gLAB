@@ -1,12 +1,15 @@
-gLAB version v5.5.1, built on Dec 11 2020 12:27:40
+gLAB version v6.0.0, built on Nov 22 2024 23:58:23
+
+Please open this document in Notepad or a terminal or a text editor with a monospace font (all characters with equal width), otherwise
+the ASCII figures below will not be aligned.
 
 SBAS plots mode is a processing mode (available only in command line) where, instead of computing the navigation solution, gLAB
 loops through a grid of points (in longitude and latitude) in the map (by default the EGNOS coverage area), during a 24 hour period.
 In each point, gLAB checks how many satellites are available for SBAS solution (by computing its SBAS corrections). If there are
 4 or more satellites with SBAS corrections (and the geometry matrix can be inverted), the protection levels are computed. If the
-protection levels are below the alarm limits, then there is PA solution available for the current point and epoch. If the selected
-GEO has no PA solution and GEO switching is enabled, gLAB will loop through all GEO until a GEO provides a PA solution or no
-unprocessed GEO remain.
+protection levels are below the alarm limits, then there is PA (Precision Approach) solution available for the current point and epoch.
+When the selected GEO is below the elevation mask or has no PA solution, if GEO switching is enabled, gLAB will loop through all GEO
+until a GEO is over the elevation mask and provides a PA solution or no unprocessed GEO remain.
 
 In order to compute the geometry matrix, receiver a priori coordinates are needed. The a priori coordinates are the
 longitude and latitude of the current point in the grid, and the height is a fixed for all points (by default 0 metres
@@ -51,7 +54,7 @@ Processing only a single day per run has the following advantages and disadvanta
     - More efficient code as it does not need to deal with day changes.
     - Multiple instances of gLAB can be run independently in parallel (one for each CPU available).
         It is much more efficient than running a single instance with multi-threading for multiple days.
-    - If the results are not as expected, it is easier to identify the day(s) with problems (e.g. a ionospheric storm),
+    - If the results are not as expected, it is easier to identify the day(s) with problems (e.g. an ionospheric storm),
        as each day is an independent run.
     - If one processed day fails (e.g. missing data), only that day has to be reprocessed.
     - Data files remain the same size independently of the data range size processed.
@@ -83,7 +86,7 @@ Mac or in Windows -using the Cygwin terminal-). In these scripts, the following 
 
 ADDING UP SBAS AVAILABILITY MAPS
 
-SBAS Availability map data is easy to add up, as the output file contains the number of epochs with PA solution under the protection levels
+SBAS Availability map data is easy to add up, as the output file contains the number of epochs with PA solution under both alarm limits (horizontal and vertical)
 and the number of epochs processed. These values are independent from day to day, therefore it is only needed to add to total number of epochs
 with solution and the total number of epochs processed for each day and location, and divide these values in order to get the availability
 percentage for the whole period. The following bash script does this computation:
@@ -191,12 +194,12 @@ will have to change the plot title to state that the file has data for the two y
 ADDING UP SBAS AVIATION CONTINUITY RISK MAPS (SLIDING WINDOW)
 
 When computing the total continuity risk for multiple continuous days from several single day files (or hourly files), data files are not
-independent from each other, as each discontinuity (defined as the transition from an epoch with PA solution to an epoch without PA solution)
-found affects previous samples. In the case of the sliding window, every time a discontinuity is found, the epochs with PA solution previous to
-the current discontinuity are counted as "in risk" or affected by the current discontinuity. The number of samples "in risk" is the size of
-of the window if the number of continuous epochs with PA solution (prior to the previous discontinuity) is equal or greater than the window size,
-otherwise, only the number of continuous epochs with PA solution (prior to the previous discontinuity) are "in risk".
-The total discontinuity risk is finally computed by dividing the total number of epochs "in risk" by the total number of epochs with PA solution.
+independent from each other, as each discontinuity (defined as the transition from an epoch with PA solution -under both alarm limits- to an epoch
+without PA solution or with PA solution over any alarm limits) found affects previous samples. In the case of the sliding window, every time a discontinuity is found,
+the epochs with PA solution (under alarm limits) previous to the current discontinuity are counted as "in risk" or affected by the current discontinuity.
+The number of samples "in risk" is the size of the window if the number of continuous epochs with PA solution under alarm limits (prior to the previous discontinuity)
+is equal or greater than the window size, otherwise, only the number of continuous epochs with PA solution under alarm limits (prior to the previous discontinuity) are "in risk".
+The total discontinuity risk is finally computed by dividing the total number of epochs "in risk" by the total number of epochs with PA solution under alarm limits.
 Discontinuities can occur, for instance, at the beginning of the day, which would affect samples from the previous day. To account for these
 cases, a script (attached at the end of this manual) has to read the discontinuities (from the discontinuity list file generated by gLAB) and
 count the number of samples which were "in risk" by discontinuities but not counted as "in risk" due to the day or hour change.
@@ -206,13 +209,12 @@ In order to understand how to count these samples, two facts about how gLAB comp
         hour do not affect the previous hour or the following one.
 
 An example is shown below on how to compute the continuity risk, using a sliding window of 5 epochs (this is a very small
-
 window size, used for explanatory purposes. Default aviation sliding window size is 15 seconds):
 
   NOTE: the following symbols are used:
     - '||' is a separator for a day or hour transition
-    - 'X' is an epoch with PA solution
-    - 'O' is an epoch without PA solution
+    - 'X' is an epoch with PA solution under alarm limits (or in short, "epoch with PA solution")
+    - 'O' is an epoch without PA solution or with PA limits over any alarm limit (or in short, "epoch without PA solution")
 
         O O O X X X X X X X X O O O O X X X X X O O O O O O X X X O O O X X
                     |       |         |       |             |   |
@@ -226,6 +228,7 @@ window size, used for explanatory purposes. Default aviation sliding window size
                       Continuity Risk = 13/18 = 0.72
 
 The following cases can occur during a day or hour transition:
+
 Case 1: Day/hour ends without PA solution
 
                X O O||O O O
@@ -235,6 +238,7 @@ Case 1: Day/hour ends without PA solution
   As stated above, when the day or hour ends with discontinuity, the previous epochs with
     PA solution are counted for the number of epochs "in risk". No additional epochs "in risk"
     have to be accounted to the global counter.
+
 Case 2: Day/hour ends with PA solution and the next day/hour file starts without PA solution
 
                X X X||O O O   or   X X X||O O X
@@ -249,6 +253,7 @@ Case 2: Day/hour ends with PA solution and the next day/hour file starts without
     size of the window (if the number of continuous epoch with PA solution is equal or larger
     than the window size) or the number of continuous epoch with PA solution if it is smaller
     than the window size.
+
 Case 3: Day/hour ends with PA solution, the next day/hour starts with PA solution and a discontinuity
         occurs in an epoch which is smaller than the window size:
 
@@ -315,21 +320,21 @@ and the next time using only the hourly files. The resulting files created by bo
 ADDING UP SBAS MARITIME CONTINUITY RISK MAPS (FIXED WINDOW)
 
 The continuity risk for the fixed window is computed as the number of discontinuities multiplied by the window size and divided by the total
-number of epochs in the processed range (independently if any epoch had PA solution or not). For instance, if the processed range is two
-non-gap years, the total number of epochs is 2*365*86400=63072000 (or 63158400 if there is a leap year). When adding up the total number
+number of epochs in the processed range (independently if any epoch had PA solution under alarm limits or not). For instance, if the processed range
+is two non-gap years, the total number of epochs is 2*365*86400=63072000 (or 63158400 if there is a leap year). When adding up the total number
 of discontinuities for several days/hours, it can occur that some discontinuities are not accounted or other are counted twice. Prior to
 explain what these cases are, it is necessary first to detail three facts about how gLAB computes the discontinuities for the fixed window:
     - For daily and hourly files, if the processing ended with discontinuity, this last discontinuity is accounted in the statistics.
     - For hourly files, at the beginning of each hour, internal counters are all reset, therefore, discontinuities from each
         hour do not affect the previous hour or the following one.
-    - If one day or hour has no epochs with PA solution, the number of discontinuities and number of epochs will be 0
+    - If one day or hour has no epochs with PA solution under alarm limits, the number of discontinuities and number of epochs will be 0.
 An example is shown below on how to compute the continuity risk, using a fixed window of 5 epochs (this is a very small
 window size, used for explanatory purposes. Default maritime fixed window size is 900 seconds or 15 minutes):
 
   NOTE: the following symbols are used:
     - '||' is a separator for a day or hour transition
-    - 'X' is an epoch with PA solution
-    - 'O' is an epoch without PA solution
+    - 'X' is an epoch with PA solution under alarm limits (or in short, "epoch with PA solution")
+    - 'O' is an epoch without PA solution or with PA limits over any alarm limit (or in short, "epoch without PA solution")
 
         O O O X X X X X X X X O O O O X X X X X O O O O O O X X X O O O X X
         |   |                 |     |           |         |       |   |
@@ -370,7 +375,7 @@ Case 2: Day/hour ends without PA solution and the following day starts without P
     discontinuity spans for multiple days/hours, days without any epochs with PA solution have zero discontinuities).
     That is, it is counted twice. Therefore it is necessary to subtract one discontinuity to the global counter of discontinuities.
 
-Case 3: At the beginning of the data range, a discontinuity lasts a full day/hour and the next day starts with discontinuity:
+Case 3: At the beginning of the data range, a discontinuity lasts a full day/hour and the next day starts with PA solution:
 
            ||O O O||X X O   or   ||O O O||X X X   or   ||O O O||O O O||X X X   or   ||O O O||O O O||X X O
              |   |                 |   |                 |          |                 |          |

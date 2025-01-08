@@ -1,4 +1,4 @@
-#gLAB version v5.5.1, built on Dec 11 2020 12:27:40
+#gLAB version v6.0.0, built on Nov 22 2024 23:58:23
 #Lines with comments start with a # at the beginning of line
 #If the symbol # is found in the middle of the line, the rest of the line will be omitted, as it will be considered a comment
 #Empty lines will be skipped

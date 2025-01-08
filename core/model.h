@@ -2,7 +2,7 @@
    Copyright & License:
    ====================
 
-   Copyright 2009 - 2020 gAGE/UPC & ESA
+   Copyright 2009 - 2024 gAGE/UPC & ESA
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@
  *             Jesus Romero Sanchez ( gAGE/UPC ) 
  *          glab.gage @ upc.edu
  * File: model.h
- * Code Management Tool File Version: 5.5  Revision: 1
- * Date: 2020/12/11
+ * Code Management Tool File Version: 6.0  Revision: 0
+ * Date: 2024/11/22
  ***************************************************************************/
 
 /****************************************************************************
@@ -223,18 +223,33 @@
  * Release: 2020/12/11
  * Change Log: No changes in this file.
  * -----------
+ *          gLAB v6.0.0
+ * Release: 2024/11/22
+ * Change Log:   Added multi-constellation support (Galileo, GLONASS, GEO, BDS, QZSS and IRNSS).
+ *               Added multi-frequency support (all RINEX frequencies).
+ *               Added SBAS DFMC processing.
+ * -----------
  *       END_RELEASE_HISTORY
  *****************************/
 
 #ifndef MODEL_H_
 #define MODEL_H_
 
+#if defined __WIN32__
+ 	//This is to allow %lld, %llu and %n format specifiers in printf with MinGW
+	#define __USE_MINGW_ANSI_STDIO  1
+#endif
+
 /* System modules */
 #include <stdio.h>
 #include <math.h>
+
+
+// NeQuick-G JRC Additional included libraries
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
 
 /* External classes */
 #include "dataHandling.h"
@@ -254,26 +269,27 @@ void fillAzimuthElevation (TEpoch *epoch, int satIndex);
 void rotate (double *v, double angle, int axis);
 
 // Transmission time estimation
-int fillTransmissionTimeSat (TEpoch *epoch, TGNSSproducts *products, int ind, TSBAScorr *SBAScorr, TOptions *options);
-void fillTransmissionTime (TEpoch *epoch, TGNSSproducts *products, TSBAScorr *SBAScorr, TOptions *options);
-double computeFlightTime (TEpoch *epoch, TGNSSproducts *products, int satIndex, TSBAScorr *SBAScorr, TOptions *options);
+int fillTransmissionTimeSat (TEpoch *epoch, TGNSSproducts *products, int ind, int BRDCtype, TSBAScorr *SBAScorr, TOptions *options);
+double computeFlightTime (TEpoch *epoch, TGNSSproducts *products, int satIndex, int BRDCtype, TSBAScorr *SBAScorr, TOptions *options);
 void correctEarthRotation (double *x, double flightTime);
 
 // Orbits and clocks products
 double nsteffensen (double Mk, double e);
-int satellitePhaseCenterCorrection3D (TTime *t, enum GNSSystem GNSS, int PRN, enum MeasurementType meas, double orientation[3][3], TConstellation *constellation, double *dr);
-int satellitePhaseCenterCorrection (TTime *t, enum GNSSystem GNSS, int PRN, enum MeasurementType meas, double orientation[3][3], double *LoS, TConstellation *constellation, double *pc);
-int satellitePhaseCenterVarCorrection (TTime *t, enum GNSSystem GNSS, int PRN, enum MeasurementType meas, double satearthdistance, double elevation, TConstellation *constellation, double *pvc);
+int satellitePhaseCenterCorrection3D (TTime *t, enum GNSSystem GNSS, int PRN, int freq, double orientation[3][3], TConstellation *constellation, double *dr);
+int satellitePhaseCenterCorrection (TTime *t, enum GNSSystem GNSS, int PRN, int freq, double orientation[3][3], double *LoS, TConstellation *constellation, double *pc);
+int satellitePhaseCenterVarCorrection (enum GNSSystem GNSS, int PRN, int freq, double satearthdistance, double elevation, TConstellation *constellation, double *pvc);
 double getClockBRDC (TBRDCblock *block,TTime *t);
-void getPositionBRDC (TBRDCproducts *products, TBRDCblock *block, TTime *t, enum GNSSystem GNSS,double *position);
-void getVelocityBRDC (TBRDCproducts *products, TBRDCblock *block, TTime *t,double *position, double *velocity, enum SatelliteVelocity satVel, enum GNSSystem GNSS);
+void GLONASSorbitDerivate (double *initValues, double *acceleration, double *derivative);
+void getGLONASSPositionBRDC (TBRDCproducts *products, TBRDCblock *block, TTime *t, double *position);
+void getPositionBRDC (TBRDCproducts *products, TBRDCblock *block, TTime *t, double *position);
+void getVelocityBRDC (TBRDCproducts *products, TBRDCblock *block, TTime *t,double *position, double *velocityINERTIAL, double *velocityITRF);
 double getClockSP3 (TGNSSproducts *products, TTime *t,enum GNSSystem GNSS,int PRN, TOptions *options);
 int getPositionSP3 (TGNSSproducts *products, TTime *t,enum GNSSystem GNSS,int PRN, double *position, TOptions *options);
-int getVelocitySP3 (TGNSSproducts *products, TTime *t,enum GNSSystem GNSS,int PRN, double *position, double *velocity, enum SatelliteVelocity satVel, TOptions *options);
-int getSatellitePVTBRDCraw (TGNSSproducts *products, TTime *t, enum GNSSystem GNSS, int PRN, double *position, double *velocity, double *ITRFvel, double *clock, int SBASIOD, TOptions *options);
-int getSatellitePVTSP3raw (TGNSSproducts *products, TTime *t, enum GNSSystem GNSS, int PRN, double *position, double *velocity, double *ITRFvel, double *clock, TOptions *options);
-int getSatellitePVT (TGNSSproducts *products, TTime *t, double flightTime, enum GNSSystem GNSS, int PRN, double *position, double *velocity, double *ITRFvel, double *clock, int SBASIOD, TOptions *options);
-int fillSatellitePVT (TEpoch *epoch, TGNSSproducts *products, TTime *t, double flightTime, int satIndex, int position, int velocity, int clock, int SBASIOD, TConstellation *constellation, TOptions *options);
+int getVelocitySP3 (TGNSSproducts *products, TTime *t,enum GNSSystem GNSS,int PRN, double *position, double *velocityINERTIAL, double *velocityITRF, TOptions *options);
+int getSatellitePVTBRDCraw (TGNSSproducts *products, TTime *t, enum GNSSystem GNSS, int PRN, double *position, double *velocity, double *ITRFvel, double *clockCorr, int IOD, int BRDCtype, TBRDCblock **block, TOptions *options);
+int getSatellitePVTSP3raw (TGNSSproducts *products, TTime *t, enum GNSSystem GNSS, int PRN, double *position, double *velocity, double *ITRFvel, double *clockCorr, TOptions *options);
+int getSatellitePVT (TGNSSproducts *products, TTime *t, double flightTime, enum GNSSystem GNSS, int PRN, double *position, double *velocity, double *ITRFvel, double *clockCorr, int IOD, int BRDCtype, TBRDCblock **block, TOptions *options);
+int fillSatellitePVT (TEpoch *epoch, TGNSSproducts *products, TTime *t, double flightTime, int satIndex, int position, int velocity, int clockCorr, int IOD, int BRDCtype, TBRDCblock **block, TOptions *options);
 void getLineOfSight (double *satPos, double *recPos, double *LoS);
 void fillLineOfSight (TEpoch *epoch, int satIndex);
 void findMoon (TTime *t, double* moonPosition);
@@ -281,8 +297,8 @@ void findSun (TTime *t, double* sunPosition);
 void GSDtime_sun (TTime *t,double *gstr, double *slong, double *sra, double *sdec);
 
 // Receiver antenna corrections
-double receiverPhaseCenterCorrection (TAntenna *antenna, enum GNSSystem GNSS, enum MeasurementType meas, double orientation[3][3], double *LoS);
-double receiverPhaseCenterVarCorrection (TAntenna *antenna, enum GNSSystem GNSS, enum MeasurementType meas, double elevation);
+double receiverPhaseCenterCorrection (TAntenna *antenna, enum GNSSystem GNSS, int freq, double orientation[3][3], double *LoS);
+double receiverPhaseCenterVarCorrection (TAntenna *antenna, enum GNSSystem GNSS, int freq, double elevation);
 double receiverARPCorrection (double *ARP, double orientation[3][3], double *LoS);
 
 // Relativistic correction
@@ -296,26 +312,28 @@ double interpolateNiell (double x, double v[3][5], int i);
 double xmNiell (double elevation, double vector[3]);
 void tropNiell (TTime *t,double *positionNEU,double elevation,double *tropDryMap,double *tropWetMap);
 double troposphericCorrection (TTime *t, double *positionNEU, double elevation, TTROPOGal *TropoGal, double *tropWetMap, double *ZTD, TOptions *options);
-void troposphericCorrectionMOPS (TTime *t, double *positionNEU, double elevation,double *tropWetMOPS_Nominal,double *tropDryMOPS_Nominal);
-void troposphericCorrectionGal (TTime *t, double *positionNEU, double elevation, TTROPOGal *TropoGal, double *tropWetESA_Nominal, double *tropDryESA_Nominal);
-void troposphericGalparameters (TTime  *t, int ilat, int ilon, double latitude, double longitude, double  *positionNEU, double  elevation, double MapPoints[4][3], double *hgt_pix, TTROPOGal *TropoGal, TTROPOGalParameters *parameters); 
+void troposphericCorrectionMOPS (TTime *t, double *positionNEU, double *tropWetMOPS_Nominal,double *tropDryMOPS_Nominal);
+void troposphericCorrectionGal (TTime *t, double *positionNEU, TTROPOGal *TropoGal, double *tropWetESA_Nominal, double *tropDryESA_Nominal);
+void troposphericGalparameters (TTime  *t, int ilat, int ilon, double  *positionNEU, double MapPoints[4][3], double *hgt_pix, TTROPOGal *TropoGal, TTROPOGalParameters *parameters); 
 
 // Ionospheric correction
 double klobucharModel (TEpoch *epoch,TGNSSproducts *products, int satIndex);
 double beiDouKlobucharModel (TEpoch *epoch, TGNSSproducts *products, int satIndex);
 double ionexModel (TEpoch *epoch, int satIndex, TIONEX *ionex, TOptions *options);
-double FPPPModel (TEpoch *epoch, int satIndex, TFPPPIONEX *fppp, TOptions *options);
-double NeQuickfunctionCall (TEpoch *epoch, int satIndex,TGNSSproducts *products, TOptions *options);
+double FPPPionoModel (TEpoch *epoch, int satIndex, TFPPPIONEX *fppp, TOptions *options);
+double NeQuickfunctionCall (TEpoch *epoch, int satIndex,TGNSSproducts *products);
 
 // Gravitational delay correction
 double gravitationalDelayCorrection (double *receiverPosition, double *satellitePosition);
 
 // TGD correction
-void getTGDfromDCB (TTGDdata *tgdData, TReceiver *rec, enum GNSSystem GNSS, int PRN, TTime *t, enum MeasurementType measFrom, enum MeasurementType measTo, double *dcb, int *retDCB, int *retDCBC1P1);
-double TGDCorrectionBRDC (TEpoch *epoch, int satIndex, int SBASIOD, TTime *t, TBRDCproducts *products, TOptions *options);
-double TGDCorrectionIONEX (TEpoch *epoch, int satIndex,TIonexDCB *ionexDCB,TOptions *options);
-double TGDCorrectionFPPP (TEpoch *epoch, int satIndex,TFPPPDCB *fpppDCB,TOptions *options);
-double TGDCorrection (TEpoch *epoch, int satIndex, TTime *t, enum MeasurementType meas, int SBASIOD, TTGDdata *tgdData, TOptions *options);
+int ComputeDualFrequencyDCBs (TEpoch *epoch, TTime *t, enum GNSSystem  GNSS, int  PRN, int  satIndex, double *DCBModel, TTGDdata  *tgdData, int IOD, TOptions  *options);
+void getTGDfromDCB (TTGDdata *tgdData, TEpoch *epoch, enum GNSSystem GNSS, int PRN, TTime *t, enum MeasurementType measFrom, enum MeasurementType measTo, double *dcb, int *retDCB, int *retDCBC1P1);
+TBRDCblock* TGDSelectNavMessage (TEpoch *epoch, int satIndex, int IOD, int BRDCTypeSelected, TTime *t, TBRDCproducts *prod, TOptions *options);
+double TGDCorrectionIONEX (TEpoch *epoch, int satIndex,TIonexDCB *ionexDCB, double conversionFactor);
+double TGDCorrectionFPPPIonoFile (TEpoch *epoch, int satIndex,TFPPPDCB *fpppDCB);
+double TGDCorrection (TEpoch *epoch, int satIndex,  enum GNSSystem GNSS, int PRN, TTime *t, enum MeasurementType meas, enum ProductsType OrbitProducts, double frequency, int IOD, int BRDCTypeSelected, TTGDdata *tgdData, TOptions *options, double *GPSp1c1DCB, double *differentialDCB, double *ISCDCB, double *preciseDCB);
+double TGDCorrectionFastPPP (TEpoch *epoch, int satIndex, enum GNSSystem GNSS, int PRN, TTime *t, enum MeasurementType meas, double frequency, TTGDdata *tgdData, TOptions *options, double *GPSp1c1DCB, double *differentialDCB);
 
 // Solid tides
 void fillSolidTideDisplacement (TEpoch *epoch);
@@ -333,18 +351,18 @@ TReceiverData *getReceiverType (char *name, TReceiverList *recList);
 
 // General modeling
 int modelEpoch (TEpoch *epoch, TOptions *options);
-int modelSatellite (TEpoch *epoch, TEpoch *epochDGNSS, int satIndex, TGNSSproducts *products, TGNSSproducts *klbProd, TGNSSproducts  *beiProd, TGNSSproducts *neqProd, TIONEX *Ionex, TFPPPIONEX *Fppp, TTROPOGal *TropoGal, TTGDdata *tgdData, TConstellation *constellation, TSBASdata *SBASdata, TOptions *options);
+int modelSatellite (TEpoch *epoch, TEpoch *epochDGNSS, int satIndex, TGNSSproducts *products, TGNSSproducts  *productsHealth, TGNSSproducts *klbProd, TGNSSproducts  *beiProd, TGNSSproducts *neqProd, TIONEX *Ionex, TFPPPIONEX *Fppp, TTROPOGal *TropoGal, TTGDdata *tgdData, TConstellation *constellation, TConstellation *constellationPrint, TSBASdata *SBASdata, TOptions *options);
 
 // SBAS processing
-int computeSBAS (TEpoch *epoch, TGNSSproducts  *products, TGNSSproducts *klbProd, TGNSSproducts  *beiProd, TGNSSproducts *neqProd, TIONEX *Ionex, TFPPPIONEX *Fppp, int satIndex, enum MeasurementType meas, int measIndex, TSBASdata *SBASdata, TSBAScorr *SBAScorr, TOptions *options);
-double SBASIonoModel (TEpoch *epoch, TGNSSproducts *products, int satIndex, int *errorvalue, TSBAScorr *SBAScorr, TSBASdata *SBASdata, TOptions *options);
+int computeSBAS1F (TEpoch *epoch, TGNSSproducts  *products, TGNSSproducts *klbProd, TGNSSproducts  *beiProd, TGNSSproducts *neqProd, TIONEX *Ionex, TFPPPIONEX *Fppp, int satIndex, enum MeasurementType meas, TSBASdata *SBASdata, TSBAScorr *SBAScorr, TOptions *options);
+int computeSBASDFMC (TEpoch *epoch, TGNSSproducts  *products, int satIndex, TSBASdata *SBASdata, TSBAScorr *SBAScorr, TOptions *options);
+double SBASionoModel (TEpoch *epoch, int satIndex, int *errorvalue, TSBAScorr *SBAScorr, TSBASdata *SBASdata, TOptions *options);
 int SwitchSBASGEOMode (TEpoch  *epoch, int  numsatellites, int  numsatdiscardedSBAS, TSBASdata *SBASdata, TOptions  *options);
 
 // DGNSS processing
-void prepareDGNSScorrections (TEpoch *epoch, TEpoch *epochDGNSS, TGNSSproducts *products, TOptions *options);
+void prepareDGNSScorrections (TEpoch *epochDGNSS);
 void computeDGNSScorrections (TEpoch *epoch, TEpoch *epochDGNSS, TGNSSproducts *products, TOptions *options);
 void preFillUsableSatellites (TEpoch *epoch, TEpoch *epochDGNSS, TGNSSproducts *products, TOptions *options);
-
 
 // NeQuick-G JRC. Implementation begin
 
@@ -1701,6 +1719,11 @@ int32_t set_solar_activity_coefficients(
   const NeQuickG_handle handle,
   const double_t * const pCoeff, size_t coeff_count);
 
+int32_t get_total_electron_content_impl(
+  NeQuickG_context_t* const pNequick_Context,
+  double_t height_km,
+  double_t* const pTotal_electron_content);
+
 int32_t get_total_electron_content_impl2(
   const NeQuickG_handle handle,
   double_t* const pTotal_electron_content);
@@ -1774,7 +1797,7 @@ int32_t F2_layer_fourier_coefficients_get(
   const NeQuickG_time_t * const pTime,
   const solar_activity_t* const pSolar_activity);
 
-
 // NeQuick-G JRC. Implementation end
+
 #endif /*MODEL_H_*/
 

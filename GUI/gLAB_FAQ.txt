@@ -1,0 +1,886 @@
+gLAB version v6.0.0, built on Nov 22 2024 23:58:23
+
+-------------------------KNOWN ISSUES---------------------------------
+
+  IN WINDOWS 11, WHY IS THE PROCESSING TIME MUCH SMALLER THAN THE REAL PROCESSING TIME?
+
+       This is a Windows 11 bug since Windows 11 version 22H2, which makes processing time reported by function 'GetProcessTimes' (the only Windows function
+        that provides processing time separated by user and kernel times) be much smaller than the real wall time. The only workaround for this issue is to
+        launch gLAB (without multi-threading) from command line with CPU affinity set to CPU 0 only, which can be done in the following way:
+
+          - Windows command line:
+
+               start /affinity 1 gLAB.exe <gLAB_parameters>
+
+          - Linux/Cygwin command line:
+
+               taskset -c 0 ./gLAB_linux <gLAB_parameters>
+
+        When using the Windows command line method, the standard output redirection (with the '>' symbol) will not work, so it is mandatory to use '-output:file'
+         parameter to redirect the gLAB output.
+
+        Moreover, it possible to compute the total processing time (without separating user and kernel modes) in Windows Powershell, with the following command:
+
+               Measure-Command {gLAB.exe <gLAB_parameters>}
+
+        With this method, the gLAB output must be redirected to a file, otherwise it is not shown in the terminal. It can be done by either using the redirection
+         sign ('>') inside the curly brackets ('}') or using parameter '-output:file'.
+
+  WHY THE GUI IN SOME NEWER VERSIONS OF LINUX STARTS WITH A VERTICAL SCROLLBAR?
+
+       It is not known why this graphical bug occurs, as there is enough space to fit the elements without a vertical scrollbar, but for some reason vertical
+         space is added, which does not occur in older versions of Linux (where no vertical scrollbar appears at launch). It does not seem a Qt issue, as it is
+         embedded in the executable (statically compiled), but an issue with system libraries. Note that Linux is forward compatible but not backward compatible,
+         that is, a software compiled in a given Linux version will work in newer Linux versions but not in older ones, therefore it is necessary to compile the
+         GUI in older versions of Linux (the GUI is compiled in Ubuntu 14.04).
+       If this bug occurs, just increase the vertical size of the application until the scrollbar disappears, as it is only a graphical bug which does not affect
+        any functionality.
+
+  WHY THE GUI IN MAC IS NOT AESTHETICALLY AS GOOD AS IN WINDOWS AND LINUX?
+
+       This is mainly due to Qt libraries in Mac, which create a very different result with respect to Windows and Linux.
+       To set the GUI in Mac similar level as in Windows and Linux, a lot of manual tweaking would be necessary, which we have no time and interest to fix.
+       We only provide Mac for convenience for our users, and only commit to fix functional or visual (e.g. text not visible) breaking bugs in the Mac GUI.
+
+-------------------------gLAB GENERAL QUESTIONS-----------------------
+
+  HOW TO CONTACT gAGE GROUP FOR SUPPORT WITH gLAB?
+
+       In case you need support for gLAB, you can contact us at glab.gage @ upc.edu.
+        Before writing the request, please check that your doubt is not answered in the FAQ below.
+        Please provide as much information as possible. The easiest it is for us to understand your problem, the faster we can help you.
+        If the issue is related to the output of gLAB, please attach all the files used and the configuration file (you can create one with
+        the GUI in the menu 'Configuration->Save Configuration file') or the command line used. If files are large, you can use online services
+        such as WeTransfer (https://wetransfer.com) to send the files. With this info, we will be able to reproduce the problem and provide a quicker answer.
+
+  HOW TO REFERENCE gLAB?
+
+       For referencing the gLAB tool, please cite the following PhD thesis:
+
+           Ibanez D. (2023) Contributions to multi-purpose GNSS positioning to support multi-frequency and multi-constellation with high accuracy
+           and integrity. PhD thesis, URL https://server.gage.upc.edu/PhD/Ibanez_Deimos/PhD_Ibanez_Deimos.pdf
+
+  WHICH ARE THE INPUT FILES SUPPORTED?
+
+       RINEX OBSERVATION FILE: 2.10, 2.11, 3.00, 3.01, 3.02, 3.03, 3.04, 3.05
+       RINEX NAVIGATION  FILE: 2.10, 2.11, 3.00, 3.01, 3.02, 3.03, 3.04, 3.05
+       SP3               FILE: a, b, c, d
+       RINEX CLOCK       FILE: 2.00, 3.00, 3.01, 3.02, 3.04
+       ANTEX             FILE: 1.0, 1.1, 1.2, 1.3, 1.4
+       IONEX             FILE: 1.00, 1.1 (including support for multi-layer maps and irregular time spacing between samples)
+       CODE DCB          FILE: P1-C1 and P1-P2 DCB files (no version number on these files)
+       RINEX-B           FILE: 2.00, 2.10, 2.11
+       EMS               FILE: version for SBAS 1F messages and version for SBAS 1F and DFMC messages is supported (no version number in these files)
+       RTCM              FILE: 2.0, 2.1, 2.2, 2.3, 3.0, 3.1, 3.2, 3.3 (it only decodes GPS data for any of the RTCM versions)
+
+     Although RINEX 4 is not supported, RINEX 4 observation file does not change the file format, so it should work fine.
+     The unofficial MGEX RINEX navigation version '4.00' with GPS CNAV data is supported, but has different format as the official RINEX 4.
+
+  WHICH ARE THE OPERATIVE SYSTEMS AND ARCHITECTURES SUPPORTED?
+
+       WINDOWS (x86):                  The GUI, core and graphical tool can run on x86, but must be compiled by the user.
+       WINDOWS (x86_64):               7, 8, 8.1, 10, 11
+       LINUX   (x86):                  The GUI, core and graphical tool can run on x86, but must be compiled by the user.
+       LINUX   (x86_64, ARMv7, ARM64): Ubuntu 16.04 and above. Compatible with other Linux distributions.
+       MAC     (x86_64):               OS X 10.11 (El Capitan) and above.
+
+        Note that this list corresponds to the whole gLAB software (core, GUI and graph tool).
+        The core uses standard C99 libraries, therefore any platform and operative system with a C99 compiler should be able to run the core.
+
+  HOW TO RUN GLAB WITH A CONFIGURATION FILE (GENERATED WITH THE GUI OR MANUALLY)?
+
+       To run gLAB with a configuration file, use the following command:
+
+          ./gLAB_linux -input:cfg configuration_file 
+
+       Note that using a configuration file does not prevent to provide additional parameters in command line. For instance, the configuration file
+        can be used to set the processing parameters and then in command line provide the input files. For instance:
+
+          ./gLAB_linux -input:cfg configuration_file -input:obs rinex_file -input:nav nav_file
+
+  WHAT CONSTELLATIONS CAN AND CANNOT PROCESS gLAB IN VERSION 6 (FIRST MULTICONSTELLATION VERSION)?
+
+       SPP mode: Process all constellations.
+
+       PPP mode: Process all constellations.
+
+       SBAS 1F mode: Only GPS SBAS processing (same as previous versions).
+
+       SBAS DFMC mode: GPS and Galileo as in current SBAS DFMC version (although it should work with other constellations if the message structure is the same).
+
+       DGNSS mode: Only GPS DGNSS processing (same as previous versions, including RTCM decoding), although internal
+             architecture for DGNSS processing has been prepared for multi-constellation.
+
+       Add User Error to RINEX mode: All constellations supported.
+
+  WHAT ARE THE MEASUREMENT SELECTION MODES IN gLAB?
+
+       In SPP and PPP modes (SBAS and DGNSS have fixed measurements), gLAB internally works in three modes for measurement selection:
+         - Automatic mode: gLAB automatically selects which measurements (or combinations) and frequencies to use based on the processing mode (SPP, PPP).
+            The frequencies and measurements selected are based on the frequency and measurement priority lists, which can be modified by the user
+              a per satellite basis. In SPP mode, automatic mode will select single frequency measurements, while in PPP mode it will select dual
+              frequency measurements. The user can force gLAB to autoselect single frequency, dual frequency or graphical combination measurements
+              independently of the processing mode using parameter '-filter:combtype'.
+              Moreover, If an ANTEX file is provided, gLAB will autoremove all measurements not available on each satellite (e.g. L5 for GPS).
+            Automatic mode is triggered when the user does not set any measurement to be used in the navigation filter or it sets some measurements for some
+              satellites and for the rest it is explicitly stated to 'auto' (e.g. -filter:select G0-code-1 E0-auto). In the latter case, satellites without
+              any information in the parameter will not be used.
+
+         - Semi-automatic mode: This mode is triggered when the user sets a measurement type (or combination) to use (and its frequency) to be
+            used in the filter, but not the measurement names (eg. G0-PC12). In this case, gLAB selects the measurement to use according to
+            the measurement priority list (which can be modified by the user in a per satellite basis) and the available measurements
+            in the RINEX observation file. Furthermore, the user can set satellite measurements 'auto' (as in previous case) for automatic selection.
+
+         - Manual mode: This mode is triggered when the user sets the measurement types and measurement names (e.g. G0-PC12-C1C-C2P) to be used
+            in the navigation filter. Furthermore, the user can set satellite measurements 'auto' (as in previous case) for automatic selection.
+
+         Note that semi-automatic and manual mode can both co-exist at the same time if user sets for the navigation filter measurement types (without
+          the measurement names) and also measurement types with measurement names.
+         In semi-automatic and manual modes, the measurement selection will be done after reading the first epoch of data, as satellites may not have all
+          measurements listed in the header. The first epoch of data is read after the INFO messages with gLAB configuration printed at the start of the
+          output file. Therefore, to check the measurements selected by gLAB, the user must check any of the MODEL, PREFIT, POSTFIT or EPOCHSAT messages.
+
+         The frequency and measurement priority lists are available in the menu 'Set GNSS Frequencies and Measurements Order' in the 'Filter' tab in the GUI
+          or in the description of parameters '-pre:freqorder' and '-pre:measorder' in the command line help.
+
+  CAN gLAB AUTOMATICALLY SELECT SMOOTHED MEASUREMENTS?
+
+       Yes, but the user needs to explicitly provide parameter '-pre:smoothauto' in order to use smoothed measurements (except in SBAS and DGNSS modes,
+        which is the default). The default smoothing time is 100 epochs if none set (it can be changed in the GUI or with parameter '-pre:smooth').
+        If user provides both parameters '-pre:smoothauto' and '-pre:smoothmeas', the former will be ignored to avoid interfering
+        with user selection of smoothed measurements.
+
+  IS IT NECESSARY TO SELECT MEASUREMENTS FOR CYCLE-SLIP DETECTORS WHEN MEASUREMENTS FOR THE FILTER ARE MANUALLY SET?
+
+       No, gLAB will check that all carrier phases used in the filter are processed by all enabled cycle-slip detectors. If any carrier phase measurement
+        is missing in any cycle-slip detector, gLAB will automatically add it to each cycle-slip detector without it. Note that each cycle-slip detector
+        can run multiple iterations with different measurements, so it will not remove any other iteration already set.
+       It is possible to disable the auto measurement filling in the cycle-slip detectors by providing parameter '-pre:cs:noautofill'.
+
+  CAN gLAB AUTO DETECT THE MEASUREMENTS AVAILABLE IN EACH SATELLITE?
+
+       Yes, but only if an ANTEX is provided. From the ANTEX, it detects the satellite block, which determines the available frequencies and measurements
+        for a given satellite. In PPP mode it will use the provided ANTEX file. If no ANTEX is provided or it is not PPP mode, the option '-input:antsatblock'
+        can be used to provide an ANTEX for this purpose.
+       An example of use case of this feature: the user wants process with a iono-free combination with L1/L5 for all GPS with L5, otherwise use L1/L2 instead.
+        To accomplish this, the only additional command line parameter required is to change the frequency priority list to 1-5-2 (or any order where
+        frequency 5 is in first or second position) with parameter '-pre:freqorder G0-152'.
+
+  CAN gLAB PROCESS MULTIPLES DAYS IN A SINGLE RUN IN FORWARD AND BACKWARDS MODES?
+
+       Yes, it can process multiple days in a row (without reset between days) as long as the input files (observation, navigation or precise files) are concatenated in a single file.
+
+          - For forward processing mode only, all the files (observation, navigation, precise files, SBAS files) can all be concatenated with or without headers.
+              o For the special case of IONEX file, or either it is concatenated with the header, or with only the first header but modifying it to include the total
+                 number of maps after concatenating.
+              0 CODE DCB GPS P1-C1 and GPS P1-P2 files do not support concatenation, but this should be not much of a problem, as P1-C1 DCB files are monthly files,
+                 while P1-P2 DCB can be read from navigation files instead.
+
+          - For backward processing mode, it is compulsory to concatenate all files without headers, as input cannot be read backwards. There are a few exceptions:
+              o The RINEX observation file is the only file that supports backwards reading (with or without headers). The only limitation is that when reading backwards,
+                 it will skip all headers found, as when reading backwards the headers found refer to the data already read. Therefore, it is compulsory that the
+                 observation file always keeps the same order and number of measurements (only for backwards mode).
+              o If using SP3 or CLK files and the number of concatenated files is equal or below 3, it is not necessary to remove headers as gLAB reads up to three
+                  days of SP3 and CLK data at a time.
+              o If using navigation files and the number of concatenated files is equal or below 2, it is not necessary to remove headers as gLAB reads up to two
+                  days of navigation data at a time.
+
+          - SBAS and DGNSS modes do not support backwards processing mode.
+
+          For concatenating files, see question 'HOW TO CONCATENATE FILES?' below.
+
+  CAN MEAS MESSAGE BE USED AS A CONVERTER FROM RINEX OBSERVATION TO A COLUMNAR TEXT FILE?
+
+       Yes, since version v6, MEAS message can print all measurements in RINEX observation file (pseudorange, carrier phase, SNR, Doppler and LLI flag). Moreover, for the case
+        of the SNR, if the SNR as a measurement is provided, it will print the measurement. Otherwise, it will print the SNR read as a flag (converted to a number).
+       Also, since version 6 the user can select which measurements to print (and in which order) in a per satellite basis, independently of the RINEX observation contents.
+       Moreover, the user can select which satellites to print. This is done by selecting the satellites with option '-pre:sat'.
+       Last but not least, since version 6 the MEAS message also includes the arc number and length, the block type and the SVN, therefore the MEAS message contains
+        information from the RINEX observation file, ANTEX file (if provided) and the cycle-slips.
+
+  IS IT POSSIBLE TO PRINT CLOCK ESTIMATES IN NANOSECONDS?
+
+       Yes, by providing the parameter '-print:clkns'. When this parameter is provided, the receiver clock offset in FILTER and OUTPUT messages will be printed in
+        nanoseconds instead of metres, and the inter-sytem clock bias in FILTER and MODEL messages will also be printed in nanoseconds.
+       Furthermore, in the INFO messages at the beginning, the Q and P0 values for the receiver clock and inter-system clock bias in the filter will also be printed
+        in nanoseconds. Note that there are also specific parameters for providing these values in nanoseconds, instead of metres.
+
+  HOW TO CONCATENATE FILES?
+
+       As gLAB accepts multiple headers in data files, we just need to concatenate the files directly. The only requirement is to do it chronological order.
+
+          - Windows command line (the user can concatenate as many files as wanted at once):
+
+               copy /b file1+file2+file3 concatenated_file
+
+          - Linux/Cygwin command line (the user can concatenate as many files as wanted at once):
+
+               cat file1 file2 file3 > concatenated_file
+
+       Moreover, for the case of RINEX navigation files, it is convenient to concatenate files without the header (except for the first file) in SBAS modes, as in this case
+        gLAB will read all the three day as a single day, which is useful to avoid missing packages at the beginning or end of day (specially for SBAS modes). It can
+        be done with the following command in Linux or Cygwin terminal (valid for RINEX navigation v2 and v3):
+
+               cat file2 file3 | sed -n '/[A-Z#][ ]\{0,\}$/!p' | sed '/WAVELENGTH FACT/d' | sed '/GLONASS SLOT/d' | cat file1 - > concatenated_brc_file_with_first_file_header
+
+       With the previous command, the remaining header will be from the first file. To keep the header of the second file, just swap file1 with file2. Otherwise,
+        if only the 'IONOSPHERIC CORR' header lines are need for the Klobuchar, Nequick or BeiDou Klobuchar models, gLAB can read them from a different file than the
+        source file of navigation messages (parameter '-input:nav') by providing parameter '-input:klb', '-input:neq' or '-input:bds' for each model respectively.
+
+  HOW TO MERGE MULTIPLE SBAS DATA FILES (RINEX-B OR EMS) FROM DIFFERENT GEOS TO CREATE A SINGLE MULTI-GEO FILE?
+
+       In order for gLAB to process SBAS and be able to switch GEOs, it needs to have data from all the GEOs to be used in the same file, with data ordered in
+        chronological order, but usually SBAS messages file are given in a file per each GEO. To join the files, follow the next steps:
+
+         - Convert file from RINEX-B to EMS format (if file is in EMS format, the user can skip this step). Use gLAB to convert from RINEX-B to EMS, as both files
+            do not have the same timestamp reference.
+
+                 ./gLAB_linux -input:sbas rinexbfile -output:ems -onlyconvert -output:dir conversionfolder
+
+              Parameter '-output:dir' is optional and specifies and output directory (which will be created by gLAB if it doesn't exist). If not specified
+               or directory is '.', output file will be written in current directory.
+              Repeat the process for each file to be converted.
+
+         - Concatenate files and sort them by timestamp. This command must be executed in a Linux or Cygwin terminal. In Windows, it is necessary to downloaded
+            precompiled version of UNIX 'cat' and 'sort' programs to execute the same command as in Linux/Cygwin.
+            The command is (the user can execute the command with as many files at a time as necessary):
+
+                 cat emsfile1 emsfile2 emsfile |sort -n -k2 -k3 -k4 -k5 -k6 -k7 -k1 > multigeo_ems_file
+
+         - (Optional) Convert the merged EMS file back to RINEX-B:
+
+                 ./gLAB_linux -input:sbas multigeo_ems_file -output:rinexb -onlyconvert
+
+        The user can later concatenate merged files from different days to create a multi-GEO and multi-day SBAS file.
+
+  HOW TO PROCESS A FULL DAY OF DATA WITHOUT CONVERGENCE TIME?
+
+       Convergence time occurs in both PPP (for cycle-slip detection and the carrier phase ambiguities convergence) and SBAS modes (smoothing and SBAS message buffering).
+        To process a full day without convergence time, it is necessary to concatenate two days (see question 'HOW TO CONCATENATE FILES?'), the first day for the convergence
+         and the second day with the results of interest. In the case of SBAS (or PPP for only the cycle-slip convergence), a 15 minute convergence suffices, so the user can either
+         concatenate 15 minutes of data (not explained in this FAQ) or set the start time in gLAB (with parameter '-pre:starttime') to 23:45 of the first day and the summary
+         start time (with parameter '-summary:starttime') to 00:00 of the second day.
+
+  WHY GLAB NEEDS TO CONCATENATE FILES INSTEAD OF READING MULTIPLE FILES TO PROCESS MULTIPLE DAYS?
+
+       This is a usual question from professional users, where tools are designed with very specific purposes and requirements. Indeed, reading multiple files for multiple days
+        is convenient as the user only needs to provide the input files, but comes with the disadvantage that the user must also provide to the tool a folder when to find the files
+        and a strict file convention so the tool reads only the files of interest and in the correct order. This rigidity is a problem for both educational and research users. For the
+        former usage, only having to provide an input file makes new gLAB users first contact much easier (specially with the GUI). For the latter usage, researcher perform many tests by
+        modifying existing files, and being able to use any filename (as gLAB does not care about filenames and extensions) is a crucial feature. As gLAB was first designed with these
+        two usages in mind, this was the approach chosen and it will not change.
+
+  WHAT ARE THE 'DUAL FREQUENCY DCB'?
+
+       To explain what are 'dual frequency DCBs', first it is need to explain what is a DCB (Differential Code Bias).
+       Broadcast navigation messages or precise products provide orbits and clock products. These are computed using a reference measurement or a combination (usually
+        a ionospheric-free). For instance, broadcast BeiDou products that are referred to the B3 signal). whereas GPS products are referred to the iono-free
+        combination built with measurements C1P and C2P.
+
+       Therefore, the satellite clock correction is referred to this combination. In the case of using any single frequency measurement or any iono-free combination
+        with different measurements (even if they are different attributes, like C5I or C5Q), it is necessary an additional term to convert the measurement used (in
+        terms of clock correction only) to the reference measurement used by the orbit and clock products used. This term is called the DCB.
+
+       When GPS and GLONASS where available with only two frequencies and few measurements, the DCB provided in the navigation message were to convert from a single
+        frequency measurement (C1P or C2P) to the reference iono-free combination with C1P and C2P. For this reason, gLAB applied this DCB in the modelling of the
+        measurement prior to performing any measurement combination (if necessary). Therefore, if a iono-free combination was computed later in the gLAB processing,
+        the DCBs would cancel if they had been applied.
+
+       With the current paradigm of multiple frequencies and measurements, there are several different measurements and iono-free combinations available. However, the
+        measurements used as a reference in the orbit and clock products have not changed. Therefore, it is needed additional DCBs or provide additional correction terms to
+        the existing DCBs (which will also be DCBs). The latter approach has been used, and these terms are named ISC (Inter Signal Correction), and can be used to convert
+        single frequency measurements or iono-free combinations to the reference clock. In the case of iono-free combinations, according to the ICDs, they have to be applied
+        after computing the iono-free combination, not before, with a specific formula which may use multiple DCBs. For instance, the ICD for GPS uses iono-free combination
+        built with frequencies F1 and F5 uses two DCBs: the TGD and an ISC DCB). The specific formula to be applied in such iono-free combinations is what gLAB
+        defines as 'dual frequency DCBs'.
+
+  WHAT IS THE 'BEIDOU SINGLE FREQUENCY PRECISE ORBITS DCB MODEL' DCB TERM SHOWN IN THE INFO MESSAGES?
+
+       As commented in the previous question "WHAT ARE THE 'DUAL FREQUENCY DCB'?", DCBs for BeiDou (for BDS-2 signals) are a special case, because the satellite clock
+        broadcast in the navigation message is referred to the B3 measurement, instead to an iono-free combination. Then, when using single frequency measurement with
+        precise orbits and clocks (e.g. IGS), it is necessary to apply a DCB, because the precise products are referred to the iono-free combination of signals B1-B2b,
+        whilst the DCB provided in the navigation message is referred to the B3 measurement.
+       Therefore, when using precise products, it is necessary to add a correction factor instead of applying directly the DCB from the navigation message. The
+        correction factor is computed as follows:
+
+                       Correction_factor = (TGD26*f2^2 - TGD76*f7^2) / (f2^2 - f7^2)
+
+       Where:
+
+           TGD26 -> DCB term (in seconds) provided in D1 or D2 broadcast navigation messages which corrects signal B1 (frequency 2) to B3 (frequency 6)
+           TGD76 -> DCB term (in seconds) provided in D1 or D2 broadcast navigation messages which corrects signal B2b (frequency 7) to B3 (frequency 6)
+           f2 -> frequency (in hertz) of signal B1
+           f7 -> frequency (in hertz) of signal B2b
+
+        Once correction factor has been computed, the DCB to be applied to a single frequency measurement with precise orbits is computed as follows:
+
+                       DCB_to_apply = TGDX6 - Correction_factor
+
+       Where:
+
+           TGDX6 -> DCB term (in seconds) in any navigation message which corrects a signal (from frequency X) to B3 (frequency 6)
+
+        Note that both terms 'Correction_factor' and 'DCB_to_apply' are in seconds, as the TGD applied were in seconds.
+
+  WHY DOES GLAB SOMETIMES REPORT THAT GPS C1P MEASUREMENT IS AVAILABLE (AND MAY ALSO BE USED IN THE FILTER) WHEN THE MEASUREMENT IS NOT IN THE RINEX OBSERVATION FILE?
+
+       Receivers tracking the legacy GPS signals (L1 and L2), can be classified in three different types:
+
+          Type 1: Cross-correlated receiver. This receiver type provides C1C and C2P measurement (but not C1P). To obtain C1P and a consistent C2P measurement,
+                   the P1-C1 DCB (or ISC L1C/A) must be applied to C1C (to obtain C1P) and to C2P (to obtain a consisten C2P measurement).
+
+          Type 2: No P1 (C1P). This receiver provides C1C and C2P, but does not provide C1P. To obtain C1P, the P1-C1 DCB (or ISC L1C/A) must be applied to obtain C1P.
+
+          Type 3: Consistent measurements. This receiver provides C1C, C1P and C2P and no correction is needed.
+
+        When receiver type is unknown, type 3 is assumed (no correction applied). When receiver is set to type 1 or 2 (either with parameter '-pre:setrectype' or
+         by providing a GPS Receiver file with option '-input:rec'), gLAB knows that C1P will never be provided, so internally creates the GPS C1P measurement by
+         copying the values read from C1C (as if C1P had been provided in the RINEX observation file).
+        Later, in the modelling step, the P1-C1 DCB or the ISC L1C/A (in this order of preference) will be applied if they are available. The logic for this
+         behaviour is to allow the user to be able to select between C1C (the provided measurement) and C1P (the resulting measurement of adding C1C plus the DCB).
+
+  WHEN COMPUTING THE NAVIGATION SOLUTION WITH A MOVING RECEIVER, WHY DOES THE POSITIONING ERROR IS VERY HIGH OR KEEPS INCREASING OVER TIME?
+
+       gLAB by default has the a priori receiver set to 'RINEX', which means that it will always use the same a priori position read from the RINEX observation header
+        for both modelling and computing the positioning error. This implicitly means that the receiver is always in the same position (static).
+       To compute the navigation solution with moving receiver, the user will need to set the a priori position to 'calculate'. If the user has a text or SP3 file
+        with the receiver trajectory to compare the solution, it can be provided with parameter '-input:refpos' (this option will automatically set the a priori
+        receiver position to 'calculateRef'.
+       Also, in PPP mode, make sure to select 'kinematic' mode in the filter (in command line, with parameter '-filter:nav kinematic').
+       Last, if after the previous configuration changes the solution is not good enough, the user can disable the prefit outlier detector with
+        option '--filter:prefitouliers:median'.
+
+  WHY THE POSITIONING ERROR COMPONENTS IN THE OUTPUT MESSAGE ARE ZERO WHEN SETTING THE A PRIORI RECEIVER POSITION TO 'CALCULATE'?
+
+       In order to compute the position error, gLAB needs a reference position. By default, gLAB uses the a priori position, but when the
+        user sets the a priori receiver position to 'calculate', the user make gLAB calculate it (that is it can not trust the position of the
+        RINEX observation because it is not good enough or because the receiver is moving). If the receiver is moving and the user has a text or SP3
+        file with the trajectory, the user can provide it to gLAB (with option '-input:refpos') to use a reference position only for computing the positioning error.
+
+  THE NAVIGATION SOLUTION HAS A VERY HIGH ERROR, EITHER FROM THE BEGINNING OR FROM A PARTICULAR EPOCH. HOW CAN I IMPROVE IT?
+
+       If the navigation solution is computed with a moving receiver, check first question 'WHEN COMPUTING THE NAVIGATION SOLUTION WITH A MOVING RECEIVER,
+         WHY DOES THE POSITIONING ERROR IS VERY HIGH OR KEEPS INCREASING OVER TIME?'. Otherwise, try the following steps:
+
+       - Enable minimum SNR filtering (only enabled by default in SBAS and DGNSS modes). By default the threshold is 33 dBHz, but this value can be changed
+          in a per satellite a per measurement basis. For instance, for GPS L2P measurement, which transmits 3dB less power, the threshold could be set to 30dBHz.
+
+       - Enable DOP filters. By default, only GDOP is enabled in PPP and DGNSS modes. For instance, the user can enable GDOP to the default threshold of 30 or reduce it.
+
+       - If only code measurements are used, enable cycle-slip detectors and manually set the corresponding carrier phase measurements to the codes used in the filter (if
+          they are not manually set, gLAB will not automatically select any carrier phase as no carrier phase is used in the filter).
+
+       - Enable the prefit outlier detector with option '-filter:prefitouliers:median 30' (by default is enabled). This should remove most of the incorrect measuremerents
+          (outliers) that degrade the solution. The value '30' is the usual threshold of 30 metres.
+
+
+  CAN THE NAVIGATION SOLUTION BE IMPROVED USING RANDOM WALK?
+
+       Random walk will not necessarily improve the navigation solution, as it will only make a difference if the uncertainty between epochs (Q) is very small
+        (i.e. a receiver moving slowly) and the value Q is well adjusted. In gLAB, it is fixed for the whole processing, but in order to exploit random walk
+        it would be necessary to adjust the Q each epoch according to the previous epoch receiver speed and acceleration plus a margin of error (which gLAB does not perform).
+        Even if this adjusted is performed, it would still not make a difference if the receiver does not move slowly or the Q value is below or at the same level as the error
+        in your data. For instance, if your receiver moves one meter between epochs but you are processing in SPP, where meter error measurements are used (i.e. pseudoranges),
+        then there will be no differences as only noise is being correlated between epochs.
+       Note also that random walk will be exactly as a static positioning if Q is set to zero, and equivalent to a kinematic positioning if the Q has a high value. Therefore,
+        it makes no sense to use random walk and use high values of Q. In that case, just use default kinematic processing.
+
+  WHY SOMETIMES THE ELEVATION AND AZIMUTH VALUES SUDDENLY CHANGE TO ZERO?
+
+       This occurs when gLAB discards a satellite for the navigation solution for a reason prior to be able to compute the azimuth and elevation values, which are
+        the following: missing measurements, missing navigation message or missing precise orbits. When any of these cases occur, the elevation and azimuth will
+        be set to zero, as they could not be computed.
+
+  IN SPP or PPP, WHY I AM GETTING OR ERROR OR BIAS AROUND METRE LEVEL WITH CERTAIN SIGNALS OR FREQUENCY COMBINATIONS?
+
+       Broadcast orbits or precise orbits are referred to a reference signal or combination (depends on the constellation). If the measurements used in the filter
+        do not match the reference signal or combination, an error or bias can occur. These errors can be compensated with DCBs, but on the one hand, there not DCBs
+        for all possible combinations, and on the other hand, gLAB (in version 6) cannot read all navigation messages or the SINEX BIAS file.
+       For this case, the user can either use another measurement matching the reference signal or has a DCB available in gLAB, or manually provide the DCB correction
+        through the 'User Added Error' option.
+
+  IN STATIC PPP, WHY DOES IT APPEAR A BIAS (SPECIALLY IN THE UP COMPONENT) IN THE SOLUTION WHEN USING GPS L5 OR ANY CONSTELLATION DIFFERENT THAN GPS OR GLONASS?
+
+       Prior to ANTEX file "igs14_2112.atx", it did not contain receiver antenna phase centre data for frequency L5 of GPS and for any frequency for Galileo, GEO, BeiDou,
+        QZSS or IRNSS. Users can set these values manually with option '-model:recphasecenter' independently if the ANTEX provides them or not. If the user wants to add
+        the receiver antenna phase centre correction for a iono-free combination, it will have to set the same correction values for the two frequencies used.
+
+  IS THERE ANY DIFFERENCE BETWEEN COMPUTING THE SOLUTION FORWARDS AND BACKWARDS?
+
+       There are a few sections that can make the solution from a same epoch slightly differ if calculated in forward direction or in backwards direction.
+       They are the following:
+
+        - The 'N-consecutive' sample filter: This option is enabled with '-pre:cs:ncon', and is enabled by default. It unselects the first two samples after a data gap.
+            This blind filter is to avoid selecting the first two samples after a data gap, which usually are not good. It also removes satellites which may appear one
+            or two epochs with bad measurements and then disappear and then appear again. This errors are common for high rate files (<15 sec), therefore this option
+            will auto-disable if the input observation file has a sampling rate smaller than 15 seconds. The problem is that in backwards mode, it will discard the
+            samples prior to the data gap, not after (as the processing in the opposite direction), therefore the bad samples are processed and the good ones
+            prior to the data gap are discarded.
+
+        - Cycle-slips: For cycle-slip detection, a buffer of samples are filled (and during the time the buffer is filling, the satellite is discarded).
+            In backwards mode, the epochs discarded due to the buffer when a cycle-slip is detected are the ones prior to the cycle-slip, instead of the ones
+            after the cycle-slip. Therefore, the samples that enter in the filter in one direction or the other will not be the same.
+
+        - Satellite eclipse: gLAB discards satellites under eclipse and 30 minutes after the eclipse finished. This is because during an eclipse the satellite
+            may have more problems to orientate itself due to the lack of sun. The error is very slow, so this option can be disabled quite safely. In backwards mode,
+            it does not apply any safe guard time after or before the eclipse. To be consistent, it should also apply the safe guard time after the eclipse, but
+            the fix is very complicated to implement and it would barely make any difference.
+
+        - Satellite wind-up: The wind-up is an accumulative effect which resets in each cycle-slip. To model this value, it is used the previous computed value.
+            When going backwards, it keeps accumulating (including from forward direction, until a cycle-slip occurs), but in the opposite direction.
+
+  IN PPP, WHY NO GLONASS SATELLITES ARE SELECTED BY DEFAULT ON MANY CASES?
+
+       GLONASS signals G1 and G2 use FDMA (Frequency Division Multiple Access), which means that instead of using a different PRN (Pseudo-Random Noise) code for
+        each satellite, it uses a different frequency for each satellite. Each frequency is computed as a central frequency plus a frequency offset. The frequency
+        offset with a frequency factors ('k') that are provided in the navigation message or in the header of RINEX observation files (since version 3.01). As these
+        frequency factors are needed, if they are not in the header of the RINEX observation file, the user must provide them with a GLONASS navigation file, using
+        parameter '-input:navglo'.
+
+  IN PPP, WHY DURING THE LAST 15 MINUTES THERE IS NO SOLUTION?
+
+       Precise products files (SP3 and CLK files), provide data for a single day. For instance, the data rate is 15 minutes, the last sample provided will be at
+        at epoch 23h 45 minutes (this occurs for both SP3 and CLK), therefore the last 15 minutes there is no data for orbit or clock interpolation, as gLAB will not
+        extrapolate orbits and clocks. To fix this, the user must concatenate data for the next day in both orbit and clock files (see question 'HOW TO CONCATENATE FILES?'
+        above for more info on concatenating files).
+
+  IN PPP, IS IT USEFUL TO CONCATENATE PRECISE ORBIT AND CLOCKS FILES WITH PREVIOUS AND NEXT DAY DATA EVEN IF USER PROCESSES A SINGLE DAY?
+
+       Yes, it is highly recommended to concatenate orbit and clock files with the previous and next day, as in order to get the best interpolation results
+        it is needed to have equally distanced samples around the centre, which does not occur at the beginning and at the end of the day when the precise
+        orbit and clocks files only contain data for a single day.
+
+  IN PPP, WHY DOES IT TAKE 7 SAMPLES TO START COMPUTING THE NAVIGATION SOLUTION?
+
+       In PPP, the Melbourne-Wubbena and Geometry Free cycle slip detector need to fill their data buffers before they can check if a cycle-slip occurred.
+        By default, the buffer size is 7 samples, but it can be increased or decreased with parameter '-pre:cs:mw:samples' for Melbourne-Wubbena detector and
+        '-pre:cs:li:samples' for Geometry Free detector.
+
+  IN SPP OR AFTER A DATA GAP (IN ANY MODE) WITH HIGH RATE FILES (<15s), WHY DOES IT TAKE 3 SAMPLES UNTIL THE SATELLITE IS USED AGAIN?
+
+       The N-consecutive (or N-con) data filter will force to discard the next N-1 samples after a data gap (by default N=3), so the satellite is not used again
+        until N consecutive samples are read. This is done because at high rate files, usually the first one or two samples after a data gap are very low quality,
+        adding a considerable error to the navigation solution. There are also cases where a satellite appears one or two samples, then disappears, then reappears again
+        during a short time. When this occurs, the samples are really bad. In these cases, the N-consecutive filter removes all this low quality samples even if there
+        is no cycle-slip detector (as it is by default in SPP). As these cases only occur in high rate files, the N-consecutive will auto disable if the RINEX
+        observation file rate is larger than 15 seconds.
+
+  IN SPP OR PPP, IS IT POSSIBLE TO USE ANY MEASUREMENT OR COMBINATION?
+
+       In SPP or PPP, the user can use multiple measurement types (e.g C2W, C2L, C2S, C5I, C5Q, etc.) or frequency combinations (e.g 12, 15, 25, etc.). gLAB is able to
+        handle any of these combinations and in general they are all valid to compute the navigation solution, but there is a catch: if the measurements used to compute
+        the navigation solution are not the same as the ones used to compute the orbit and clock data used, a bias will appear (e.g. for GPS, for both broadcast and
+        IGS precise products the measurements used are the iono-free combination with frequencies 1,2 and measurements C1W,C2W,L1W,L2W. This DCBs may be provided in the
+        navigation message (for instance the GPS L5I5 ISC) or not. In PPP this DCB can be corrected or else it may be partially or totally integrated into the carrier phase
+        ambiguity (only if the DCB is constant during an arc), as gLAB estimates carrier phase ambiguities as real values.
+
+  IN SBAS MODE, WHY THERE IS NO SOLUTION AT THE BEGINNING AND AT THE END OF FILE?
+
+       SBAS processing requires to use navigation messages with the IODE indicated in the SBAS messages. Usually, the messages used by SBAS at the beginning of the
+        day are stored at the end of the navigation file from previous day, and the messages at the end are stored at the beginning of the navigation file of the
+        next day. Therefore, it is necessary to add to the current day navigation file messages from the last two hours of the previous day and of the first two
+        hours of the previous day.
+        Another option instead of manually adding the two hours of data from previous and the next day is to concatenate the navigation files. In order to work
+        correctly, the concatenation must be done without headers in between. This is because the current version only stores up to two days of data in memory,
+        so when it detects a third header, it will not read any more data until the epoch of the observation day changes. This behaviour may be changed in the
+        future (so as it matches the behaviour with precise orbits and clocks, which store in memory three days at a time).
+       To make sure that reason for not having navigation solution in SBAS is due to the missing navigation messages, execute gLAB with the SBASUNSEL message
+        (enabled in SBAS 1F, with option '-print:sbasunsel') or with SBASDFMCUNSEL message enabled (in SBAS DFMC, with option '-print:sbasdfmcunsel') and the
+        text 'No broadcast block with IOD <iode>' should appear.
+
+  IN SBAS AND DGNSS MODES, WHY IT TAKES 360 SECONDS TO COMPUTE THE FIRST NAVIGATION SOLUTION?
+
+       In SBAS (1F and DFMC), it is compulsory to wait 360 seconds in order for the smoothing to converge.
+       In DGNSS, it is used to wait for the smoothing to converge in the reference station, although there is not any formal requirement for this.
+       It is possible change or disable this waiting time with parameter '-pre:smoothmin'.
+
+  IN SBAS AND DGNSS MODES, WHY THERE IS NO NAVIGATION SOLUTION WHEN PROCESSING WITH 30 SECONDS FILES?
+
+       The default options for SBAS and DGNSS is to use a data gap of 10 seconds. With a 30 seconds file, a data gap will be detected in each epoch, as more
+        than 10 seconds have passed between epoch. To avoid this problem, set the data gap size to 40 seconds in the GUI or with parameter '-pre:cs:datagap 40'.
+       Moreover, the default smoothing is set to 100 epochs with a minimum continuous smoothing time of 360 epochs. With a 1 second file, it is a 100 second smoothing
+        with 360 seconds excluding time, but at slower data rates (like 30 seconds), the time span gets very high and nearly impossible due to the cycle-slips.
+        Therefore, it is necessary to reduce the smoothing and exclusion by the data rate or to completely disable it. The latter recommended, as with very small
+        smoothing times and distance between epochs the smoothing can be even worst that no smoothing at all. To disable smoothing and smoothing exclusion during
+        convergence time, use parameters '-pre:smooth 0' and '-pre:smoothmin 0'. In DGNSS, also provide '-pre:dgnss:smoothmin 0' to disable smoothing exclusion
+        during convergence time in the reference station.
+       Since gLAB v6, when the RINEX observation file has a data rate of 1Hz, the smoothing and smoothing convergence time will be automatically reduced by the data
+        rate of the observation file (e.g. a factor 30 for 30s RINEX observation file) only if user did not set any smoothing option. Furthermore, the data gap will
+        also automatically adapt to the RINEX observation file data rate. Therefore, by default gLAB will autoconfigure to provide a solution. Nevertheless, the current
+        question is written as if gLAB did not autoconfigure as many users had this problem in previous versions.
+       See also question 'IN SBAS OR DGNSS, IS IT EQUIVALENT TO PROCESS WITH A 30 SECOND FILE THAN TO PROCESS AT A 30 SECOND RATE WITH A 1 HZ FILE?'
+
+  IN SBAS OR DGNSS, IS IT EQUIVALENT TO PROCESS WITH A 30 SECOND FILE THAN TO PROCESS AT A 30 SECOND RATE WITH A 1 HZ FILE?
+
+       No, it isn't equivalent. This is a very common error, rather for avoiding to download a 1Hz file or to try to reduce processing time with smaller files.
+       The difference is due to smoothing:
+        - With a 30 second file, you have to either reduce the smoothing epochs to a factor 30 (the file data rate) in order to keep
+           the smoothing time window (if the number of epochs were maintained, there would be noticeable ionospheric divergence in the smoother). Reducing so much the
+           number of samples for the smoothing makes the smoothing be useless or even worst, so it is recommended to completely disable in these cases (see question
+           above 'IN SBAS AND DGNSS MODES, WHY THERE IS NO NAVIGATION SOLUTION WHEN PROCESSING WITH 30 SECONDS FILES?').
+        - With a 1 Hz file, gLAB will compute cycle-slip and smoothing at 1 Hz (or the data file rate) independently of the decimation set by the user. The navigation
+           solution will be computed at 30 second rate (at the user defined decimation), but it will have the same cycle-slips and smoothing as in a 1 Hz decimation.
+
+  WHY IS SOME INFORMATION (SUCH AS ARC NUMBER OR SVN) REPEATED IN SEVERAL MESSAGES?
+
+       In gLAB version <=5.5.1, the criteria was to split info in different messages and repeat as minimum as possible. The problem with this approach is that many cases
+        the user wants to do a quick analysis and needs info splitted in different messages, which is quite annoying to join, even for experienced programmers.
+        Having the info repeated in several messages will make very probably that all the info the user needs is in the message, so parsing is straightforward.
+       This criteria has the side effect that output files get bigger, but if necessary, the user can extract only the fields needed from the gLAB output
+        before saving it to a file, by piping to the 'awk' command. For instance, if a user only wants the seconds of day (field 4), north (field 24)
+        east (field 25) and up (field 26) errors from the OUTPUT message, the following command line would apply (for Linux and Cygwin, in Windows command line
+        the user will have to install the 'awk' command first):
+
+                ./gLAB_linux <parameters> | awk '$1=="OUTPUT" {print $4,$24,$25,$26}' > outputfile.txt
+
+  WHY DOES THE ARC LENGTH VALUE SOMETIMES DOES NOT INCREASE EVEN IF THERE IS DATA AVAILABLE?
+
+       Arc length can remain unchanged in the following cases:
+
+        - If option 'N-consecutive' ('-pre:cs:ncon') is enabled, the first N-1 samples after a small data gap will be ignored.
+
+        - The Melbourne-Wubbena, Geometry-Free and Iono-Geometry Free cycle-slip detectors have a built-in 'outlier' flag. When any of these detectors detect a cycle-slip,
+           the sample is discarded for the current and future epochs (as if it were a data gap) and thus the arc length does not increase. If in the next sample a
+           cycle-slip is detected again, then a cycle-slip is declared. Otherwise, the arc is maintained (but the outlier sample is discarded).
+           It is possible to disable the outlier detection in each detector independently (with options '-pre:cs:mw:nooutliers', '-pre:cs:li:nooutliers' and
+           '-pre:cs:igf:nooutliers') or to all detectors at once (with option '-pre:cs:nooutliers').
+
+  WHY THE PROGRESS BAR IS DISABLED WHEN THE STANDARD OUTPUT IS PIPED TO ANOTHER COMMAND?
+
+       gLAB can detect if the standard output is redirected to a file or to a pipe. When it is redirected to a pipe, gLAB does not know to which program it is piped.
+        Writing the progress bar could mess with the output of the next program, for instance, 'less' or 'more' programs. Therefore gLAB takes the safe approach
+        to disable the progress bar.
+       Nevertheless, there are many cases where printing the progress bar is perfectly compatible with piped output (as the progress bar is printed in a different
+        channel than the pipe), such as an 'awk' or 'grep' command that later end up writing to a file. For instance, the following command will have no problem
+        or interference with printing the progress bar:
+
+                  ./gLAB_linux <parameters> | awk '$1=="OUTPUT" {print $4,$24,$25,$26}' > outputfile.txt
+
+        For these cases, there is the option '-print:progressalways' (or in a shorter form, '-print:pa'), which will make gLAB to print the progress bar
+         regardless the standard output redirection. The command will now be:
+
+                  ./gLAB_linux <parameters> -print:pa | awk '$1=="OUTPUT" {print $4,$24,$25,$26}' > outputfile.txt
+
+  WHY PROCESSING TIME IN MULTI-THREADED gLAB VERSION IS SOMETIMES SLOWER THAN SINGLE THREADED gLAB VERSION?
+
+       There are two reasons:
+          1 - Multi-threading is only used during cycle-slip computation and modelling, as these are the tasks that can be done per satellite in parallel.
+          2 - When using multi-threading, the program has to create multiple threads and synchronize them, which is expensive in processing power. This can
+               be seen when checking the processing time in the summary, where the kernel time is greatly increased with respect to single thread.
+
+         Therefore, it is recommended to use the multi-threaded version only where there a lot of satellites in view or in SBAS maps mode.
+
+  IS IT POSSIBLE TO USE A DIFFERENT ANTEX FOR THE SATELLITES AND THE RECEIVER ANTENNA PHASE CENTER?
+
+       Yes. By default, gLAB will the APC for satellites and receiver from the ANTEX provided with parameter '-input:ant'.
+        In order to use a different ANTEX for the receiver, just provide the parameter '-input:antrec' with the receiver ANTEX file.
+
+  DOES gLAB CARE ABOUT FILENAME FORMAT OR EXTENSIONS?
+
+       No. You can set the input and output names with any filename or extension (or no extension at all). As the user has to set in the parameters
+        what type of data contains each filename (e.g. '-input:nav brdc2000.16n'), gLAB will check that the content of the file matches with the type set in
+        the parameter. As an example, the following command line:
+
+            ./gLAB_linux -input:obs vigo1650.19o -input:nav vigo1650.18n
+
+        Will work exactly the same if the filenames are changed to something such as 'foo' and 'foo2', as it can be seen below:
+
+            ./gLAB_linux -input:obs foo -input:nav foo2
+
+  WHAT IS GPS RECEIVER TYPES FILES FOR?
+
+       For GPS only, some receivers used cross-correlation techniques to track legacy P1 (C1P) and P2 (C2P) measurements, or they don't print P1 (C1P) measurement
+        in the observation file. For these cases, it is necessary to correct P2 (C2P) measurement or to generate P1 (C1) measurement from C1 (C1C) measurement
+        using the P1-C1 DCB. As from the RINEX observation file it is not possible to know what receiver type is, gLAB will set it to 'unknown' and will assume
+        it is a receiver that does not need any correction. When a GPS Receiver Type file is provided (with parameter '-input:rec'), it will be able to determine
+        what type of receiver is and apply the P1-C1 correction (if P1-C1 DCB file is provided with parameter '-input:dcb').
+
+  IS IT POSSIBLE TO PROCESS ONLY IN BACKWARDS MODE?
+
+       Yes. Just set the start time (with option '-pre:starttime' in command line) to the last epoch in the RINEX observation file.
+
+  IS gLAB VERSION 6+ BACKWARDS COMPATIBLE?
+
+       Yes. gLAB v6+ is fully backwards compatible, both in the input and in the output messages.
+       For the input options, even though option names may have changed (e.g '-input:sbas' to '-input:sbas1f') or arguments formats have changed (e.g. option
+         '-filter:select') and the old format does not appear in the gLAB help, if the user uses the version v5 parameters, gLAB will detect it automatically
+         and correctly parse them. When gLAB detects an v5 parameter or argument, it will apply it only to GPS satellites.
+       For the output messages (which have been noticeably expanded), use option '-print:v5format' for printing output messages with the version 5 format.
+
+  WHAT ARE THE MAIN DIFFERENCES BETWEEN gLAB VERSION 5 ans 6+?
+
+       Some of the default behaviour in gLAB has changed in versíon 6+. They are explained in the table below:
+
+       +------------------------+-----------------------------------+------------------------------------------------+--------------------------------------+
+       |  Behaviour definition  |        gLAB version <=5.5.1       |                gLAB version >=6+               |                Reason                |
+       +------------------------+-----------------------------------+------------------------------------------------+--------------------------------------+
+       | Measurements used      | GPS only, hardcoded to P1,P2,L1,  | Measurement selection is done according to     | Satellites now have multiple         |
+       | for navigation         | L2 (or C1P,C2P,L1P,L2P). C1 (C1C) |  user parameters and available measurements    |  frequencies and multiples signals   |
+       |                        | was used if P1 was not available  |  in the RINEX observation file in a per        |  per frequency, and satellites from  |
+       |                        | in the header of receiver was     |  satellite basis (each satellite may have      |  same constellations may have        |
+       |                        | type 1 or type 2                  |  different measurements)                       |  different signals tracked           |
+       +------------------------+-----------------------------------+------------------------------------------------+--------------------------------------+
+       | Cycle-slip measurement | GPS only, measurements to use in  | Measurements selection for all constellations  | Multi-constellation and              |
+       | selection              | detectors were hardcoded to       |  follow the configuration of the filter.       |  multi-frequency provide a large     |
+       |                        | C1P (or C1C if C1P was missing or |  That is, all carrier phase measurements will  |  amount of different signals and     |
+       |                        | SBAS mode selected) and C2P,      |  be added in each enabled CS (adding multiple  |  possible combinations, therefore    |
+       |                        | independently of the filter       |  iterations if needed). If the filter does     |  CS has to adapt to whatever the     |
+       |                        |                                   |  not have carrier phase measurement selected,  |  filter is using                     |
+       |                        |                                   |  no CS will be run (unless manually set or     |                                      |
+       |                        |                                   |  in showINPUT mode, were configuration will    |                                      |
+       |                        |                                   |  be set as default PPP mode)                   |                                      |
+       +------------------------+-----------------------------------+------------------------------------------------+--------------------------------------+
+       | Measurements modelled  | All measurements were modelled    | Only the measurements used in the filter are   | Save computation time, as multi-     |
+       |                        |                                   |  modelled (with parameter '-model:allfilemeas' |  constellation files can have dozens |
+       |                        |                                   |  the user can force to model all measurements) |  of different measurements           |
+       +------------------------+-----------------------------------+------------------------------------------------+--------------------------------------+
+       | Enabled output prints  | INFO, CS, INPUT, MODEL, EPOCHSAT, | Only INFO, CS, OUTPUT and summary enabled      | Save computation time and disk as    |
+       | in default             | PREFIT, POSTFIT, FILTER, OUTPUT   |                                                |  with multi-constellation the number |
+       | configuration          | messages and summary enabled      |                                                |  of lines to print have multiplied   |
+       +------------------------+-----------------------------------+------------------------------------------------+--------------------------------------+
+       | Satellites printed in  | All satellites (selected or       | Only selected satellites are printed.          | Save computation time and disk as    |
+       | PREFIT output message  | unselected) are printed           | With option '-print:prefit:unsel' it is        |  multi-constellation files have a    |
+       |                        |                                   | possible to print also unselected satellites   |  lot more available satellites       |
+       +------------------------+-----------------------------------+------------------------------------------------+--------------------------------------+
+
+  WHY gLAB DISCARDS A SATELLITE WHEN ANY OF THE MEASUREMENTS IS MISSING?
+
+         For a satellite to be used in the navigation solution, all the measurements selected for the filter and the cycle-slip detector must be available in each epoch.
+         Otherwise, the satellite is unselected. As a user, the first thought normally is "if a measurement is missing, try to use the remaining ones so the satellite can be still used".
+         This approach, although theoretically is good, has not been followed due to the following reasons:
+
+           Short version: It will be too complicated to implemented, it would greatly increase processing time and the solution improvement will be, in general, very low (specially in
+               multiconstellation). It would only make sense to implement it in the case there is a complete knowledge of how the receiver works.
+
+           Long version: Discarding a satellite when a measurement is missing allows the following steps:
+                    - Skip cycle-slip detection, modelling and prefit computation for the satellite
+                    - Build measurements lists only once (there are multiple list according to several function needs), instead of every epoch.
+                    - Remove measurement availability checks in each step as it is guaranteed that all measurements are available.
+                    - Add code flow optimizations based on that it is guaranteed that all measurements to be used are available.
+
+             For the reasons listed above, discarding a satellite when a measurement is missing allows the reduction of the processing time.
+
+             In the current implementation it is necessary to check the behaviour in each processing mode:
+
+              SPP: In SPP mode, precision is few metres level or greater, therefore removing one satellite will not make much difference, except if the user has
+                very few satellites available (which will be infrequent when using multi-constellation). Furthermore, in SPP, using more than one
+                measurement per satellite does not improve the navigation solution, as precision is limited due to code multipath and orbit error.
+
+              PPP: In PPP it is necessary to use the ionosphere-free combination, therefore, if one the code or phase measurements is missing,
+                the combination cannot be built. Furthermore, for the carrier phases, it is necessary to detect cycle-slips. If a missing measurement
+                is used only in cycle-slip detection, then cycle-slip detection cannot be done, and it would be a high risk to use carrier phase
+                measurements in the filter without the guarantee of no cycle-slips. Furthermore, there is the estimation of the carrier phase
+                ambiguity, as using satellites whose measurements are not continuously available would make much more difficult to estimate them.
+             SBAS: The SBAS template forces which measurements are to be used. Then, if any of them is not available, the SBAS MOPS forces to unselect to the satellite.
+             DGNSS: As data is used from both the rover and the reference station, if missing any measurement or model component, then
+                the differential correction cannot be computed. Therefore, the satellite needs to be unselected.
+
+  IS IT POSSIBLE TO CHANGE MEASUREMENTS TO PROCESS DURING A RUN?
+
+       It is not possible to change the selected measurements in the filter during a run, but gLAB can be forced to add or discard measurements by adding or removing them
+         in the RINEX observation file using headers with different measurements. Every time an observation RINEX header is found, measurement selection is triggered for all
+         satellites. If a measurement to be used (set by default or by parameter) is available after reading the new header, it is added to the measurements to use (in
+         the case of a carrier phase measurement, a forced cycle-slip will be triggered to ensure that all cycle-slip buffers are filled before using the new measurement).
+         Otherwise, if a measurement that was being used is no longer present in the RINEX observation file, it will be removed from the measurements to use (and not
+         accounted as missing measurement).
+
+       For instance, if a receiver is tracking GPS L1 and L2 only, and at some point it switches to L1 and L5 only, the procedure (for a PPP) is the following:
+          - In the input parameters for the filter, set it to use both GPS iono-free with L1/L2 and L1/L5. For instance (assuming all GPS satellites have L5):
+                        -filter:select G0-PC12 G0-LC12 G0-PC15 G0-LC15
+          - In the first observation header, in the list of measurements, remove all L5 measurements (and also from subsequent epoch data)
+              As L5 measurements are not available, they will be discarded and gLAB will only try to use PC12 and LC12.
+          - Prior to the epoch where the receiver switches to L5, add a header in the observation file. In this header, L5 measurements shall be added and L2
+              measurements have to be removed (and also from subsequent epoch data). In this way, gLAB will discard L2 measurements and only use PC15 and LC15.
+          - Repeat this procedure as many times as necessary (every time available measurements change).
+
+        Some notes;
+          - Order of measurements can change in every header, therefore it only matters if measurements have changed or not.
+          - In the previous example, if the user adds L5 measurements but does not remove L2 measurements, gLAB will then use both combinations (PC12, PC15, LC12, LC15)
+             and if any is missing, the satellite will not be used.
+
+  CAN gLAB PROCESS CARRIER PHASE MEASUREMENTS AS ABSOLUTE (UNAMBIGUOUS) MEASUREMENTS?
+
+       Yes, there is the option '-filter:noambiguities' for this issue. When this option is provided, gLAB assumes that carrier phase measurements are absolute measurements,
+        that is, the ambiguity has been already been added to the carrier phase measurement, either by modifying the RINEX observation file or by adding it as a user defined
+        error with option '-input:usererror'. Setting this option will also disable code jumps detection and carrier phase alignment.
+       When using carrier phase measurements, there is a caveat: the wind-up correction, as this correction is cumulative and needs to be reset every time
+        there is a cycle-slip. If carrier phases are provided as absolute measurements, cycle-slips will not be detected properly. To work around this issue,
+        three possibilities are possible:
+
+          - Use the RINEX observation file without modification and provide the carrier phase ambiguities values as an 'error' to the measurements, using parameter
+             '-input:usererror'. Also, provide the parameter '-pre:usererrorafter', which will make to add the error to the measurements after the preprocessing. In this
+             way, during the cycle-slip detection, it will use the RINEX observation carrier phase measurements (which will allow to correctly detect cycle-slip), but in
+             the modelling and filter the absolute measurements will be used.
+
+          - Use the RINEX observation file without modification and provide the carrier phase ambiguities values and wind-up correction as an 'error' to the measurements,
+             using parameter '-input:usererror'. Both corrections can be added a single error or as multiple errors, as gLAB supports multiple error sources for the same
+             satellite and epoch. When this mode is used, it is necessary to disable wind-up correction with parameter '--model:windup' and to disable all cycle-slip detectors
+             by using the option '-pre:allcsoff'.
+
+          - Provide a RINEX observation file with carrier phase measurements already corrected with the carrier phase ambiguity and the wind-up correction. When this mode is
+             used, it is necessary to disable wind-up correction with parameter '--model:windup' and to disable all cycle-slip detectors by using the option '-pre:allcsoff'.
+
+        As a last comment, the user can retrieve the wind-up correction from the MODEL message (in field 35), when processing in PPP mode with non absolute carrier phase measurements.
+
+  HOW ARE RINEX 2 OBSERVABLE MEASUREMENTS TREATED IN gLAB?
+
+       When reading a RINEX observation file version 2, gLAB converts internally the measurements to the RINEX 3 nomenclature, with the following hardcoded table:
+
+                         GPS | C1 -> C1C | C2 -> C2C | C3 -> C3X | C4 -> C4X | C5 -> C5X | C6 -> C6X | C7 -> C1X | C8 -> C8X | C9 -> C9X
+                         GPS | P1 -> C1P | P2 -> C2P | P3 -> C3P | P4 -> C4P | P5 -> C5P | P6 -> C6P | P7 -> C7P | P8 -> C8P | P9 -> C9P
+                         GPS | L1 -> L1C | L2 -> L2P | L3 -> L3X | L4 -> L4X | L5 -> L5X | L6 -> L6X | L7 -> L1X | L8 -> L8X | L9 -> L9X
+                         GPS | D1 -> D1C | D2 -> D2P | D3 -> D3X | D4 -> D4X | D5 -> D5X | D6 -> D6X | D7 -> D1X | D8 -> D8X | D9 -> D9X
+                         GPS | S1 -> S1C | S2 -> S2P | S3 -> S3X | S4 -> S4X | S5 -> S5X | S6 -> S6X | S7 -> S1X | S8 -> S8X | S9 -> S9X
+
+                     Galileo | C1 -> C1C | C2 -> C2X | C3 -> C3X | C4 -> C4X | C5 -> C5X | C6 -> C6X | C7 -> C7X | C8 -> C8X | C9 -> C9X
+                     Galileo | P1 -> C1P | P2 -> C2P | P3 -> C3P | P4 -> C4P | P5 -> C5P | P6 -> C6P | P7 -> C7P | P8 -> C8P | P9 -> C9P
+                     Galileo | L1 -> L1C | L2 -> L2X | L3 -> L3X | L4 -> L4X | L5 -> L5X | L6 -> L6X | L7 -> L7X | L8 -> L8X | L9 -> L9X
+                     Galileo | D1 -> D1C | D2 -> D2X | D3 -> D3X | D4 -> D4X | D5 -> D5X | D6 -> D6X | D7 -> D7X | D8 -> D8X | D9 -> D9X
+                     Galileo | S1 -> S1C | S2 -> S2X | S3 -> S3X | S4 -> S4X | S5 -> S5X | S6 -> S6X | S7 -> S7X | S8 -> S8X | S9 -> S9X
+
+                     GLONASS | C1 -> C1C | C2 -> C2C | C3 -> C3X | C4 -> C4X | C5 -> C5X | C6 -> C6X | C7 -> C3X | C8 -> C8X | C9 -> C9X
+                     GLONASS | P1 -> C1P | P2 -> C2P | P3 -> C3P | P4 -> C4P | P5 -> C5P | P6 -> C6P | P7 -> C3P | P8 -> C8P | P9 -> C9P
+                     GLONASS | L1 -> L1C | L2 -> L2P | L3 -> L3X | L4 -> L4X | L5 -> L5X | L6 -> L6X | L7 -> L3X | L8 -> L8X | L9 -> L9X
+                     GLONASS | D1 -> D1C | D2 -> D2P | D3 -> D3X | D4 -> D4X | D5 -> D5X | D6 -> D6X | D7 -> D3X | D8 -> D8X | D9 -> D9X
+                     GLONASS | S1 -> S1C | S2 -> S2P | S3 -> S3X | S4 -> S4X | S5 -> S5X | S6 -> S6X | S7 -> S3X | S8 -> S8X | S9 -> S9X
+
+                         GEO | C1 -> C1C | C2 -> C2X | C3 -> C3X | C4 -> C4X | C5 -> C5X | C6 -> C6X | C7 -> C7X | C8 -> C8X | C9 -> C9X
+                         GEO | P1 -> C1P | P2 -> C2P | P3 -> C3P | P4 -> C4P | P5 -> C5P | P6 -> C6P | P7 -> C7P | P8 -> C8P | P9 -> C9P
+                         GEO | L1 -> L1C | L2 -> L2X | L3 -> L3X | L4 -> L4X | L5 -> L5X | L6 -> L6X | L7 -> L7X | L8 -> L8X | L9 -> L9X
+                         GEO | D1 -> D1C | D2 -> D2X | D3 -> D3X | D4 -> D4X | D5 -> D5X | D6 -> D6X | D7 -> D7X | D8 -> D8X | D9 -> D9X
+                         GEO | S1 -> S1C | S2 -> S2X | S3 -> S3X | S4 -> S4X | S5 -> S5X | S6 -> S6X | S7 -> S7X | S8 -> S8X | S9 -> S9X
+
+                      BeiDou | C1 -> C1C | C2 -> C2X | C3 -> C3X | C4 -> C4X | C5 -> C5X | C6 -> C6X | C7 -> C7X | C8 -> C8X | C9 -> C9X
+                      BeiDou | P1 -> C1P | P2 -> C2P | P3 -> C3P | P4 -> C4P | P5 -> C5P | P6 -> C6P | P7 -> C7P | P8 -> C8P | P9 -> C9P
+                      BeiDou | L1 -> L1C | L2 -> L2X | L3 -> L3X | L4 -> L4X | L5 -> L5X | L6 -> L6X | L7 -> L7X | L8 -> L8X | L9 -> L9X
+                      BeiDou | D1 -> D1C | D2 -> D2X | D3 -> D3X | D4 -> D4X | D5 -> D5X | D6 -> D6X | D7 -> D7X | D8 -> D8X | D9 -> D9X
+                      BeiDou | S1 -> S1C | S2 -> S2X | S3 -> S3X | S4 -> S4X | S5 -> S5X | S6 -> S6X | S7 -> S7X | S8 -> S8X | S9 -> S9X
+
+                        QZSS | C1 -> C1C | C2 -> C2X | C3 -> C3X | C4 -> C4X | C5 -> C5X | C6 -> C6X | C7 -> C7X | C8 -> C8X | C9 -> C9X
+                        QZSS | P1 -> C1P | P2 -> C2P | P3 -> C3P | P4 -> C4P | P5 -> C5P | P6 -> C6P | P7 -> C7P | P8 -> C8P | P9 -> C9P
+                        QZSS | L1 -> L1C | L2 -> L2X | L3 -> L3X | L4 -> L4X | L5 -> L5X | L6 -> L6X | L7 -> L7X | L8 -> L8X | L9 -> L9X
+                        QZSS | D1 -> D1C | D2 -> D2X | D3 -> D3X | D4 -> D4X | D5 -> D5X | D6 -> D6X | D7 -> D7X | D8 -> D8X | D9 -> D9X
+                        QZSS | S1 -> S1C | S2 -> S2X | S3 -> S3X | S4 -> S4X | S5 -> S5X | S6 -> S6X | S7 -> S7X | S8 -> S8X | S9 -> S9X
+
+                       IRNSS | C1 -> C1C | C2 -> C2X | C3 -> C3X | C4 -> C4X | C5 -> C5A | C6 -> C6X | C7 -> C7X | C8 -> C8X | C9 -> C9A
+                       IRNSS | P1 -> C1P | P2 -> C2P | P3 -> C3P | P4 -> C4P | P5 -> C5P | P6 -> C6P | P7 -> C7P | P8 -> C8P | P9 -> C9P
+                       IRNSS | L1 -> L1C | L2 -> L2X | L3 -> L3X | L4 -> L4X | L5 -> L5A | L6 -> L6X | L7 -> L7X | L8 -> L8X | L9 -> L9A
+                       IRNSS | D1 -> D1C | D2 -> D2X | D3 -> D3X | D4 -> D4X | D5 -> D5A | D6 -> D6X | D7 -> D7X | D8 -> D8X | D9 -> D9A
+                       IRNSS | S1 -> S1C | S2 -> S2X | S3 -> S3X | S4 -> S4X | S5 -> S5A | S6 -> S6X | S7 -> S7X | S8 -> S8X | S9 -> S9A
+
+                      Note that the equivalent measurement in RINEX 3 does not need to exist for a given constellation, it just has to be
+                        the same measurement type (code, carrier phase, Doppler or SNR) and any attribute supported in RINEX 3.04. Moreover,
+                        the frequency in the RINEX 2 measurement does not have to match the RINEX 3 frequency. This is allowed in order to
+                        support 'teqc' program extended measurements, which for instance, converts frequency 7 to the equivalent L1C signal.
+
+                      Most of the measurements are converted to RINEX 3 with the 'X' attribute. This is due to in RINEX 2 it is not possible
+                        to know with what component of the signal the measurement was tracked.
+
+  WHEN COMPUTING SBAS (1F OR DFMC) MAPS, WHY 99.9% OR HIGHER AVAILABILITY IS NOT ACHIEVED ANYWHERE, EVEN IN A NOMINAL DAY?
+
+       This is due to there is not enough data in the SBAS message file or in the RINEX navigation file. They should contain the following:
+
+         - SBAS message file: SBAS messages for the full day to be processed plus 15 minutes of messages of the previous day. These messages
+            are necessary to fill the SBAS message data buffer, so when processing starts at epoch 0, all SBAS corrections are available.
+
+         - RINEX Navigation file: It must contain data for the current day plus two hours of data from the previous and following day. This is
+            due to navigation messages used by SBAS at the beginning and the end of day are stored in the navigation files from the previous
+            and following day respectively.
+
+       If your file does have the data pointed above, it will be due to in the RINEX navigation file there are still messages missing. You can
+         check it with two methods:
+
+         - Enable the SBASUNSEL message when computing the SBAS map. Messages with the content 'No broadcast block with IOD <IOD> [PA only]'
+            will be printed. The downside is that for each epoch and position in the scanned area several will be printed.
+
+         - Process one station inside the SBAS area with the SBASUNSEL message enabled. when computing the SBAS map.
+
+       For more info on SBAS maps, check SBAS maps help, section 'SBAS Maps Description' in the manual or with parameter '-sbasplotsinfo' in command line.
+
+  WHY ARE GEO SATELLITES (IN ALL MODES) UNSELECTED BY DEFAULT?
+
+       GEO satellites ranging quality are usually not as good as other satellites, Furthermore, the improvement in the DOP is barely noticeable,
+        as most of its improvement is cancelled by the need to compute an inter-system clock bias.
+       The user can enable GEO satellites for navigation by providing parameter '-pre:sat +S0'.
+
+  HOW TO OBTAIN MORE INFO ABOUT GNSS POSITIONING?
+
+       For obtaining more information about the algorithms or about GNSS positioning, there are the following sources:
+
+         - GNSS BOOK Vol I and II, freely available at https://gage.upc.edu/en/learning-materials/library/gnss-books/gnss-data-processing-book
+
+         - A complete GNSS course, with theory and practical exercises, freely available at
+              https://gage.upc.edu/en/learning-materials/software-tools/glab-tool-suite-links/glab-tutorials/gnss-tutorials
+
+         - An HTML interactive description to RINEX, ANTEX and SP3 files, with tooltips for each field. Available at
+              https://gage.upc.edu/en/learning-materials/library/gnss-format-descriptions
+
+         - The 'Help' menu in the gLAB GUI, which contains links to download GNSS files, links to file standards, file extension description,
+            date and coordinate converters.
+
+         - The GUI tooltips, which provide complete explanation for each option and its effect on positioning.
+
+  DOES THE GUI HAVE ALL GLAB MODES?
+
+       No, the GUI does not have SBAS PLOTS and SHOW INPUT modes. The former mode is for computing SBAS plots and the latter for converting a RINEX observation
+        file to columnar text format using MEAS message (see question 'CAN MEAS MESSAGE BE USED AS A CONVERTER FROM RINEX OBSERVATION TO A COLUMNAR TEXT FILE?').
+
+  DOES THE GUI HAVE ALL GLAB COMMAND LINE OPTIONS?
+
+       No, the GUI has most of the command line options, but a few of them are only command line (the most rare). Moreover, options that can be
+       set in a per satellite basis, the GUI only allows to use them in a per constellation basis (to avoid cluttering the GUI).
+       The parameters that are only on command line for positioning mode are the following:
+
+          -autofillscript, -pre:cs:sf:noautofill, -pre:cs:mw:noautofill, -pre:cs:li:noautofill, -pre:cs:igf:noautofill, -pre:cs:noautofill, -pre:allcson,
+           -pre:allcsoff, -pre:meassel:pairedmeas, -pre:meassel:noblocktypeunsel, -pre:intseconds, -model:skipunhealthymarg, -model:skipunhealthy,
+           -model:maxurabrdc, -model:globrdcintstep, -model:allfilemeas, -filter:prefitoutliers:abs, -filter:gloifb, -filter:recwindup,
+           -filter:noambiguities, -filter:snrweight:comb, -filter:sbasdgnssweightmode, -print:meas:snr, -print:meas:doppler, -print:meas:lli,
+           -print:meas:doppler, -print:meas:lli, -print:progressalways, -print:prefit:unsel, -print:pa and -summary:stationnetworkname.
+
+       Additionally, there are these DGNSS options which are not usually necessary as they are set according to the rover automatically:
+
+         -pre:smoothmeasdgnss, -pre:setrectypedgnss, -pre:cs:li:freqdgnss, -pre:cs:li:freqlistdgnss, -pre:cs:li:measdgnss, -pre:cs:li:measlistdgnss,
+          -pre:cs:mw:freqdgnss, -pre:cs:mw:freqlistdgnss, -pre:cs:mw:measdgnss, -pre:cs:mw:measlistdgnss, -pre:cs:sf:freqdgnss, -pre:cs:sf:measdgnss,
+          -pre:cs:igf:freqdgnss, -pre:cs:igf:freqlistdgnss, -pre:cs:igf:measdgnss, -pre:cs:igf:measlistdgnss, -pre:measorderdgnss, -pre:measorderlistdgnss and
+          -pre:meassel:pairedmeasdgnss
+
+  ARE THE SNR OPTIONS ACTUALLY REFERRED TO THE C/N0?
+
+       Yes, as the RINEX observation provides the C/N0 (Carrier-to-Noise density) instead of the SNR (Signal to Noise Ratio), as the C/N0 is the only term
+        that can be directly compared between receivers. This is because the C/N0 is the SNR value divided by the bandwidth used by the receiver. As the
+        bandwidth in each receiver varies, the SNR will vary according to the bandwidth, while the C/N0 will be consistent across all receivers.
+
+       At processing level, there is no difference as the values are used directly without any conversion and the units are correctly set.
+       Due to all the options and tooltips are currently named with the SNR, there is no plan to rename them as there is no practical difference for gLAB use cases.
+
+  IS IT POSSIBLE TO REDUCE RAM USAGE WITHOUT LOSING FUNCTIONALITY?
+
+       Yes, but the user will need to rebuild gLAB core. The selected strategy is to reduce constant sizes in dataHandling.h for different purposes.
+        The following constant changes are SAFE to change, as gLAB checks if read values are over the its internal limits (defined by these constants),
+         and in that case, an error message is shown and gLAB execution terminates.
+          - If user is not using BeiDou, or it knows the maximum PRN value to be read, the following constants can be changed:
+             - Set MAX_SATELLITES_PER_GNSS to the maximum PRN value read plus one (e.g. if maximum PRN value is 36, set constant to 37).
+             - Set MAX_SAT_GAL, MAX_SAT_GEO and MAX_SAT_BDS to the maximum PRN value read (e.g. if maximum PRN value is 36, set constants to 36)
+            Setting the previous constants to 37 and 36 saves about 30MB of RAM.
+
+          - If user knows the total number of different satellites (from all constellations) that the receiver will have in view during the entire processing,
+              then the following constant can be changed:
+             - Set MAX_SATELLITES_VIEWED to the maximum number of satellites viewed plus one (e.g. if maximum number of satellites viewed is 60, set constant to 61).
+            Setting the previous constant to 61 saves about 20MB of RAM.
+
+          - Reducing the maximum number of runs for each of the cycle-slip detectors. Each cycle-slip detector, will run as many times as necessary for checking
+              all carrier phase measurements used in the filter. Typically, only or two runs are needed.
+             - Set MAX_CS_LIST to the number of runs needed (e.g. if only one run is needed, set constant to 1).
+            Setting the previous constant to 1 saves about 40MB of RAM.
+
+          - Reducing the maximum number of measurements to process in the filter per each satellite. Typically, in SPP/SBAS/DGNSS only one measurement is necessary,
+              and in PPP two measurements are necessary.
+             - Set MAX_FILTER_MEASUREMENTS_SAT to the number of measurements needed in the gLAB execution (e.g. if only one measurement is needed, set constant to 1).
+            Setting the previous constant to 1 saves about 20MB of RAM.
+
+       Additionally, if the user will only print any of these messages INFO, INPUT, MEAS, OUTPUT, SBASOUT, SATDIFF, SATSTAT, SATSTATTOT and SATPVT,
+         it is possible to reduce to 1 byte the size of the internal buffers used for storing the not used messages types. This method is not safe, as if the
+         user enables any of the CS, SFCSDATA, MWCSDATA, LICSDATA, IGFCSDATA, MODEL, PREFIT, EPOCHSAT, POSTFIT, FILTER, SBASCORR, SBASVAR, SBASIONO, SBASUNSEL
+         or DGNSS messages, the program will crash or have undefined behaviour.
+         For reducing the internal buffers, set the constants MAX_PRINT_LINE, MAX_PRINT_LINE_MODEL and MAX_PRINT_LINE_FILTER to 1 (do not modify MAX_PRINT_LINE_TEPOCH constant).
+         This saves around 70MB of RAM.

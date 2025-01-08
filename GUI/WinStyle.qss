@@ -1,0 +1,24 @@
+QComboBox {
+    border-radius: 2px; padding: 3px; width: 70px;
+}
+QComboBox:enabled{
+    background-color:rgb(235,235,245); color:black;
+    border: 1px solid rgb(124,124,124);
+}
+QComboBox:disabled{
+    background-color:rgb(203,203,203); color:rgb(156,156,156);
+    border: 1px solid rgb(185,185,185);
+}
+QComboBox::drop-down {
+    border-width: 0px;
+}
+QComboBox::down-arrow {
+    image: url(:/data/downarrow.png);
+}
+QComboBox::down-arrow:disabled {
+    image: url(:/data/downarrow_disabled.png);
+}
+QToolTip {
+    border: 1px solid black;
+    background-color: rgb(255,255,220);
+}

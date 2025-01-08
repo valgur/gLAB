@@ -2,7 +2,7 @@
    Copyright & License:
    ====================
    
-   Copyright 2009 - 2020 gAGE/UPC & ESA
+   Copyright 2009 - 2024 gAGE/UPC & ESA
    
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@
  *             Jesus Romero Sanchez ( gAGE/UPC )
  *          glab.gage @ upc.edu
  * File: preprocessing.c
- * Code Management Tool File Version: 5.5  Revision: 1
- * Date: 2020/12/11
+ * Code Management Tool File Version: 6.0  Revision: 0
+ * Date: 2024/11/22
  ***************************************************************************/
 
 /****************************************************************************
@@ -268,10 +268,21 @@
  * Release: 2020/12/11
  * Change Log: No changes in this file.
  * -----------
+ *          gLAB v6.0.0
+ * Release: 2024/11/22
+ * Change Log:   Added multi-constellation support (Galileo, GLONASS, GEO, BDS, QZSS and IRNSS).
+ *               Added multi-frequency support (all RINEX frequencies).
+ *               Added SBAS DFMC processing.
+ *               Added IGF cycle-slip detector.
+ *               Added maximum SNR filtering.
+ *               All cycle-slip detectors now allow multiple iterations per satellite, so they can check all carrier
+ *                 phases used in the filter or set by user.
+ * -----------
  *       END_RELEASE_HISTORY
  *****************************/
 
 /* External classes */
+#include "dataHandling.h"
 #include "preprocessing.h"
 
 /**************************************
@@ -293,7 +304,7 @@
 void preprocess (TEpoch *epoch, TOptions *options, int mode) {
 	if ( epoch->receiver.look4interval ) look4interval(epoch, options);
 	if ( options->checkPhaseCodeJumps ) checkPseudorangeJumps(epoch, options);
-	if ( options->prealignCP ) prealignEpoch(epoch);
+	if ( options->prealignCP ) prealignEpoch(epoch,options);
 	checkCycleSlips(epoch, options, mode);
 	smoothEpoch(epoch, options);
 	if ( options->sigmaInflation && mode != 0 ) sigmaInflation(epoch, options);
@@ -308,7 +319,7 @@ void preprocess (TEpoch *epoch, TOptions *options, int mode) {
  * TOptions  *options              I  N/A  TOptions structure for preprocessing configuration
  *****************************************************************************/
 void look4interval (TEpoch *epoch, TOptions *options) {
-	int 			i, index, maxMatch;
+	int 			i, indexPos, maxMatch;
 	char			aux[100];
 	double 			SR = 0.0; // Sampling Rate
 	double			auxinterval;
@@ -349,12 +360,12 @@ void look4interval (TEpoch *epoch, TOptions *options) {
 			}
 		}
 		// Get the most repeated sampling rate
-		index = 0;
+		indexPos = 0;
 		maxMatch = 0;
 		for ( i = 0; i < 10; i++ ) {
 			if ( arraySR[i] != 0.0 ) {
 				if ( counter[i] > maxMatch ) {
-					index = i;
+					indexPos = i;
 					maxMatch = counter[i];
 				}
 			}
@@ -363,14 +374,14 @@ void look4interval (TEpoch *epoch, TOptions *options) {
 		if ( maxMatch > 11 ) {
 			epoch->receiver.look4interval = 0;
 			//Disable N-con if interval is greater than or equal than 15 seconds
-			if ( arraySR[index] >= 15.0 ) {
+			if ( arraySR[indexPos] >= 15.0 ) {
 				options->csNcon = 0;
 			} else if (options->csNconAutoDisabled==1) {
 				options->csNcon = 1;
 			}
 		}
 
-		epoch->receiver.interval = arraySR[index];
+		epoch->receiver.interval = arraySR[indexPos];
 		if (epoch->receiver.interval<1.) {
 			//Get the number of decimals
 			auxinterval=epoch->receiver.interval-(double)((int)(epoch->receiver.interval+.00005));
@@ -503,8 +514,12 @@ int isEclipsed (TTime *t, TSatellite *sat, TSatInfo *satInfo, double sunPos[3], 
 	
 	// Check if it has been in eclipse in the last 30 minutes
 	if ( satInfo->lastEclipse.MJDN != 0 ) { // This would mean still no eclipse found for this satellite
-		diff = fabs(tdiff(t,&satInfo->lastEclipse));
-		if ( diff <= 1800 ) { // 30 minutes
+		diff = tdiff(t,&satInfo->lastEclipse);
+		if ( diff < 0. ) {
+			//If value is negative is because we are going in backwards direction
+			//We don't have to leave a margin of 30 minutes prior to the eclipse
+			return 0;
+		} else if ( diff <= 1800 ) { // 30 minutes
 			*tLast = diff;
 			return 1;
 		} 
@@ -522,47 +537,57 @@ int isEclipsed (TTime *t, TSatellite *sat, TSatInfo *satInfo, double sunPos[3], 
  * int  ind                        I  N/A  Index of the satellite
  *****************************************************************************/
 void prealignSat (TEpoch *epoch, int ind) {
-	int						i,j;
-	enum GNSSystem			GNSS;
-	enum MeasurementType	meas;
-	double					CP,PR;
-	double					lambda;
-	int						ret1,ret2;
-	i = epoch->satCSIndex[epoch->sat[ind].GNSS][epoch->sat[ind].PRN];
+	int							i,j;
+	int							ret1,ret2;
+	int							freq;
+	double						CP,PR;
+	double						lambda;
+	enum GNSSystem				GNSS;
+	enum MeasurementType		meas,meas2;
+	const int					freq1=1;
+	const int					freq2=2;
+	const enum MeasurementType 	C1Cmeas=C1C,C2Cmeas=C2C;
 	
 	if ( epoch->prealign == 0 ) return;
+
+	i = epoch->satCSIndex[epoch->sat[ind].GNSS][epoch->sat[ind].PRN];
 	if ( epoch->cycleslip.arcLength[i] == 0 || ( epoch->cycleslip.arcLength[i] == 1 && epoch->cycleslip.CSPrealignFlag[i] == 1 ) ) {
 		GNSS = epoch->sat[ind].GNSS;
 		for ( j=0;j<epoch->measOrder[GNSS].nDiffMeasurements;j++ ) {
 			meas = epoch->measOrder[GNSS].ind2Meas[j];
-			//if (epoch->measOrder[GNSS].usable[meas]==1) { // Measurement has NOT been invalidated
-				if ( whatIs(meas) == CarrierPhase ) {
-					// Set prealign value to 0
-					epoch->cycleslip.preAlign[i][j] = 0.0;
-					ret1 = getMeasModelValue(epoch,GNSS,epoch->sat[ind].PRN,meas,&CP,NULL);
-					ret2 = getMeasModelValue(epoch,GNSS,epoch->sat[ind].PRN,meas-1,&PR,NULL);
+			if ( whatIs(meas) == CarrierPhase ) {
+				// Set prealign value to 0
+				epoch->cycleslip.preAlign[i][j] = 0.0;
+				freq=getFrequencyInt(meas);
+				ret1 = getMeasModelValue(epoch,GNSS,epoch->sat[ind].PRN,&meas,&freq,&CP,NULL,0);
+				meas2=meas-1;
+				ret2 = getMeasModelValue(epoch,GNSS,epoch->sat[ind].PRN,&meas2,&freq,&PR,NULL,0);
+				if ( (GNSS==GPS || GNSS==GLONASS) && ret2 == 0 ) {
 					// Special cases: 
-					// For the case of L1P, for GPS, if it cannot prealign with C1P (P1 code), it
-					// will try to prealign it with C1C (C1 code).
-					if ( meas == L1P && ret2 == 0 ) {
-						ret2 = getMeasModelValue(epoch,GNSS,epoch->sat[ind].PRN,C1C,&PR,NULL);
+					switch (meas) {
+						case L1P:
+							// For the case of L1P, for GPS, if it cannot prealign with C1P (P1 code), it
+							// will try to prealign it with C1C (C1 code).
+							ret2 = getMeasModelValue(epoch,GNSS,epoch->sat[ind].PRN,&C1Cmeas,&freq1,&PR,NULL,0);
+							break;
+						case L2P:
+							// For the case of L2P, for GPS, if it cannot prealign with C2P (P2 code), it
+							// will try to prealign it with C2C (C2 code).
+							ret2 = getMeasModelValue(epoch,GNSS,epoch->sat[ind].PRN,&C2Cmeas,&freq2,&PR,NULL,0);
+							break;
+						default:
+							break;
 					}
-					// For the case of L2P, for GPS, if it cannot prealign with C2P (P2 code), it
-					// will try to prealign it with C2C (C2 code).
-					if ( meas == L2P && ret2 == 0 ) {
-						ret2 = getMeasModelValue(epoch,GNSS,epoch->sat[ind].PRN,C2C,&PR,NULL);
+				}
+				// Obtain prealign value
+				if ( ret1 != 0 && ret2 != 0 ) { 
+					lambda = epoch->measOrder[GNSS].lambdaMeas[freq][epoch->sat[ind].PRN];
+					if (lambda!=1.) {
+						//Frequency offset available
+						epoch->cycleslip.preAlign[i][j] = ((double)((int)((PR-CP)/lambda)));
 					}
-					// Obtain prealign value
-					if ( ret1 != 0 && ret2 != 0 ) { 
-						lambda = getLambda(GNSS,meas);
-						epoch->cycleslip.preAlign[i][j] = ((int)((PR-CP)/lambda));
-			//		} else { // Mark CP as invalid if it was not
-			//			epoch->sat[ind].meas[j].value = -1;
-			//			initSatellite(epoch,ind);
-			//			epoch->sat[ind].arcLength = 0; // This is to invalidate current epoch
-					}
-				}		
-			//}
+				}
+			}		
 		}
 	}
 }
@@ -573,12 +598,14 @@ void prealignSat (TEpoch *epoch, int ind) {
  * Parameters  :
  * Name                           |Da|Unit|Description
  * TEpoch  *epoch                  IO N/A  TEpoch structure
+ * TOptions  *options              I  N/A  TOptions structure 
  *****************************************************************************/
-void prealignEpoch (TEpoch *epoch) {
+void prealignEpoch (TEpoch *epoch, TOptions  *options) {
 	int		i;
 	
 	epoch->prealign = 1;
 	for ( i=0;i<epoch->numSatellites;i++ ) {
+		if (options->includeSatellite[epoch->sat[i].GNSS][epoch->sat[i].PRN]==0) continue;
 		prealignSat(epoch,i);
 	}
 }
@@ -598,11 +625,11 @@ void prealignEpoch (TEpoch *epoch) {
 double lagrangeInterpolation (int degree, TTime t, TTime *tPrev, double *yPrev) {
 	int			i,j;
 	double		yEst,prod;
-	double		*xPrev,x;
+	double		xPrev[MAX_INTERPOLATION_DEGREE+1];
+	double		x;
 	TTime		tRef;
 	
 	yEst = 0;
-	xPrev = malloc(sizeof(double)*(degree+1));
 
 	// Fill xPrev and x with tPrev and t values   
 	memcpy(&tRef,&tPrev[0],sizeof(TTime)); // Reference time
@@ -622,8 +649,6 @@ double lagrangeInterpolation (int degree, TTime t, TTime *tPrev, double *yPrev) 
 		yEst += prod;
 	}
 
-	free(xPrev);
-	
 	return yEst;
 }
 
@@ -654,7 +679,7 @@ int checkPseudorangeJumps (TEpoch *epoch, TOptions *options) {
 	int						PhasenotUpdated;	// 0->phase updated 1->phase not updated
 	int						NumbermsCode;		//Number of milliseconds of adjustment in the clock in code measurement
 	int						returnvalue = 0;
-	int						mode;
+	int						mode,freq;
 	static int				clockupdatems[2] = {0,0};
 	static int				firstepoch = 1;
 	enum MeasurementType	meas;
@@ -664,6 +689,7 @@ int checkPseudorangeJumps (TEpoch *epoch, TOptions *options) {
 	static double			PrevC1[2][MAX_GNSS][MAX_SBAS_PRN];
 	static double			PrevL1[2][MAX_GNSS][MAX_SBAS_PRN];
 	double					clockupdateMeters;
+	double					lambda;
 
 	//Check if we are with Rover or Reference station
 	// 0 -> Rover (with or without DGNSS)
@@ -690,6 +716,7 @@ int checkPseudorangeJumps (TEpoch *epoch, TOptions *options) {
 	if ( indGPSL1 == -1 ) indGPSL1 = epoch->measOrder[GPS].meas2Ind[L1P];
 	for ( i=0;i<epoch->numSatellites;i++ ) {
 		if ( epoch->sat[i].GNSS != GPS ) continue; //We will compute the jump using only GPS
+		if (options->includeSatellite[epoch->sat[i].GNSS][epoch->sat[i].PRN]==0) continue; 
 		if ( epoch->sat[i].meas[indGPSC1].rawvalue != -1 && epoch->sat[i].meas[indGPSL1].rawvalue != -1 ) {
 			// We have got data available in the current epoch for C1 and L1
 			if ( PrevC1[mode][epoch->sat[i].GNSS][epoch->sat[i].PRN] != -1 && PrevL1[mode][epoch->sat[i].GNSS][epoch->sat[i].PRN] != -1 ) {
@@ -734,13 +761,25 @@ int checkPseudorangeJumps (TEpoch *epoch, TOptions *options) {
 	clockupdateMeters = (double)(clockupdatems[mode]) * c0 * 1E-3;
 
 	if (clockupdateMeters>0.) {
-		// Update measurements. The jump is common for all satellites of all constellations (because it is in the receiver clock)
+	// Update measurements. The jump is common for all satellites of all constellations (because it is in the receiver clock)
 		for ( i=0;i<epoch->numSatellites;i++ ) {
 			for ( j=0;j<epoch->measOrder[epoch->sat[i].GNSS].nDiffMeasurements;j++ ) {
 				meas = epoch->measOrder[epoch->sat[i].GNSS].ind2Meas[j];
+				freq = getFrequencyInt(meas);
 				if ( whatIs(meas) == CarrierPhase ) {
 					if ( epoch->sat[i].meas[j].rawvalue != -1 ) {
-						epoch->sat[i].meas[j].value+=(double)clockupdateMeters/epoch->measOrder[epoch->sat[i].GNSS].conversionFactor[meas];
+						if (epoch->sat[i].GNSS==GLONASS) {
+							lambda = epoch->measOrder[epoch->sat[i].GNSS].lambdaMeas[freq][epoch->sat[i].PRN];
+							if (lambda==1.) {
+								//Glonnas frequency offset not available. Do not update
+								sprintf(messagestr,"WARNING: No phase offset for GLO %2d. Could not update clock jump in %s (%d ms adjustment) for measurement %3s",epoch->sat[i].PRN,mode?"Reference station":"Rover",clockupdatems[mode],meastype2measstr(meas));
+								printInfo(messagestr,options);
+							} else {
+								epoch->sat[i].meas[j].value+=(double)clockupdateMeters/lambda;
+							}
+						} else {
+							epoch->sat[i].meas[j].value+=(double)clockupdateMeters/epoch->measOrder[epoch->sat[i].GNSS].conversionFactor[meas];
+						}
 					}
 				}
 			}
@@ -752,24 +791,22 @@ int checkPseudorangeJumps (TEpoch *epoch, TOptions *options) {
 
 /*****************************************************************************
  * Name        : polyfit
- * Description : Fits a polynomial and estimates the Li/Lc prediction
+ * Description : Fits a polynomial (with degree 2) and estimates the Li prediction
+                  using least squares
  * Parameters  :
  * Name                           |Da|Unit|Description
- * TEpoch  *epoch                  I  N/A  TEpoch structure
- * TOptions  *options              I  N/A  TOptions structure
- * int  i                          I  N/A  Index for current satellite
- * int  type                       I  N/A  0 -> Li prediction
- *                                         1 -> Lc prediction
+ * TTime *t                        I  N/A  Current epoch
+ * TTime *tSamples                 I  N/A  Array with the timestamp of each sample
+ * double *Samples                 I    m  Array with the samples
+ * int  outlier                    I  N/A  Flag to indicate if an outlier occurred
  * int  numsamples                 I  N/A  Number of samples
  * double  *res                    O  N/A  Polynomial residual
- * Returned value (double)         O  N/A  Li/Lc prediction
+ * Returned value (double)         O  N/A  Polynomial prediction
  *****************************************************************************/
-double polyfit (TEpoch *epoch, TOptions *options, int i, int type, int numsamples, double *res) {
+double polyfit (TTime *t, TTime *tSamples, double *Samples, int outlier, int numsamples, double *res) {
 	int		j,k,l,istart,resi;
 	int		flipJ[numsamples];
-	int		outlier;
 	double	a[numsamples][3];
-	//double	x[numsamples]; //Commented to avoid the warning "set but not used"
 	double	y[numsamples];
 	double	va[6] = {0, 0, 0, 0, 0, 0};
 	double	aty[3] = {0, 0, 0};
@@ -780,41 +817,22 @@ double polyfit (TEpoch *epoch, TOptions *options, int i, int type, int numsample
 	// Initialize
 	for ( j=0;j<numsamples;j++ ) {
 		flipJ[j] = numsamples-j-1;
-		//x[j] = 0;
 		y[j] = 0;
 	}
 
-	//LC detector is disabled at the moment. The following line is to avoid warning
-	type+=0;
-
 	// Build the matricial equations
 	for ( j=numsamples-1;j>=0;j-- ) {
-		//if(type==0) {
-			tempo = tdiff(&epoch->cycleslip.tPrevLI[i][flipJ[j]],&epoch->cycleslip.tPrevLI[i][0]);
-		//} else {
-			//tempo = tdiff(&epoch->cycleslip.tPrevLC[i][flipJ[j]],&epoch->cycleslip.tPrevLC[i][0]);
-		//}
-		//x[j] = tempo;
+			tempo = tdiff(&tSamples[flipJ[j]],&tSamples[0]);
 		for ( k=0;k<3;k++ ) {
 			// Build Vandermonde matrix for time samples
 			a[j][k] = pow(tempo,k);
 		}
 
-		//if(type==0) {
-			// Build array of LI
-			y[j] = epoch->cycleslip.LiPrev[i][flipJ[j]] - epoch->cycleslip.LiPrev[i][0];
-		//} else {
-			// Build array of LC
-			//y[j] = epoch->cycleslip.LcPrev[i][flipJ[j]] - epoch->cycleslip.LcPrev[i][0];
-		//}
+		// Build array of measurements
+		y[j] = Samples[flipJ[j]] - Samples[0];
 	}
 
-	//if(type==0) {
-		outlier= epoch->cycleslip.outlierLI[i]+epoch->cycleslip.outlierBw[i];
-	//} else {
-		//outlier= epoch->cycleslip.outlierLC[i];
-	//}
-	// Avoid outlier in fitting the polynomial (any outlier detected in LI or Bw)
+	// Avoid outlier in fitting the polynomial
 	if ( outlier >= 1 ) {
 		istart = 1;
 	} else {
@@ -836,8 +854,6 @@ double polyfit (TEpoch *epoch, TOptions *options, int i, int type, int numsample
 	// Solve the inv(at*a) with Cholesky 
 	resi = cholinv_opt(va,3);
 	if (resi==-1) {
-		//sprintf(messagestr,"Problem in CHOLESKI3 res=%d\n",resi);
-		//printError(messagestr,options);
 		return 999999.;
 	}
 
@@ -865,26 +881,17 @@ double polyfit (TEpoch *epoch, TOptions *options, int i, int type, int numsample
 	*res = coef[0];
 
 	// Calculate the prediction Est
-
-	//if(type==0) {
-		for ( j=2; j>=0; j-- ) {
-			x0 += coef[j] * pow(tdiff(&epoch->t,&epoch->cycleslip.tPrevLI[i][0]), j);
-		}
-		Est = x0 + epoch->cycleslip.LiPrev[i][0];
-	/*} else {
-		for ( j=2; j>=0; j-- ) {
-			x0 += coef[j] * pow(tdiff(&epoch->t,&epoch->cycleslip.tPrevLC[i][0]), j);
-		}
-		Est = x0 + epoch->cycleslip.LcPrev[i][0];
-	}*/
+	for ( j=2; j>=0; j-- ) {
+		x0 += coef[j] * pow(tdiff(t,&tSamples[0]), j);
+	}
+	Est = x0 + Samples[0];
 
 	return Est;
 }
 
 /*****************************************************************************
  * Name        : checkCycleSlips
- * Description : Check for carrier-phase cycle slips. At the moment it is only 
- *               prepared for GPS
+ * Description : Check for carrier-phase cycle slips.
  * Parameters  :
  * Name                           |Da|Unit|Description
  * TEpoch  *epoch                  I  N/A  TEpoch structure
@@ -896,494 +903,800 @@ double polyfit (TEpoch *epoch, TOptions *options, int i, int type, int numsample
  *****************************************************************************/
 void checkCycleSlips (TEpoch *epoch, TOptions *options, int mode) {
 
-	int				ii;
-	int				allCSDetectorsOff=0; //This variable is not changed, no need to declare it private in the for loop for multithreading
+	int			i,m,n;
+	int			DGNSSstruct=epoch->DGNSSstruct;
+	int			AnyMessageToPrint=0;
 
-	if ( options->csL1C1 == 0 && options->csBW == 0 && options->csLI == 0 && options->csLLI == 0 ) {
-		allCSDetectorsOff=1;
-	}
-	
-
-	// Go over all the satellites
+	// Loop over all satellites
 	#pragma omp parallel for 
-	for ( ii=0;ii<epoch->numSatellites;ii++ ) {
+	for ( i=0;i<epoch->numSatellites;i++ ) {
 		
 		//In this case, variable are declared inside the loop. This is done to allow some compiler optimizations in single thread (as
-		//by declaring the variable inside the for we are telling the variable that the scope of the variable is only inside the for loop)
+		//by declaring the variable inside the for loop we are stating to the compiler that the scope of the variable is only inside the for loop)
 		//and also, in multithread, as all variables have to be private, the compiler can optimize the code as variables are declared inside
 		//the loop, it does not need to make a local copy of the variable when the thread starts (if the variables were declared outside
-		//the for loop, the variables would be in the "private" OpenMP directive -see gLAB version 5.3.0-, making now the '#pragma' directive shorter)
+		//the for loop, the variables would be in the "private" OpenMP directive -see gLAB version 5.3.0-, making the '#pragma' directive shorter)
+		//Note that in each loop, the variables will NOT keep the value of the previous iteration (even in single thread mode)
 
-		int 			i,j;
-		int 			cycleSlipFound = 0;
-		int 			measCheck = 0;		// Global measurement check
-		enum GNSSystem system = epoch->sat[ii].GNSS;
+		int 					j,k,l;
+		int 					cycleSlipFound = 0;
+		int						PRN=epoch->sat[i].PRN;
+		enum GNSSystem 			GNSS=epoch->sat[i].GNSS;
+		char					auxstr[MAX_INPUT_LINE+50]; //The +50 is to avoid -Wformat-overflow warning
+		char					auxmeas[4][10];
 
-		double			auxMean;
-		double			auxMean2;
-		int				samples;
-		enum			MeasurementType	meas;
-		int				index;
-		double			tdiffNcon;
-		double			SNR;
+		double					auxMean;
+		double					auxMean2;
+		int						samples;
+		int						indexPos;
+		int						NoOutlierAndNconOk=0;
+		double					tdiffNcon;
+		double					SNRVal;
+		double					measValue;
+		enum MeasurementType	meas;
 
 		// Data Gap
-		double			timeDiff;
-		int 			DataGapCheck = 0;	// 0 => no CS detected by Data gap detector
-											// 1 => CS detected by Data gap detector
+		double					timeDiff;
+		int 					DataGapCheck = 0;	// 0 => no CS detected by Data gap detector
+													// 1 => CS detected by Data gap detector
 
 		// Loss of Lock Indicator (LLI)
-		int				lli;
-		int 			LLICheck = 0;		// 0 => no CS detected by LLI detector
-											// 1 => CS detected by LLI detector
+		int						LLI;
+		int 					LLICheck = 0;		// 0 => no CS detected by LLI detector
+													// 1 => CS detected by LLI detector
+		char					LLIText[MAX_INPUT_LINE];
 
-		int 			measLLI = 0;		// 0 => at least one measurement (L1, C1) is missed or not OK
-											// 1 => all measurements (L1 and C1) are OK
-		
-		// Melbourne-Wubbena (BW)
-		double			Bw;
-		double			nBwdiff;
-		double			nBw300diff;
-		double			nBwdiffThreshold;
-		double			C2;
-		int 			BwCheck = 0;		// 0 => no CS detected by Melbourne-Wubbena detector
-											// 1 => CS detected by Melbourne-Wubbena detector
-
-		int 			measBW = 0;			// 0 => at least one measurement (L1, C1, L2 and C2) is missed or not OK
-											// 1 => all measurements (L1, C1, L2 and C2) are OK
+		// Melbourne-Wubbena (MW)
+		int						OutlierMWFoundAll,OutlierMWFound[MAX_CS_LIST];
+		double					MWVal[MAX_CS_LIST];
+		double					nMWdiff;
+		double					nMW300diff;
+		double					nMWdiffThreshold;
+		int						MWCheck[MAX_CS_LIST];
+		int 					MWCheckAll = 0;		// 0 => no CS detected by Melbourne-Wubbena detector
+													// 1 => CS detected by Melbourne-Wubbena detector
 
 		// Geometry-free (LI)
-		double			Li, LiEst;
-		double			LiThreshold;
-		double			res;
-		double			LiDiff;
-		int 			LiCheck = 0;		// 0 => no CS detected by Geometry-free detector
-											// 1 => CS detected by Geometry-free detector
+		int						OutlierLIFoundAll,OutlierLIFound[MAX_CS_LIST];
+		double					LIVal[MAX_CS_LIST];
+		double					LIEst;
+		double					res,resThreshold;
+		double					LIDiff[MAX_CS_LIST];
+		double					LIDiffAbs[MAX_CS_LIST];
+		double					LIDiffEst[MAX_CS_LIST];
+		double					LIDiffEstAbs[MAX_CS_LIST];
+		int						LICheck[MAX_CS_LIST];
+		int 					LICheckAll = 0;		// 0 => no CS detected by Geometry-free detector
+													// 1 => CS detected by Geometry-free detector
 
-		int 			measLI = 0;			// 0 => at least one measurement (L1, L2) is missed or not OK
-											// 1 => all measurements (L1 and L2) are OK
-		
-		// L1-C1
-		double			L1, C1;
-		double			L1C1diff;
-		double			sigma2;
-		double			deltaC1;
-		double			deltaL1;
-		double 			L1C1Threshold = 0;	// Threshold of C1L1 difference detector
-		int 			L1C1Check = 0;		// 0 => no CS detected by L1C1 difference detector
-											// 1 => CS detected by L1C1 difference detector
+		// Iono Geometry-free (IGF)
+		int						OutlierIGFFoundAll,OutlierIGFFound[MAX_CS_LIST];
+		double					IGF[MAX_CS_LIST];
+		double					IGFEst;
+		double					IGFDiff[MAX_CS_LIST];
+		double					IGFDiffAbs[MAX_CS_LIST];
+		double					IGFDiffEst[MAX_CS_LIST];
+		double					IGFDiffEstAbs[MAX_CS_LIST];
+		int						IGFCheck[MAX_CS_LIST];
+		int 					IGFCheckAll = 0;	// 0 => no CS detected by Iono Geometry-free detector
+													// 1 => CS detected by Iono Geometry-free detector
+		// Single Frequency (SF) detector
+		int						SFdiffFactor;
+		double					SFPhase[MAX_CS_LIST];
+		double					SFCode[MAX_CS_LIST];
+		double					SFdiff[MAX_CS_LIST];
+		double					sigma2;
+		double					deltaSFCode[MAX_CS_LIST];
+		double					deltaSFPhase[MAX_CS_LIST];
+		double					deltaSF[MAX_CS_LIST];
+		double 					SFThreshold[MAX_CS_LIST];	// Threshold of SF difference detector
+		int						SFCheck[MAX_CS_LIST];
+		int 					SFCheckAll=0;				// 0 => no CS detected by SF difference detector
+															// 1 => CS detected by SF difference detector
 
-		int 			measL1C1 = 0;		// 0 => at least one measurement (L1, C1) is missed or not OK
-											// 1 => all measurements (L1 and C1) are OK
+		//If satellite is unselected, do not detect cycle-slips
+		if (options->includeSatellite[GNSS][PRN]==0) continue;
 
-		//Ncon
-		int 			measNcon = 1;		// 0 => at least one measurement (C1C or C1P) is missed or not OK
-											// 1 => all measurements (C1C or C1P) are OK
+		//If satellite has not selected measurements, wait for all measurements to be selected
+		if (options->MeasSelected[DGNSSstruct][GNSS][PRN]!=MEASSELECTED) continue;
+
 
 		// Index of the satellite in the dictionary
-		i = epoch->satCSIndex[epoch->sat[ii].GNSS][epoch->sat[ii].PRN];
+		j = epoch->satCSIndex[GNSS][PRN];
 
 		// Initialise several checks
-		epoch->cycleslip.preCheck[i] = 0;
-		epoch->cycleslip.consistency[i] = 0;
-		epoch->cycleslip.CS[i] = 0;
-		epoch->cycleslip.use4smooth[i] = 1;
-		epoch->sat[ii].hasSNR = 1;
+		epoch->cycleslip.preCheck[j] = 0;
+		epoch->cycleslip.CS[j] = 0;
+		epoch->cycleslip.use4smooth[j] = 1;
+		epoch->cycleslip.anyOutlier[j] = 0;
+		epoch->sat[i].hasSNR = 1;
+		epoch->sat[i].badSNRText[0] = '\0';
+		epoch->sat[i].MissingMeasText[0] = '\0';
+		epoch->sat[i].SFUnconsistencyText[0] = '\0';
+		LLIText[0] = '\0';
 
-		// Check SNR 
-		if ( options->SNRfilter == 1 ) {
-			//Check first is 'S' measurement with SNR is available
-			if (epoch->sat[ii].GNSS==GPS) { //GPS Only!!
-				if(epoch->measOrder[epoch->sat[ii].GNSS].hasSNRmeas==1) {
-					SNR=epoch->sat[ii].meas[epoch->measOrder[epoch->sat[ii].GNSS].SNRmeaspos[1]].value;
-					if (SNR<options->SNRvalues[epoch->sat[ii].GNSS][epoch->sat[ii].PRN]) {
-						if (SNR!=-1.) {
-							//F1 is under SNR threshold
-							epoch->sat[ii].hasSNR = 0;
-							epoch->sat[ii].lowSNR = SNR;
-							epoch->cycleslip.use4smooth[i] = 0;
-							continue;
-						}
-					}	
-					if (options->solutionMode==PPPMode) {
-						SNR=epoch->sat[ii].meas[epoch->measOrder[epoch->sat[ii].GNSS].SNRmeaspos[2]].value;
-						if (SNR<options->SNRvalues[epoch->sat[ii].GNSS][epoch->sat[ii].PRN]) {
-							if (SNR!=-1.) {
-								//F2 is under SNR threshold
-								epoch->sat[ii].hasSNR = 0;
-								epoch->sat[ii].lowSNR = SNR;
-								epoch->cycleslip.use4smooth[i] = 0;
-								continue;
-							}
-						}	
-					}
-				} else {
-					//Look for quantizied SNR measurement (the number next to the measurement)
-					for ( j=0;j<epoch->measOrder[epoch->sat[ii].GNSS].nDiffMeasurements;j++ ) {
-						if ( epoch->sat[ii].meas[j].SNRdBHz<options->SNRvalues[epoch->sat[ii].GNSS][epoch->sat[ii].PRN] ) {
-							// SNR below user threshold
-							// Check if SBAS mode is activated, and if it is a measurement used in SBAS
-							if ( options->SBAScorrections == 1 && options->onlySBASiono == 0 ) {
-								meas = epoch->measOrder[epoch->sat[ii].GNSS].ind2Meas[j];
-								if ( meas != C1C && meas != L1C && meas != L1P ) continue;
-							}
-							epoch->sat[ii].hasSNR = 0;
-							epoch->sat[ii].lowSNR = (double)epoch->sat[ii].meas[j].SNRdBHz;
-							epoch->cycleslip.use4smooth[i] = 0;
-							continue;
-						}
-					}
-				}
+		// Check missing measurements
+		for(k=0;k<epoch->measOrder[GNSS].numMeasListDataGap[PRN];k++) {
+			measValue=epoch->sat[i].meas[epoch->measOrder[GNSS].measIndListDataGap[PRN][k]].value;
+			if (measValue==-1.) {
+				//It is below the minimum or over the maximum
+				meas=epoch->measOrder[GNSS].measListDataGap[PRN][k];
+				sprintf(auxstr,"%s %3s",epoch->sat[i].MissingMeasText,meastype2measstr(meas));
+				strcpy(epoch->sat[i].MissingMeasText,auxstr);
 			}
 		}
 
-		// If any detector is enabled, just go ahead
-		if ( allCSDetectorsOff == 1 ) {
-			if ( options->csNcon ) {
-				if ( options->SBAScorrections == 1 && options->onlySBASiono == 0 ) {
-					C1 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C1C);
-				} else {
-					C1 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C1P);
+		if (epoch->sat[i].MissingMeasText[0]!='\0') {
+			//Some of the measurements are missing
+			epoch->cycleslip.preCheck[j] = 1;
+			epoch->cycleslip.use4smooth[j] = 0;
+			continue;
+		}
+
+		// Check SNR. No need to check if option 'SNRfilter' is enabled, as if it is disabled, the list will be empty
+		for(k=0;k<epoch->measOrder[GNSS].numMeasListToCheckSNR[PRN];k++) {
+			meas=epoch->measOrder[GNSS].measListToCheckSNR[PRN][k];
+			SNRVal=epoch->sat[i].meas[epoch->measOrder[GNSS].meas2SNRInd[meas]].SNRvalue;
+			if (SNRVal<options->SNRminvalues[GNSS][PRN][meas] || SNRVal>options->SNRmaxvalues[GNSS][PRN][meas]) {
+				//It is below the minimum or over the maximum
+				switch (options->SNRchecktype) {
+					case SNRCheckMinMax:
+						sprintf(auxstr,"%s %3s-%.2f (min: %.2f max: %.2f)",epoch->sat[i].badSNRText,meastype2measstr(meas),SNRVal,options->SNRminvalues[GNSS][PRN][meas],options->SNRmaxvalues[GNSS][PRN][meas]);
+						break;
+					case SNRCheckMin:
+						sprintf(auxstr,"%s %3s-%.2f (min: %.2f)",epoch->sat[i].badSNRText,meastype2measstr(meas),SNRVal,options->SNRminvalues[GNSS][PRN][meas]);
+						break;
+					case SNRCheckMax:
+						sprintf(auxstr,"%s %3s-%.2f (max: %.2f)",epoch->sat[i].badSNRText,meastype2measstr(meas),SNRVal,options->SNRmaxvalues[GNSS][PRN][meas]);
+						break;
+					default:
+						break;
 				}
-				if ( C1==-1) measNcon=0;
+				strcpy(epoch->sat[i].badSNRText,auxstr);
+			}
+		}
+
+		if (epoch->sat[i].badSNRText[0]!='\0') {
+			//Some measurements do not meet the required SNR
+			epoch->sat[i].hasSNR = 0;
+			epoch->cycleslip.use4smooth[j] = 0;
+			continue;
+		}
+
+		if (options->allCSDetectorsOff == 1) {
+			if (options->csNcon==0) {
+				epoch->cycleslip.arcLength[j]++;
+				continue;
 			} else {
-				epoch->cycleslip.arcLength[i]++;
+				//Check N-con with no cycle-slip enabled
+				tdiffNcon=fabs(tdiff(&epoch->t,&epoch->cycleslip.previousEpochNconsecutive[j]));
+				// Check if there are N-consecutive samples
+				if ( (tdiffNcon - epoch->receiver.interval) > DIFFEQTHRESHOLD ) {  //The DIFFEQTHRESHOLD is to avoid problems with decimals
+					epoch->cycleslip.Nconsecutive[j] = options->csNconMin;
+					epoch->cycleslip.use4smooth[j] = 0;
+				} else if ( epoch->cycleslip.Nconsecutive[j] < 0 ) {
+					// Increase N-consecutive to avoid the following N epochs after data hole
+					epoch->cycleslip.Nconsecutive[j]++;
+					epoch->cycleslip.use4smooth[j] = 0;
+					if (epoch->cycleslip.Nconsecutive[j] == 0 ) epoch->cycleslip.arcLength[j]++;
+				} else {
+					epoch->cycleslip.arcLength[j]++;
+				}
+				// Update previous epoch (time) to check if there is N-consecutive epochs
+				memcpy(&epoch->cycleslip.previousEpochNconsecutive[j],&epoch->t,sizeof(TTime));
 				continue;
 			}
 		}
 
-		if ( system == GPS ) {
-			// Update the Loss of Lock Indicator
-			lli = 0;
-			for ( j=0;j<epoch->measOrder[epoch->sat[ii].GNSS].nDiffMeasurements;j++ ) {
-				if ( options->csLLI == 1 && options->csL1C1 == 0 && options->csBW == 0 && options->csLI == 0 ) {
-					lli = (int)epoch->sat[ii].meas[j].LLI;
-					if ( lli%2 != 0 ) break;
-				} else {
-					meas = epoch->measOrder[epoch->sat[ii].GNSS].ind2Meas[j];
-					if ( meas == L1P && options->csL1C1 && epoch->sat[ii].meas[j].LLI != 0 ) {
-						lli = (int)epoch->sat[ii].meas[j].LLI;
-						break;
-					}
-					if ( meas == L2P && (options->csBW || options->csLI ) && epoch->sat[ii].meas[j].LLI != 0 ) {
-						lli = (int)epoch->sat[ii].meas[j].LLI;
-						break;
-					}
+		// Data Gap Cycle Slip Detector
+		timeDiff = fabs(tdiff(&epoch->t,&epoch->cycleslip.previousEpoch[j]));;
+		if ( (timeDiff - options->csDataGap) > DIFFEQTHRESHOLD && //The DIFFEQTHRESHOLD is to avoid problems with decimals
+			 epoch->cycleslip.arcLength[j] > 0) {
+			DataGapCheck = 1; // Cycle slip detected
+			// Update previous epoch (time) to check if there is data gap
+			memcpy(&epoch->cycleslip.previousEpoch[j],&epoch->t,sizeof(TTime));
+			// Update previous epoch (time) to check if there is N-consecutive epochs
+			memcpy(&epoch->cycleslip.previousEpochNconsecutive[j],&epoch->t,sizeof(TTime));
+			//Set N-consecutive
+			epoch->cycleslip.Nconsecutive[j] = options->csNconMin * options->csNcon;
+			//Print cycle-slip
+			if (options->printCycleslips) {
+				printCS(epoch,GNSS,PRN,i,CSTypeDataGap,mode,NULL,options->csDataGap,timeDiff,NULL,0.,0.,0.,0.,0.,0.,0.,0.,options);
+			}
+		} 
+		// N-consecutive data with any cycle-slip detector enabled. If there has been a data gap, no need to check N-con
+		else if ( options->csNcon ) {
+			tdiffNcon=fabs(tdiff(&epoch->t,&epoch->cycleslip.previousEpochNconsecutive[j]));
+			// Check if there are N-consecutive samples
+			if ( (tdiffNcon - epoch->receiver.interval) > DIFFEQTHRESHOLD &&  //The DIFFEQTHRESHOLD is to avoid problems with decimals
+				 (tdiffNcon - options->csDataGap) <= DIFFEQTHRESHOLD && epoch->cycleslip.arcLength[j] > 0 ) {
+				epoch->cycleslip.Nconsecutive[j] = options->csNconMin;
+				epoch->cycleslip.use4smooth[j] = 0;
+				// Update previous epoch (time) to check if there is N-consecutive epochs
+				memcpy(&epoch->cycleslip.previousEpochNconsecutive[j],&epoch->t,sizeof(TTime));
+			} else if ( epoch->cycleslip.Nconsecutive[j] < 0 ) {
+				// Increase N-consecutive to avoid the following N epochs after data hole
+				epoch->cycleslip.Nconsecutive[j]++;
+				epoch->cycleslip.use4smooth[j] = 0;
+				// Update previous epoch (time) to check if there is N-consecutive epochs
+				memcpy(&epoch->cycleslip.previousEpochNconsecutive[j],&epoch->t,sizeof(TTime));
+			}
+		} else {
+			// Update previous epoch (time) to check if there is data gap
+			memcpy(&epoch->cycleslip.previousEpoch[j],&epoch->t,sizeof(TTime));
+			//N-con not enabled if entering here, so we need to update previousEpochNconsecutive
+		}
+
+		// Update the Loss of Lock Indicator
+		// Loss of Lock Indicator (LLI)
+		//   Range: 0-7
+		//      0 or blank: OK or not known
+		//      1, 3, 5 and 7: Lost lock between previous and current observation: cycle slip possible
+		//If arc length is 0 (no measurement read, skip LLI, as even though the flag is enabled, as it
+		//is the first sample of the new arc, no need to trigger cycle-slip, which typically has the
+		//side effect that the first epoch read has arc number equal to 2 instead of 1
+		if (epoch->cycleslip.arcLength[j] > 0) {
+			for ( k=0;k<epoch->measOrder[GNSS].numMeasListToCheckLLI[PRN];k++ ) {
+				LLI=epoch->sat[i].meas[epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][k]].LLI;
+				if (LLI%2!= 0) {
+					meas=epoch->measOrder[GNSS].ind2Meas[epoch->measOrder[GNSS].measIndListToCheckLLI[PRN][k]];
+					sprintf(auxstr,"%s %3s-%1d",LLIText,meastype2measstr(meas),LLI);
+					strcpy(LLIText,auxstr);
 				}
 			}
 
-			// Measurements Pre-Check
-			if ( options->csLLI ) { // LLI
-				if ( options->SBAScorrections == 1 && options->onlySBASiono == 0 ) {
-					C1 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C1C);
-				} else {
-					C1 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C1P);
-				}
-				L1 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,L1P);
-				measLLI = 1;
-				if ( L1 == -1 || C1 == -1 ) {
-					measLLI = 0;
-				}
-			}
-			if ( options->csL1C1 ) { // L1-C1
-				if ( options->SBAScorrections == 1 && options->onlySBASiono == 0 ) {
-					C1 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C1C);
-				} else {
-					C1 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C1P);
-				}
-				L1 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,L1P);
-				measL1C1 = 1;
-				if ( L1 == -1 || C1 == -1 ) {
-					measL1C1 = 0;
-				}
-				// Consistency of measurements (only for single-frequency)
-				else if ( epoch->cycleslip.arcLength[i] > 0 && options->csUnconsistencyCheck ) {
-					deltaC1 = C1-epoch->cycleslip.C1Prev[i];
-					deltaL1 = L1-epoch->cycleslip.L1Prev[i];
-					if ( fabs(deltaC1-deltaL1) > options->csUnconsistencyCheckThreshold) {
-						//measL1C1 = 0;
-						epoch->cycleslip.consistency[i] = 1;
-					}
-				}
-				if ( L1 != -1 && C1 != -1 && options->csUnconsistencyCheck ) {
-					epoch->cycleslip.L1Prev[i] = L1;
-					epoch->cycleslip.C1Prev[i] = C1;
-				}
-			}
-			if ( options->csBW ) { // Melbourne-Wubbena
-				Bw = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,BW);
-				C1 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C1P);
-				C2 = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C2P);
-				measBW = 1;
-				if ( Bw == -1 || C1 == -1 || C2 == -1 ) {
-					measBW = 0;
-				}
-			}
-			if ( options->csLI ) { // Geometry-free
-				Li = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,LI);
-				measLI = 1;
-				if ( Li == -1 ) {
-					measLI = 0;
-				}
-				// Geometry-free cycle slip detector
-				if ( fabs(epoch->cycleslip.initialLi[i] - Li) > options->csLImaxjump && 
-					 epoch->cycleslip.arcLength[i] > 0 && measLI ) {
-					LiCheck = 1;
-					LiThreshold = options->csLImaxjump;
-					LiDiff = epoch->cycleslip.initialLi[i] - Li;
-					// Update previous epoch (time) to check if there is data gap
-					memcpy(&epoch->cycleslip.previousEpoch[i],&epoch->t,sizeof(TTime));
-					// Update previous epoch (time) to check if there is N-consecutive epochs
-					memcpy(&epoch->cycleslip.previousEpochNconsecutive[i],&epoch->t,sizeof(TTime));
-				}
-			}
-
-			// Loss of Lock Indicator (LLI)
-			//   Range: 0-7
-			//      0 or blank: OK or not known
- 			//      1, 3, 5 and 7: Lost lock between previous and current observation: cycle slip possible
-			if ( ( lli==1 || lli==3 || lli==5 || lli==7 ) && options->csLLI ) {
+			if ( LLIText[0]!='\0' ) {
 				LLICheck = 1; // Cycle slip detected
-				// Update previous epoch (time) to check if there is data gap
-				memcpy(&epoch->cycleslip.previousEpoch[i],&epoch->t,sizeof(TTime));
-				// Update previous epoch (time) to check if there is N-consecutive epochs
-				memcpy(&epoch->cycleslip.previousEpochNconsecutive[i],&epoch->t,sizeof(TTime));
-			}
-
-			// Measurements Pre-Check. Check if all necessary measurements are available
-			measCheck = 1; // Initialize as OK
-			// LLI flag availability
-			if ( options->csLLI && !measLLI ) measCheck = 0;
-			// L1-C1 difference availability
-			if ( options->csL1C1 && !measL1C1 ) measCheck = 0;
-			// Melbourne-Wubbena availability
-			if ( options->csBW && !measBW ) measCheck = 0;
-			// Geometry-free availability
-			if ( options->csLI && !measLI )	measCheck = 0;
-			// Ncon availability
-			if ( options->csNcon && !measNcon )	measCheck = 0;
-			// Pre-Check of measurements (check measurements availability)
-			if ( !measCheck ) {
-				epoch->cycleslip.preCheck[i] = 1;
-				epoch->cycleslip.use4smooth[i] = 0;
-			}
-
-			// Data Gap Cycle Slip Detector
-			if ( (tdiff(&epoch->t,&epoch->cycleslip.previousEpoch[i]) - options->csDataGap) > 1E-4 && //The 1E-4 is to avoid problems with decimals
-				 epoch->cycleslip.arcLength[i] > 0 && measCheck && allCSDetectorsOff==0 ) {
-				DataGapCheck = 1; // Cycle slip detected
-				timeDiff = tdiff(&epoch->t,&epoch->cycleslip.previousEpoch[i]);
-				// Update previous epoch (time) to check if there is data gap
-				memcpy(&epoch->cycleslip.previousEpoch[i],&epoch->t,sizeof(TTime));
-				// Update previous epoch (time) to check if there is N-consecutive epochs
-				memcpy(&epoch->cycleslip.previousEpochNconsecutive[i],&epoch->t,sizeof(TTime));
-			}
-
-			// N-consecutive data
-			if ( options->csNcon ) {
-				if ( epoch->receiver.interval < 15.0  && measCheck ) {
-					tdiffNcon=tdiff(&epoch->t,&epoch->cycleslip.previousEpochNconsecutive[i]);
-					// Check if there are N-consecutive samples
-					if ( (tdiffNcon - epoch->receiver.interval) > 1E-4 &&  //The 1E-4 is to avoid problems with decimals
-						 tdiffNcon <= options->csDataGap &&
-						 epoch->cycleslip.arcLength[i] > 0 ) {
-						epoch->cycleslip.Nconsecutive[i] = options->csNconMin;
-						epoch->cycleslip.use4smooth[i] = 0;
-						// Update previous epoch (time) to check if there is N-consecutive epochs
-						memcpy(&epoch->cycleslip.previousEpochNconsecutive[i],&epoch->t,sizeof(TTime));
-					} else if ( (tdiffNcon - epoch->receiver.interval) > 1E-4 &&  //The 1E-4 is to avoid problems with decimals
-						   allCSDetectorsOff == 1 ) {
-						epoch->cycleslip.Nconsecutive[i] = options->csNconMin;
-						epoch->cycleslip.use4smooth[i] = 0;
-						// Update previous epoch (time) to check if there is N-consecutive epochs
-						memcpy(&epoch->cycleslip.previousEpochNconsecutive[i],&epoch->t,sizeof(TTime));
-					} else if ( epoch->cycleslip.Nconsecutive[i] < 0 ) {
-						// Increase N-consecutive to avoid the following N epochs after data hole
-						epoch->cycleslip.Nconsecutive[i]++;
-						epoch->cycleslip.use4smooth[i] = 0;
-						// Update previous epoch (time) to check if there is N-consecutive epochs
-						memcpy(&epoch->cycleslip.previousEpochNconsecutive[i],&epoch->t,sizeof(TTime));
-						if (allCSDetectorsOff == 1 && epoch->cycleslip.Nconsecutive[i] == 0 ) epoch->cycleslip.arcLength[i]++;
-					} else if ( allCSDetectorsOff == 1 ) {
-						epoch->cycleslip.arcLength[i]++;
-						epoch->cycleslip.use4smooth[i] = 1;
-						// Update previous epoch (time) to check if there is N-consecutive epochs
-						memcpy(&epoch->cycleslip.previousEpochNconsecutive[i],&epoch->t,sizeof(TTime));
-					}
-				} else if ( epoch->receiver.interval >= 15.0  && measCheck && allCSDetectorsOff == 1) {
-					epoch->cycleslip.arcLength[i]++;
-				}
-				if ( allCSDetectorsOff == 1 ) continue;
-			}
-
-			if ( options->csL1C1 && epoch->cycleslip.consistency[i]) {
-				//Consistency check was triggered
-				epoch->cycleslip.use4smooth[i] = 0;
-				//If  data gap or LLI or Li precheck were triggered, leave measCheck=1 so cycle-slip is triggered
-				if (DataGapCheck==0 && LLICheck==0 && LiCheck==0 ) {
-					//If there was no data gap or LLI or Li precheck detection, then do not check for cycle-slips
-					measCheck=0;
-					measL1C1 = 0;
-					epoch->cycleslip.preCheck[i] = 1;
+				//Print cycle-slip
+				if (options->printCycleslips) {
+					printCS(epoch,GNSS,PRN,i,CSTypeLLI,mode,NULL,0.,0.,LLIText,0.,0.,0.,0.,0.,0.,0.,0.,options);
 				}
 			}
-			
-			// Everything OK
-			if ( DataGapCheck == 0 && LLICheck == 0 && measCheck && epoch->cycleslip.Nconsecutive[i] == 0 ) {
-				// Update the arc length
-				epoch->cycleslip.arcLength[i]++;
-				// Update previous epoch (time) to check if there is data gap
-				memcpy(&epoch->cycleslip.previousEpoch[i],&epoch->t,sizeof(TTime));
-				// Update previous epoch (time) to check if there is N-consecutive epochs
-				memcpy(&epoch->cycleslip.previousEpochNconsecutive[i],&epoch->t,sizeof(TTime));
-				
+		}
 
-				// L1-C1 Cycle slip detector [single-frequency]
-				if ( options->csL1C1 && measL1C1 && !epoch->cycleslip.outlierLI[i] && !epoch->cycleslip.outlierBw[i] ) {
-					// Calculate the difference between the mean and the current L1-C1
-					L1C1diff = pow((L1-C1) - epoch->cycleslip.L1C1mean[i],2);
 
-					// Update threshold
-					L1C1Threshold = min(epoch->cycleslip.L1C1sigma[i] * pow(options->csL1C1kfactor,2), pow(options->csL1C1init,2) * pow(options->csL1C1kfactor,2));
+		if (epoch->cycleslip.Nconsecutive[j]==0) {
+			//Melbourne-Wubbena
+			for(k=0;k<options->numcsMWMeasList[DGNSSstruct][GNSS][PRN];k++) {
+				if (options->csMWMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+				MWVal[k] = getMeasurementValue(epoch,GNSS,PRN,options->csMWMeasList[DGNSSstruct][GNSS][PRN][k],options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k]);
+			}
 
-					// Check if there is cycle slip
-					if ( epoch->cycleslip.arcLength[i] > options->minArcLength ) {
-						if ( L1C1diff > L1C1Threshold ) {
-							L1C1Check = 1; // Cycle slip detected
+			//Geometry-free
+			for(k=0;k<options->numcsLIMeasList[DGNSSstruct][GNSS][PRN];k++) {
+				if (options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+				LIVal[k] = getMeasurementValue(epoch,GNSS,PRN,options->csLIMeasList[DGNSSstruct][GNSS][PRN][k],options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k]);
+				// Geometry-free max jump detection
+				LIDiff[k] = epoch->cycleslip.initialLI[j][k] - LIVal[k];
+				LIDiffAbs[k] = fabs(LIDiff[k]);
+				//If data gap was declared, do not check for jumps, as a cycle-slip has been declared
+				if (DataGapCheck == 0) { //If data gap was declared, do not check for jumps
+					if ( LIDiffAbs[k] > options->csLImaxjump && epoch->cycleslip.arcLength[j] > 0 ) {
+						LICheckAll = 1;
+						//Print cycle-slip
+						if (options->printCycleslips) {
+							printCS(epoch,GNSS,PRN,i,CSTypeLIEst,mode,options->csLIMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,LIDiffAbs[k],options->csLImaxjump,0.,0.,0.,0.,0.,0.,options);
+						}
+						//Print LI data
+						if (options->printLIdata) {
+							printLICSdata(epoch,GNSS,PRN,i,j,mode,options->csLIMeasText[DGNSSstruct][GNSS][PRN][k],options->csLIMeasList[DGNSSstruct][GNSS][PRN][k],options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k],epoch->cycleslip.initialLI[j][k],LIVal[k],LIDiffAbs[k],999999.,999999.,999999.,0,1,options);
 						}
 					}
 				}
+			}
 
-				// Melbourne-Wubbena (BW) [dual-frequency]
-				if ( options->csBW && measBW ) {
-					if ( epoch->cycleslip.arcLength[i] > options->minArcLength ) {
-						// Melbourne-Wubbena cycle slip detector
-						nBwdiff = fabs(Bw-epoch->cycleslip.BWmean[i]);
-						nBw300diff = fabs(Bw-epoch->cycleslip.BWmean300[i]);
-						nBwdiffThreshold = options->csBWkfactor * sqrt(epoch->cycleslip.BWsigma[i]);
-						//nBwdiffThreshold = min(options->csBWkfactor * sqrt(epoch->cycleslip.BWsigma[i]), 240.0);
+			//Iono Geometry-free
+			for(k=0;k<options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+				if (options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+				IGF[k] = getMeasurementValue(epoch,GNSS,PRN,options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k]);
+				// Geometry-free max jump detection
+				IGFDiff[k] = epoch->cycleslip.initialIGF[j][k] - IGF[k];
+				IGFDiffAbs[k] = fabs(IGFDiff[k]);
+				//If data gap was declared, do not check for jumps, as a cycle-slip has been declared
+				if (DataGapCheck == 0) { //If data gap was declared, do not check for jumps
+					if ( IGFDiffAbs[k] > options->csIGFmaxjump && epoch->cycleslip.arcLength[j] > 0 ) {
+						IGFCheckAll = 1;
+						//Print cycle-slip
+						if (options->printCycleslips) {
+							printCS(epoch,GNSS,PRN,i,CSTypeIGFEst,mode,options->csIGFMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,0.,0.,0.,0.,0.,0.,IGFDiffAbs[k],options->csIGFmaxjump,options);
+						}
+						//Print IGF data
+						if (options->printIGFdata) {
+							printIGFCSdata(epoch,GNSS,PRN,i,j,mode,options->csIGFMeasText[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k],epoch->cycleslip.initialIGF[j][k],IGF[k],IGFDiffAbs[k],999999.,999999.,999999.,0,1,options);
+						}
+					}
+				}
+			}
 
-						if ( (nBwdiff > nBwdiffThreshold &&
-							 nBw300diff > options->csBWmin &&
-							 sqrt(epoch->cycleslip.BWsigma[i]) <= options->csBWmin) ||
-							 (nBwdiff > 10.0*options->csBWmin && epoch->cycleslip.arcLength[i] > 2) ) {
-							if ( epoch->cycleslip.outlierBw[i] == 1) {
-								// Cycle slip confirmed
-								BwCheck = 1;
-							} else {
-								// Outlier
-								epoch->cycleslip.outlierBw[i] = 1;
+			//Single Frequency
+			//Get measurements for SF cycle-slip. If unconsistency check is enabled, check consistency
+			if (epoch->cycleslip.arcLength[j] > 0 && options->csUnconsistencyCheck ) {
+				for(k=0;k<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+					if (options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+					SFCode[k] = getMeasurementValue(epoch,GNSS,PRN,&options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][0],&options->csSFMeasFreq[DGNSSstruct][GNSS][PRN][k][0]);
+					SFPhase[k] = getMeasurementValue(epoch,GNSS,PRN,&options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][1],&options->csSFMeasFreq[DGNSSstruct][GNSS][PRN][k][1]);
+					deltaSFCode[k] = SFCode[k]-epoch->cycleslip.SFCodePrev[j][k];
+					deltaSFPhase[k] = SFPhase[k]-epoch->cycleslip.SFPhasePrev[j][k];
+					deltaSF[k]=fabs(deltaSFCode[k]-deltaSFPhase[k]);
+					if ( deltaSF[k] > options->csUnconsistencyCheckThreshold) {
+						strcpy(auxmeas[0],meastype2measstr(options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][0]));
+						sprintf(auxstr,"%s %3s-%3s (%.2f)",epoch->sat[i].SFUnconsistencyText,auxmeas[0],meastype2measstr(options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][1]),deltaSF[k]);
+						strcpy(epoch->sat[i].SFUnconsistencyText,auxstr);
+					} else {
+						epoch->cycleslip.SFPhasePrev[j][k] = SFPhase[k];
+						epoch->cycleslip.SFCodePrev[j][k] = SFCode[k];
+					}
+				}
+				if (epoch->sat[i].SFUnconsistencyText[0]!='\0') {
+					epoch->cycleslip.use4smooth[j] = 0;
+					//If data gap or LLI or LI or IGF precheck were triggered, let the cycle-slip trigger
+					if (DataGapCheck==0 && LLICheck==0 && LICheckAll==0 && IGFCheckAll==0 && epoch->cycleslip.consistency[j]==0) {
+						//If there was no data gap or LLI or LI or IGF precheck detection, then do not check for cycle-slips 
+						//(consider it as data-gap but without triggering N-con)
+						epoch->cycleslip.consistency[j] = 1;
+						//Print SF data
+						if (options->printSFdata) {
+							for(k=0;k<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+								if (options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+								SFdiff[k] = pow((SFPhase[k]-SFCode[k]) - epoch->cycleslip.SFmean[j][k],2);
+								SFThreshold[k] = min(epoch->cycleslip.SFsigma[j][k] * pow(options->csSFkfactor,2), pow(options->csSFinit,2) * pow(options->csSFkfactor,2));
+								printSFCSdata(epoch,GNSS,PRN,i,j,mode,options->csSFMeasText[DGNSSstruct][GNSS][PRN][k],SFCode[k],SFPhase[k],epoch->cycleslip.SFmean[j][k],epoch->cycleslip.SFsigma[j][k],deltaSFCode[k],deltaSFPhase[k],deltaSF[k],SFdiff[k],SFThreshold[k],1,0,options);
 							}
-						} else if ( epoch->cycleslip.outlierBw[i] == 1) {
-							epoch->cycleslip.outlierBw[i] = 0;
-							epoch->cycleslip.use4smooth[i] = 1;
-							epoch->sat[ii].available = 1;
+						}
+						continue;
+					} else {
+						//If a cycle-slip is already declared or consistency was triggered last epoch, do not trigger unconsistency in this epoch
+						epoch->sat[i].SFUnconsistencyText[0]='\0';
+					}
+				} else {
+					epoch->cycleslip.consistency[j] = 0;
+				}
+			} else {
+				for(k=0;k<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+					if (options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+					SFCode[k] = getMeasurementValue(epoch,GNSS,PRN,&options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][0],&options->csSFMeasFreq[DGNSSstruct][GNSS][PRN][k][0]);
+					SFPhase[k] = getMeasurementValue(epoch,GNSS,PRN,&options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][1],&options->csSFMeasFreq[DGNSSstruct][GNSS][PRN][k][1]);
+					deltaSFCode[k]=deltaSFPhase[k]=deltaSF[k]=999999.;
+					epoch->cycleslip.SFPhasePrev[j][k] = SFPhase[k];
+					epoch->cycleslip.SFCodePrev[j][k] = SFCode[k];
+				}
+			}
+
+			// Everything OK
+			if ( DataGapCheck == 0 && LLICheck == 0 ) {
+				// Update the arc length
+				epoch->cycleslip.arcLength[j]++;
+				// Update previous epoch (time) to check if there is data gap
+				memcpy(&epoch->cycleslip.previousEpoch[j],&epoch->t,sizeof(TTime));
+				// Update previous epoch (time) to check if there is N-consecutive epochs
+				memcpy(&epoch->cycleslip.previousEpochNconsecutive[j],&epoch->t,sizeof(TTime));
+				
+
+				// Melbourne-Wubbena (MW) [dual-frequency]
+				if ( epoch->cycleslip.arcLength[j] > options->minArcLength ) {
+					OutlierMWFoundAll=0;
+					for(k=0;k<options->numcsMWMeasList[DGNSSstruct][GNSS][PRN];k++) {
+						if (options->csMWMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+						// Melbourne-Wubbena cycle slip detector
+						OutlierMWFound[k] = 0;
+						MWCheck[k]=0;
+						nMWdiff = fabs(MWVal[k]-epoch->cycleslip.MWmean[j][k]);
+						nMW300diff = fabs(MWVal[k]-epoch->cycleslip.MWmean300[j][k]);
+						nMWdiffThreshold = options->csMWkfactor * sqrt(epoch->cycleslip.MWsigma[j][k]);
+
+						if ( (nMWdiff > nMWdiffThreshold &&
+							 nMW300diff > options->csMWmin &&
+							 sqrt(epoch->cycleslip.MWsigma[j][k]) <= options->csMWmin) ||
+							 (nMWdiff > 10.0*options->csMWmin ) ) {
+							if (options->csMWenableOutlier==1) {
+								if ( epoch->cycleslip.outlierMW[j] == 1) {
+									// Cycle slip confirmed
+									MWCheckAll = 1;
+									MWCheck[k]=1;
+									//Print cycle-slip
+									if (options->printCycleslips) {
+										printCS(epoch,GNSS,PRN,i,CSTypeMW,mode,options->csMWMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,0.,0.,nMWdiff,nMWdiffThreshold,0.,0.,0.,0.,options);
+									}
+								} else {
+									// Outlier
+									OutlierMWFoundAll = 1;
+									OutlierMWFound[k] = 1;
+								}
+							} else {
+								// Cycle slip (no outliers)
+								MWCheckAll = 1;
+								MWCheck[k]=1;
+								//Print cycle-slip
+								if (options->printCycleslips) {
+									printCS(epoch,GNSS,PRN,i,CSTypeMW,mode,options->csMWMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,0.,0.,nMWdiff,nMWdiffThreshold,0.,0.,0.,0.,options);
+								}
+							}
+						}
+						//Print MW data
+						if (options->printMWdata) {
+							printMWCSdata(epoch,GNSS,PRN,i,j,mode,options->csMWMeasText[DGNSSstruct][GNSS][PRN][k],options->csMWMeasList[DGNSSstruct][GNSS][PRN][k],options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k],epoch->cycleslip.MWmean[j][k],epoch->cycleslip.MWmean300[j][k],epoch->cycleslip.MWsigma[j][k],MWVal[k],nMWdiff,nMW300diff,nMWdiffThreshold,OutlierMWFound[k],MWCheck[k],options);
+						}
+					}
+					if (epoch->cycleslip.outlierMW[j] == 1) {
+						if ( MWCheckAll==0 && OutlierMWFoundAll==0 ) {
+							epoch->cycleslip.outlierMW[j] = 0;
+							epoch->cycleslip.use4smooth[j] = 1;
+							epoch->sat[i].available = 1;
+						}
+					} else  {
+						epoch->cycleslip.outlierMW[j] = OutlierMWFoundAll;
+					}
+				} else {
+					for(k=0;k<options->numcsMWMeasList[DGNSSstruct][GNSS][PRN];k++) {
+						if (options->csMWMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+						//Print MW data
+						if (options->printMWdata) {
+							printMWCSdata(epoch,GNSS,PRN,i,j,mode,options->csMWMeasText[DGNSSstruct][GNSS][PRN][k],options->csMWMeasList[DGNSSstruct][GNSS][PRN][k],options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k],epoch->cycleslip.MWmean[j][k],epoch->cycleslip.MWmean300[j][k],epoch->cycleslip.MWsigma[j][k],MWVal[k],999999.,999999.,999999.,0,0,options);
 						}
 					}
 				}
 
 				// Geometry-free carrier-phase combination (LI) [dual-frequency]
-				if ( options->csLI && measLI && !LiCheck ) {
-					// Update both historical LI and epochs
-					if ( epoch->cycleslip.arcLength[i] <= options->csLIsamples+1 ) {
-						index = epoch->cycleslip.arcLength[i]-1;
-						epoch->cycleslip.LiPrev[i][index] = Li;
-						memcpy(&epoch->cycleslip.tPrevLI[i][index],&epoch->t,sizeof(TTime));
-					} else {
-						for (j=0;j<options->csLIsamples;j++) {
-							epoch->cycleslip.LiPrev[i][j] = epoch->cycleslip.LiPrev[i][j+1];
-							memcpy(&epoch->cycleslip.tPrevLI[i][j],&epoch->cycleslip.tPrevLI[i][j+1],sizeof(TTime));
+				if ( !LICheckAll ) {
+					for(k=0;k<options->numcsLIMeasList[DGNSSstruct][GNSS][PRN];k++) {
+						if (options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+						// Update both historical LI and epochs
+						if ( epoch->cycleslip.arcLength[j] <= (options->csLIsamples+1) ) {
+							indexPos = epoch->cycleslip.arcLength[j]-1;
+							epoch->cycleslip.LIPrev[j][k][indexPos] = LIVal[k];
+							memcpy(&epoch->cycleslip.tPrevLI[j][k][indexPos],&epoch->t,sizeof(TTime));
+						} else {
+							for (l=0;l<options->csLIsamples;l++) {
+								epoch->cycleslip.LIPrev[j][k][l] = epoch->cycleslip.LIPrev[j][k][l+1];
+								memcpy(&epoch->cycleslip.tPrevLI[j][k][l],&epoch->cycleslip.tPrevLI[j][k][l+1],sizeof(TTime));
+							}
+							epoch->cycleslip.LIPrev[j][k][options->csLIsamples] = LIVal[k];
+							memcpy(&epoch->cycleslip.tPrevLI[j][k][options->csLIsamples],&epoch->t,sizeof(TTime));
 						}
-						epoch->cycleslip.LiPrev[i][options->csLIsamples] = Li;
-						memcpy(&epoch->cycleslip.tPrevLI[i][options->csLIsamples],&epoch->t,sizeof(TTime));
 					}
 
 					// Enough data to build polynomial fit
-					if ( epoch->cycleslip.arcLength[i] > options->minArcLength ) {
-						// Fit polynomial and estimate the Li prediction
-						LiEst = polyfit(epoch, options, i, 0, options->csLIsamples, &res);
-						// Compute the threshold
-						LiThreshold = options->csLImax / (1.0 + exp(-options->csDataGap/options->csLIt));
-
-						// Geometry-free cycle slip detector
-						if ( (fabs(Li-LiEst) > LiThreshold && 
-							 fabs(Li-LiEst) > fabs(2.0 * res)) || LiEst==999999. ) {
-							if ( epoch->cycleslip.outlierLI[i] == 1 || LiEst==999999.) {
-								// Cycle slip confirmed
-								LiCheck = 1;
-								if(LiEst==999999.) {
-									LiDiff=999999.;
+					if ( epoch->cycleslip.arcLength[j] > options->minArcLength ) {
+						OutlierLIFoundAll=0;
+						for(k=0;k<options->numcsLIMeasList[DGNSSstruct][GNSS][PRN];k++) {
+							if (options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+							// Fit polynomial and estimate the LI prediction
+							OutlierLIFound[k]=0;
+							LICheck[k] = 0;
+							LIEst = polyfit(&epoch->t, epoch->cycleslip.tPrevLI[j][k], epoch->cycleslip.LIPrev[j][k],epoch->cycleslip.outlierMW[j]+epoch->cycleslip.outlierLI[j]+epoch->cycleslip.outlierIGF[j],options->csLIsamples, &res);
+							// Geometry-free cycle slip detector
+							LIDiffEst[k] = LIVal[k] - LIEst;
+							LIDiffEstAbs[k] = fabs(LIDiffEst[k]);
+							resThreshold=fabs(2.0 * res);
+							if ( (LIDiffEstAbs[k] > options->csLIThreshold && 
+								 LIDiffEstAbs[k] > resThreshold) || LIEst==999999. ) {
+								if (options->csLIenableOutlier==1) {
+									if ( epoch->cycleslip.outlierLI[j] == 1 || LIEst==999999.) {
+										// Cycle slip confirmed
+										LICheckAll = 1;
+										LICheck[k] = 1;
+										if(LIEst==999999.) {
+											LIDiffEst[k]=LIDiffEstAbs[k]=999999.;
+											//Print cycle-slip
+											if (options->printCycleslips) {
+												printCS(epoch,GNSS,PRN,i,CSTypeLINoEst,mode,options->csLIMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,LIDiffEst[k],options->csLIThreshold,0.,0.,0.,0.,0.,0.,options);
+											}
+										} else {
+											//Print cycle-slip
+											if (options->printCycleslips) {
+												printCS(epoch,GNSS,PRN,i,CSTypeLIEst,mode,options->csLIMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,LIDiffEstAbs[k],options->csLIThreshold,0.,0.,0.,0.,0.,0.,options);
+											}
+										}
+									} else {
+										// Outlier
+										OutlierLIFoundAll=1;
+										OutlierLIFound[k]=1;
+									}
 								} else {
-									LiDiff = Li-LiEst;
+									// Cycle slip (no outliers)
+									LICheckAll = 1;
+									LICheck[k] = 1;
+									if(LIEst==999999.) {
+										LIDiffEst[k]=LIDiffEstAbs[k]=999999.;
+										//Print cycle-slip
+										if (options->printCycleslips) {
+											printCS(epoch,GNSS,PRN,i,CSTypeLINoEst,mode,options->csLIMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,LIDiffEst[k],options->csLIThreshold,0.,0.,0.,0.,0.,0.,options);
+										}
+									} else {
+										//Print cycle-slip
+										if (options->printCycleslips) {
+											printCS(epoch,GNSS,PRN,i,CSTypeLIEst,mode,options->csLIMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,LIDiffEstAbs[k],options->csLIThreshold,0.,0.,0.,0.,0.,0.,options);
+										}
+									}
 								}
-							} else {
-								// Outlier
-								epoch->cycleslip.outlierLI[i] = 1;
 							}
-						} else if ( epoch->cycleslip.outlierLI[i] == 1 ) {
-							epoch->cycleslip.outlierLI[i] = 0;
-							epoch->cycleslip.use4smooth[i] = 1;
-							epoch->sat[ii].available = 1;
+							//Print LI data
+							if (options->printLIdata) {
+								printLICSdata(epoch,GNSS,PRN,i,j,mode,options->csLIMeasText[DGNSSstruct][GNSS][PRN][k],options->csLIMeasList[DGNSSstruct][GNSS][PRN][k],options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k],epoch->cycleslip.initialLI[j][k],LIVal[k],LIDiffAbs[k],LIEst,LIDiffEstAbs[k],resThreshold,OutlierLIFound[k],LICheck[k],options);
+							}
+						}
+						if (epoch->cycleslip.outlierLI[j] == 1) {
+							if ( LICheckAll==0 && OutlierLIFoundAll==0 ) {
+								epoch->cycleslip.outlierLI[j] = 0;
+								epoch->cycleslip.use4smooth[j] = 1;
+								epoch->sat[i].available = 1;
+							}
+						} else  {
+							epoch->cycleslip.outlierLI[j] = OutlierLIFoundAll;
+						}
+
+					} else { 
+						for(k=0;k<options->numcsLIMeasList[DGNSSstruct][GNSS][PRN];k++) {
+							if (options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+							//Print LI data
+							if (options->printLIdata) {
+								printLICSdata(epoch,GNSS,PRN,i,j,mode,options->csLIMeasText[DGNSSstruct][GNSS][PRN][k],options->csLIMeasList[DGNSSstruct][GNSS][PRN][k],options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k],epoch->cycleslip.initialLI[j][k],LIVal[k],LIDiffAbs[k],999999.,999999.,999999.,0,0,options);
+							}
+						}
+					}
+				}
+
+				// Iono-Geometry-free carrier-phase combination (IGF) [triple/quadruple frequency]
+				if ( !IGFCheckAll ) {
+					for(k=0;k<options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+						if (options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+						// Update both historical IGF and epochs
+						if ( epoch->cycleslip.arcLength[j] <= (options->csIGFsamples+1) ) {
+							indexPos = epoch->cycleslip.arcLength[j]-1;
+							epoch->cycleslip.IGFPrev[j][k][indexPos] = IGF[k];
+							memcpy(&epoch->cycleslip.tPrevIGF[j][k][indexPos],&epoch->t,sizeof(TTime));
+						} else {
+							for (l=0;l<options->csIGFsamples;l++) {
+								epoch->cycleslip.IGFPrev[j][k][l] = epoch->cycleslip.IGFPrev[j][k][l+1];
+								memcpy(&epoch->cycleslip.tPrevIGF[j][k][l],&epoch->cycleslip.tPrevIGF[j][k][l+1],sizeof(TTime));
+							}
+							epoch->cycleslip.IGFPrev[j][k][options->csIGFsamples] = IGF[k];
+							memcpy(&epoch->cycleslip.tPrevIGF[j][k][options->csIGFsamples],&epoch->t,sizeof(TTime));
+						}
+					}
+
+					// Enough data to build polynomial fit
+					if ( epoch->cycleslip.arcLength[j] > options->minArcLength ) {
+						OutlierIGFFoundAll=0;
+						for(k=0;k<options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+							if (options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+							// Fit polynomial and estimate the IGF prediction
+							OutlierIGFFound[k]=0;
+							IGFCheck[k] = 0;
+							IGFEst = polyfit(&epoch->t, epoch->cycleslip.tPrevIGF[j][k], epoch->cycleslip.IGFPrev[j][k],epoch->cycleslip.outlierMW[j]+epoch->cycleslip.outlierLI[j]+epoch->cycleslip.outlierIGF[j],options->csIGFsamples, &res);
+							// Geometry-free cycle slip detector
+							IGFDiffEst[k] = IGF[k] - IGFEst;
+							IGFDiffEstAbs[k] = fabs(IGFDiffEst[k]);
+							resThreshold=fabs(2.0 * res);
+							if ( (IGFDiffEstAbs[k] > options->csIGFThreshold && 
+								 IGFDiffEstAbs[k] > resThreshold) || IGFEst==999999. ) {
+								if (options->csIGFenableOutlier==1) {
+									if ( epoch->cycleslip.outlierIGF[j] == 1 || IGFEst==999999.) {
+										// Cycle slip confirmed
+										IGFCheckAll = 1;
+										IGFCheck[k] = 1;
+										if(IGFEst==999999.) {
+											IGFDiffEst[k]=IGFDiffEstAbs[k]=999999.;
+											//Print cycle-slip
+											if (options->printCycleslips) {
+												printCS(epoch,GNSS,PRN,i,CSTypeIGFNoEst,mode,options->csIGFMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,0.,0.,0.,0.,0.,0.,IGFDiffEst[k],options->csIGFThreshold,options);
+											}
+										} else {
+											//Print cycle-slip
+											if (options->printCycleslips) {
+												printCS(epoch,GNSS,PRN,i,CSTypeIGFEst,mode,options->csIGFMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,0.,0.,0.,0.,0.,0.,IGFDiffEstAbs[k],options->csIGFThreshold,options);
+											}
+										}
+									} else {
+										// Outlier
+										OutlierIGFFoundAll=1;
+										OutlierIGFFound[k]=1;
+									}
+								} else {
+									// Cycle slip (no outliers)
+									IGFCheckAll = 1;
+									IGFCheck[k] = 1;
+									if(IGFEst==999999.) {
+										IGFDiffEst[k]=IGFDiffEstAbs[k]=999999.;
+										//Print cycle-slip
+										if (options->printCycleslips) {
+											printCS(epoch,GNSS,PRN,i,CSTypeIGFNoEst,mode,options->csIGFMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,0.,0.,0.,0.,0.,0.,IGFDiffEst[k],options->csIGFThreshold,options);
+										}
+									} else {
+										//Print cycle-slip
+										if (options->printCycleslips) {
+											printCS(epoch,GNSS,PRN,i,CSTypeIGFEst,mode,options->csIGFMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,0.,0.,0.,0.,0.,0.,IGFDiffEstAbs[k],options->csIGFThreshold,options);
+										}
+									}
+								}
+							}
+							//Print IGF data
+							if (options->printIGFdata) {
+								printIGFCSdata(epoch,GNSS,PRN,i,j,mode,options->csIGFMeasText[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k],epoch->cycleslip.initialIGF[j][k],IGF[k],IGFDiffAbs[k],IGFEst,IGFDiffEstAbs[k],resThreshold,OutlierIGFFound[k],IGFCheck[k],options);
+							}
+						}
+						if (epoch->cycleslip.outlierIGF[j] == 1) {
+							if ( IGFCheckAll==0 && OutlierIGFFoundAll==0 ) {
+								epoch->cycleslip.outlierIGF[j] = 0;
+								epoch->cycleslip.use4smooth[j] = 1;
+								epoch->sat[i].available = 1;
+							}
+						} else  {
+							epoch->cycleslip.outlierIGF[j] = OutlierIGFFoundAll;
+						}
+
+					} else { 
+						for(k=0;k<options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+							if (options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+							//Print IGF data
+							if (options->printIGFdata) {
+								printIGFCSdata(epoch,GNSS,PRN,i,j,mode,options->csIGFMeasText[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k],epoch->cycleslip.initialIGF[j][k],IGF[k],IGFDiffAbs[k],999999.,999999.,999999.,0,0,options);
+							}
 						}
 					}
 				}
 				//When any of the detectors detects an outlier, the arclength only has to be decreased once
-				if (epoch->cycleslip.outlierBw[i]==1) {
-					if (BwCheck==0) {
-						//Bw has detected an outlier
-						//If BwCheck==1 then there is a cycle-slip
-						epoch->cycleslip.use4smooth[i] = 0;
-						epoch->cycleslip.arcLength[i]--;
+				if (epoch->cycleslip.outlierMW[j]==1) {
+					if (MWCheckAll==0) {
+						//MW has detected an outlier
+						//If MWCheckAll==1 then there is a cycle-slip
+						epoch->cycleslip.use4smooth[j] = 0;
+						epoch->cycleslip.arcLength[j]--;
+						epoch->cycleslip.anyOutlier[j]=1;
 					}
-				} else if (epoch->cycleslip.outlierLI[i]==1) {
-					if (LiCheck==0) {
+				} else if (epoch->cycleslip.outlierLI[j]==1) {
+					if (LICheckAll==0) {
 						//LI has detected an outlier
-						//If LiCheck==1 then there is a cycle-slip
-						epoch->cycleslip.use4smooth[i] = 0;
-						epoch->cycleslip.arcLength[i]--;
+						//If LICheckAll==1 then there is a cycle-slip
+						epoch->cycleslip.use4smooth[j] = 0;
+						epoch->cycleslip.arcLength[j]--;
+						epoch->cycleslip.anyOutlier[j]=1;
+					}
+				} else if (epoch->cycleslip.outlierIGF[j]==1) {
+					if (IGFCheckAll==0) {
+						//IGF has detected an outlier
+						//If IGFCheckAll==1 then there is a cycle-slip
+						epoch->cycleslip.use4smooth[j] = 0;
+						epoch->cycleslip.arcLength[j]--;
+						epoch->cycleslip.anyOutlier[j]=1;
+					}
+				}
+
+				if (epoch->cycleslip.anyOutlier[j]==0) {
+					NoOutlierAndNconOk=1;
+					// SF Cycle slip detector
+					if ( epoch->cycleslip.arcLength[j] > options->minArcLength ) {
+						for(k=0;k<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+							if (options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+							SFdiff[k] = pow((SFPhase[k]-SFCode[k]) - epoch->cycleslip.SFmean[j][k],2);
+							SFThreshold[k] = min(epoch->cycleslip.SFsigma[j][k] * pow(options->csSFkfactor,2), pow(options->csSFinit,2) * pow(options->csSFkfactor,2));
+							SFCheck[k] = 0;
+							if ( SFdiff[k] > SFThreshold[k] ) {
+								// Cycle slip detected
+								SFCheckAll=1; 
+								SFCheck[k] = 1;
+								//Print cycle-slip
+								if (options->printCycleslips) {
+									printCS(epoch,GNSS,PRN,i,CSTypeSF,mode,options->csSFMeasText[DGNSSstruct][GNSS][PRN][k],0.,0.,NULL,0.,0.,0.,0.,SFdiff[k],SFThreshold[k],0.,0.,options);
+								}
+							}
+							//Print SF data
+							if (options->printSFdata) {
+								printSFCSdata(epoch,GNSS,PRN,i,j,mode,options->csSFMeasText[DGNSSstruct][GNSS][PRN][k],SFCode[k],SFPhase[k],epoch->cycleslip.SFmean[j][k],epoch->cycleslip.SFsigma[j][k],deltaSFCode[k],deltaSFPhase[k],deltaSF[k],SFdiff[k],SFThreshold[k],0,SFCheck[k],options);
+							}
+						}
+					} else if (options->printSFdata) {
+						//Print SF data
+						if (epoch->cycleslip.arcLength[j]==1) {
+							SFdiffFactor=0;//In the first epoch, the SFdiff is zero, as we only have one sample
+						} else {
+							SFdiffFactor=1.;
+						}
+						for(k=0;k<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+							if (options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+							SFdiff[k] = (pow((SFPhase[k]-SFCode[k]) - epoch->cycleslip.SFmean[j][k],2))*SFdiffFactor;
+							SFThreshold[k] = min(epoch->cycleslip.SFsigma[j][k] * pow(options->csSFkfactor,2), pow(options->csSFinit,2) * pow(options->csSFkfactor,2));
+							printSFCSdata(epoch,GNSS,PRN,i,j,mode,options->csSFMeasText[DGNSSstruct][GNSS][PRN][k],SFCode[k],SFPhase[k],epoch->cycleslip.SFmean[j][k],epoch->cycleslip.SFsigma[j][k],deltaSFCode[k],deltaSFPhase[k],deltaSF[k],SFdiff[k],SFThreshold[k],0,0,options);
+						}
+					}
+				}
+
+			} else {
+				//If DataGap or LLI triggered, no outlier is set
+				NoOutlierAndNconOk=1;
+			}
+		}
+
+		if (DataGapCheck || LLICheck || LICheckAll || MWCheckAll || SFCheckAll || IGFCheckAll) {
+			// Cycle slip detected so reset all satellite's associated variables
+			initSatellite(epoch,i,j,options);
+			prealignSat(epoch,i);
+			epoch->cycleslip.CSPrealignFlag[j] = 0;
+			epoch->cycleslip.use4smooth[j] = 0;
+			epoch->cycleslip.consistency[j]= 0;
+			cycleSlipFound = 1;
+			if (DataGapCheck && epoch->cycleslip.Nconsecutive[j]!=0) epoch->cycleslip.arcLength[j]=0;
+
+			if (epoch->cycleslip.arcLength[j]!=0) {
+				for(k=0;k<options->numcsMWMeasList[DGNSSstruct][GNSS][PRN];k++) {
+					if (options->csMWMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+					MWVal[k]= getMeasurementValue(epoch,GNSS,PRN,options->csMWMeasList[DGNSSstruct][GNSS][PRN][k],options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k]);
+					epoch->cycleslip.MWmean[j][k] = MWVal[k];
+					epoch->cycleslip.MWsigma[j][k] = options->csMWInitStd*options->csMWInitStd;
+					epoch->cycleslip.MWPrev[j][k][0] = MWVal[k];
+					memcpy(&epoch->cycleslip.tPrevMW[j][k][0],&epoch->t,sizeof(TTime));
+					//Print MW data
+					if (options->printMWdata) {
+						printMWCSdata(epoch,GNSS,PRN,i,j,mode,options->csMWMeasText[DGNSSstruct][GNSS][PRN][k],options->csMWMeasList[DGNSSstruct][GNSS][PRN][k],options->csMWMeasFreq[DGNSSstruct][GNSS][PRN][k],MWVal[k],MWVal[k],epoch->cycleslip.MWsigma[j][k],MWVal[k],999999.,999999.,999999.,0,0,options);
+					}
+				}
+				for(k=0;k<options->numcsLIMeasList[DGNSSstruct][GNSS][PRN];k++) {
+					if (options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+					LIVal[k] =  getMeasurementValue(epoch,GNSS,PRN,options->csLIMeasList[DGNSSstruct][GNSS][PRN][k],options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k]);
+					epoch->cycleslip.LIPrev[j][k][0] = LIVal[k];
+					memcpy(&epoch->cycleslip.tPrevLI[j][k][0],&epoch->t,sizeof(TTime));
+					//LI data has to be printed again, as the first sample of the new arc is the current epoch,so the next cycle-slip iteration 
+					//goes directly to arc length 2, so the first sample, if not printed here, it is skipped
+					if (options->printLIdata) {
+						printLICSdata(epoch,GNSS,PRN,i,j,mode,options->csLIMeasText[DGNSSstruct][GNSS][PRN][k],options->csLIMeasList[DGNSSstruct][GNSS][PRN][k],options->csLIMeasFreq[DGNSSstruct][GNSS][PRN][k],LIVal[k],LIVal[k],0.,999999.,999999.,999999.,0,0,options);
+					}
+				}
+				for(k=0;k<options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+					if (options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+					IGF[k] =  getMeasurementValue(epoch,GNSS,PRN,options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k]);
+					epoch->cycleslip.IGFPrev[j][k][0] = IGF[k];
+					memcpy(&epoch->cycleslip.tPrevIGF[j][k][0],&epoch->t,sizeof(TTime));
+					//IGF data has to be printed again, as the first sample of the new arc is the current epoch,so the next cycle-slip iteration 
+					//goes directly to arc length 2, so the first sample, if not printed here, it is skipped
+					if (options->printIGFdata) {
+						printIGFCSdata(epoch,GNSS,PRN,i,j,mode,options->csIGFMeasText[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasList[DGNSSstruct][GNSS][PRN][k],options->csIGFMeasFreq[DGNSSstruct][GNSS][PRN][k],IGF[k],IGF[k],0.,999999.,999999.,999999.,0,0,options);
+					}
+				}
+				// This is done to store both code and phase for SF detector for the next epoch, after the pre-alignment, in case of cycle slip
+				for(k=0;k<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+					if (options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+					epoch->cycleslip.SFCodePrev[j][k] = SFCode[k]; //Code is not prealigned, so the value remains the same after pre-alignment
+					epoch->cycleslip.SFPhasePrev[j][k] = SFPhase[k] = getMeasurementValue(epoch,GNSS,PRN,&options->csSFMeasList[DGNSSstruct][GNSS][PRN][k][1],&options->csSFMeasFreq[DGNSSstruct][GNSS][PRN][k][1]);
+					//Print SF data
+					if (options->printSFdata) {
+						printSFCSdata(epoch,GNSS,PRN,i,j,mode,options->csSFMeasText[DGNSSstruct][GNSS][PRN][k],SFCode[k],SFPhase[k],SFPhase[k]-SFCode[k],pow(options->csSFinit,2),999999.,999999.,999999.,0.,pow(options->csSFinit,2) * pow(options->csSFkfactor,2),0,0,options);
 					}
 				}
 			}
+			//Set print flag
+			#if defined _OPENMP
+				#if _OPENMP<OPENMP_VERSION_4
+					#pragma omp critical (CycleSlipsAnyMessageToPrint)
+					//OpenMP versions<4 do not support atomic writes, therefore we need to set an exclusive area (critical section)
+					{
+						AnyMessageToPrint=options->printCycleslips;
+					}
+				#else
+					#pragma omp atomic write
+					AnyMessageToPrint=options->printCycleslips;
+				#endif
+			#else
+				AnyMessageToPrint=options->printCycleslips;
+			#endif
 
-			if ( measCheck && (DataGapCheck || LLICheck || LiCheck || BwCheck || L1C1Check) ) {
-				// Cycle slip detected so reset all satellite's associated variables
-				initSatellite(epoch,ii,i);
-				prealignSat(epoch,ii);
-				epoch->cycleslip.CSPrealignFlag[i] = 0;
-				printCS(epoch,ii,LiCheck,fabs(LiDiff),LiThreshold,BwCheck,fabs(nBwdiff),nBwdiffThreshold,L1C1Check,fabs(L1C1diff),L1C1Threshold,options,DataGapCheck,options->csDataGap,timeDiff,LLICheck,mode);
-				epoch->cycleslip.LiPrev[i][0] = Li;
-				epoch->cycleslip.BwPrev[i][0] = Bw;
-				memcpy(&epoch->cycleslip.tPrevLI[i][0],&epoch->t,sizeof(TTime));
-				memcpy(&epoch->cycleslip.tPrevBw[i][0],&epoch->t,sizeof(TTime));
-				epoch->cycleslip.BWmean[i] = Bw;
-				epoch->cycleslip.BWsigma[i] = options->csBWInitStd*options->csBWInitStd;
-				epoch->cycleslip.use4smooth[i] = 0;
-				epoch->cycleslip.consistency[i]= 0;
-				cycleSlipFound = 1;
-				// This is done to store both C1 and L1 for the next epoch, after the pre-alignment, in case of cycle slip
-				if ( options->SBAScorrections == 1 && options->onlySBASiono == 0 ) {
-					epoch->cycleslip.C1Prev[i] = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C1C);
-				} else {
-					epoch->cycleslip.C1Prev[i] = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,C1P);
+		}
+
+		// Update the SF detector parameters
+		if ( NoOutlierAndNconOk ) {
+			// Update sliding window
+			for(k=0;k<options->numcsSFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+				if (options->csSFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+				for ( l=0;l<MAX_SLIDING_WINDOW-1;l++ ) {
+					epoch->cycleslip.windowSF[j][k][l] = epoch->cycleslip.windowSF[j][k][l+1];
+					epoch->cycleslip.windowSFtime[j][k][l] = epoch->cycleslip.windowSFtime[j][k][l+1];
 				}
-				epoch->cycleslip.L1Prev[i] = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,L1P);
-
-			}
-
-			// Update the L1C1 parameters
-			if ( options->csL1C1 && measL1C1 && epoch->cycleslip.Nconsecutive[i] == 0 && epoch->cycleslip.outlierLI[i] != 1 && epoch->cycleslip.outlierBw[i] != 1 ) {
-				// Update sliding window
-				for ( j=0;j<MAX_SLIDING_WINDOW-1;j++ ) {
-					epoch->cycleslip.windowL1C1[i][j] = epoch->cycleslip.windowL1C1[i][j+1];
-					epoch->cycleslip.windowL1C1time[i][j] = epoch->cycleslip.windowL1C1time[i][j+1];
-				}
-				epoch->cycleslip.windowL1C1[i][MAX_SLIDING_WINDOW-1] = L1-C1;
-				epoch->cycleslip.windowL1C1time[i][MAX_SLIDING_WINDOW-1] = tsec(&epoch->t);
+				epoch->cycleslip.windowSF[j][k][MAX_SLIDING_WINDOW-1] = SFPhase[k]-SFCode[k];
+				epoch->cycleslip.windowSFtime[j][k][MAX_SLIDING_WINDOW-1] = tsec(&epoch->t);
 
 				// Computing the number of samples in inside the sliding window
 				samples = 0;
-				for ( j=0;j<MAX_SLIDING_WINDOW;j++ ) {
-					if ( tsec(&epoch->t)-epoch->cycleslip.windowL1C1time[i][j] < options->csL1C1window ) {
+				for ( l=0;l<MAX_SLIDING_WINDOW;l++ ) {
+					if ( tsec(&epoch->t)-epoch->cycleslip.windowSFtime[j][k][l] < options->csSFwindow ) {
 						samples++;
 					}
 				}
@@ -1391,66 +1704,125 @@ void checkCycleSlips (TEpoch *epoch, TOptions *options, int mode) {
 				// Computing the mean and quadratic mean in the sliding window
 				auxMean = 0.0;
 				auxMean2 = 0.0;
-				for ( j=MAX_SLIDING_WINDOW-1;j>MAX_SLIDING_WINDOW-samples-1;j-- ) {
-					auxMean += epoch->cycleslip.windowL1C1[i][j];
-					auxMean2 += pow(epoch->cycleslip.windowL1C1[i][j],2);
-				}
-				if ( samples > 0 ) {
-					epoch->cycleslip.L1C1mean[i] = auxMean / ((double)samples);
-					sigma2 = (auxMean2 / ((double)samples)) - pow(epoch->cycleslip.L1C1mean[i],2);
-					epoch->cycleslip.L1C1sigma[i] = sigma2 - (sigma2-pow(options->csL1C1init,2))/((double)samples);
+				for ( l=MAX_SLIDING_WINDOW-1;l>MAX_SLIDING_WINDOW-samples-1;l-- ) {
+					auxMean += epoch->cycleslip.windowSF[j][k][l];
+					auxMean2 += pow(epoch->cycleslip.windowSF[j][k][l],2);
 				}
 				if ( cycleSlipFound || samples == 0 ) {
-					epoch->cycleslip.L1C1mean[i] = L1-C1;
-					epoch->cycleslip.L1C1sigma[i] = pow(options->csL1C1init,2);
+					epoch->cycleslip.SFmean[j][k] = SFPhase[k]-SFCode[k];
+					epoch->cycleslip.SFsigma[j][k] = pow(options->csSFinit,2);
+				} else {
+					epoch->cycleslip.SFmean[j][k] = auxMean / ((double)samples);
+					sigma2 = (auxMean2 / ((double)samples)) - pow(epoch->cycleslip.SFmean[j][k],2);
+					epoch->cycleslip.SFsigma[j][k] = sigma2 - (sigma2-pow(options->csSFinit,2))/((double)samples);
 				}
 			}
 
 			// Update arithmetic mean and standard deviation for Melbourne-Wubbena
-			if ( options->csBW && epoch->cycleslip.Nconsecutive[i] == 0 && measBW && epoch->cycleslip.outlierLI[i] != 1 && epoch->cycleslip.outlierBw[i] != 1 ) {
-				if ( epoch->cycleslip.arcLength[i] > 1 ) {
-					epoch->cycleslip.BWsigma[i] += (pow(Bw-epoch->cycleslip.BWmean[i],2) - epoch->cycleslip.BWsigma[i]) / epoch->cycleslip.arcLength[i];
-					epoch->cycleslip.BWmean[i] += (Bw-epoch->cycleslip.BWmean[i]) / epoch->cycleslip.arcLength[i];
-				} else if ( epoch->cycleslip.narc[i] == 0 ) {
-					//This is for the first epoch in the first arc, where the mean has to be updated to the current value of Bw
-					epoch->cycleslip.BWmean[i] = Bw;
+			for(k=0;k<options->numcsMWMeasList[DGNSSstruct][GNSS][PRN];k++) {
+				if (options->csMWMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+				if ( epoch->cycleslip.arcLength[j] > 1 ) {
+					epoch->cycleslip.MWsigma[j][k] += (pow(MWVal[k]-epoch->cycleslip.MWmean[j][k],2) - epoch->cycleslip.MWsigma[j][k]) / epoch->cycleslip.arcLength[j];
+					epoch->cycleslip.MWmean[j][k] += (MWVal[k]-epoch->cycleslip.MWmean[j][k]) / epoch->cycleslip.arcLength[j];
+				} else if ( epoch->cycleslip.arcLength[j]==0 ) {
+					epoch->cycleslip.MWmean[j][k] = MWVal[k];
 				}
 
 				// Update sliding window
-				for ( j=0;j<MAX_SLIDING_WINDOW-1;j++ ) {
-					epoch->cycleslip.windowMW[i][j] = epoch->cycleslip.windowMW[i][j+1];
-					epoch->cycleslip.windowMWtime[i][j] = epoch->cycleslip.windowMWtime[i][j+1];
+				for ( l=0;l<MAX_SLIDING_WINDOW-1;l++ ) {
+					epoch->cycleslip.windowMW[j][k][l] = epoch->cycleslip.windowMW[j][k][l+1];
+					epoch->cycleslip.windowMWtime[j][k][l] = epoch->cycleslip.windowMWtime[j][k][l+1];
 				}
-				epoch->cycleslip.windowMW[i][MAX_SLIDING_WINDOW-1] = Bw;
-				epoch->cycleslip.windowMWtime[i][MAX_SLIDING_WINDOW-1] = tsec(&epoch->t);
+				epoch->cycleslip.windowMW[j][k][MAX_SLIDING_WINDOW-1] = MWVal[k];
+				epoch->cycleslip.windowMWtime[j][k][MAX_SLIDING_WINDOW-1] = tsec(&epoch->t);
 
 				// Computing the number of samples in inside the sliding window
 				samples = 0;
-				for ( j=0;j<MAX_SLIDING_WINDOW;j++ ) {
-					if ( tsec(&epoch->t)-epoch->cycleslip.windowMWtime[i][j] < options->csBWwindow ) {
+				for ( l=0;l<MAX_SLIDING_WINDOW;l++ ) {
+					if ( tsec(&epoch->t)-epoch->cycleslip.windowMWtime[j][k][l] < options->csMWwindow ) {
 						samples++;
 					}
 				}
 
 				// Computing the mean value for the sliding window
 				auxMean = 0.0;
-				for ( j=MAX_SLIDING_WINDOW-1;j>MAX_SLIDING_WINDOW-samples-1;j-- ) {
-					auxMean += epoch->cycleslip.windowMW[i][j];
+				for ( l=MAX_SLIDING_WINDOW-1;l>MAX_SLIDING_WINDOW-samples-1;l-- ) {
+					auxMean += epoch->cycleslip.windowMW[j][k][l];
 				}
-				if ( samples > 0 )
-					epoch->cycleslip.BWmean300[i] = auxMean / ((double)samples);
-				if ( cycleSlipFound || samples == 0 )
-					epoch->cycleslip.BWmean300[i] = Bw;
+				if ( cycleSlipFound || samples == 0 ) {
+					epoch->cycleslip.MWmean300[j][k] = MWVal[k];
+				} else {
+					epoch->cycleslip.MWmean300[j][k] = auxMean / ((double)samples);
+				}
 			}
 
 			// Update previous LI for Geometry-free
-			if ( options->csLI && epoch->cycleslip.Nconsecutive[i] == 0 && measLI ) {
-				epoch->cycleslip.initialLi[i] = Li;
-				// This is done to store the LI for the next epoch, after the pre-alignment, in case of cycle slip
-				if ( cycleSlipFound ) epoch->cycleslip.initialLi[i] = getMeasurementValue(epoch,system,epoch->sat[ii].PRN,LI);
+			for(k=0;k<options->numcsLIMeasList[DGNSSstruct][GNSS][PRN];k++) {
+				if (options->csLIMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+				epoch->cycleslip.initialLI[j][k] = LIVal[k];
 			}
-		} else { // System unsupported
-			epoch->cycleslip.arcLength[i]++;
+
+			// Update previous IGF for Iono-Geometry-free
+			for(k=0;k<options->numcsIGFMeasList[DGNSSstruct][GNSS][PRN];k++) {
+				if (options->csIGFMeasSelected[DGNSSstruct][GNSS][PRN][k]!=MEASSELECTED) continue;
+				epoch->cycleslip.initialIGF[j][k] = IGF[k];
+			}
+		}
+	}
+
+	//Print messages. They are printed outside the loop in order to maintain printing order even with multithreading (and for printing messages grouped by constellation)
+	if (options->printSFdata) {
+		for (i=0;i<epoch->numPrintGNSS;i++) {
+			for(m=0;m<epoch->numSatellitesGNSS[epoch->PrintPos2GNSS[i]];m++) {
+				for (n=0;n<linesstoredSFCSdata[i][m];n++) {
+					fprintf(options->outFileStream,"%s",printbufferSFCSdata[i][m][n]);
+				}
+				linesstoredSFCSdata[i][m]=0;
+			}
+		}
+	}
+
+	if (options->printMWdata) {
+		for (i=0;i<epoch->numPrintGNSS;i++) {
+			for(m=0;m<epoch->numSatellitesGNSS[epoch->PrintPos2GNSS[i]];m++) {
+				for (n=0;n<linesstoredMWCSdata[i][m];n++) {
+					fprintf(options->outFileStream,"%s",printbufferMWCSdata[i][m][n]);
+				}
+				linesstoredMWCSdata[i][m]=0;
+			}
+		}
+	}
+
+	if (options->printLIdata) {
+		for (i=0;i<epoch->numPrintGNSS;i++) {
+			for(m=0;m<epoch->numSatellitesGNSS[epoch->PrintPos2GNSS[i]];m++) {
+				for (n=0;n<linesstoredLICSdata[i][m];n++) {
+					fprintf(options->outFileStream,"%s",printbufferLICSdata[i][m][n]);
+				}
+				linesstoredLICSdata[i][m]=0;
+			}
+		}
+	}
+
+	if (options->printIGFdata) {
+		for (i=0;i<epoch->numPrintGNSS;i++) {
+			for(m=0;m<epoch->numSatellitesGNSS[epoch->PrintPos2GNSS[i]];m++) {
+				for (n=0;n<linesstoredIGFCSdata[i][m];n++) {
+					fprintf(options->outFileStream,"%s",printbufferIGFCSdata[i][m][n]);
+				}
+				linesstoredIGFCSdata[i][m]=0;
+			}
+		}
+	}
+
+	if (AnyMessageToPrint) {
+		for (i=0;i<epoch->numPrintGNSS;i++) {
+			for(m=0;m<epoch->numSatellitesGNSS[epoch->PrintPos2GNSS[i]];m++) {
+				for (n=0;n<linesstoredCS[i][m];n++) {
+					fprintf(options->outFileStream,"%s",printbufferCS[i][m][n]);
+				}
+				linesstoredCS[i][m]=0;
+			}
 		}
 	}
 	
@@ -1466,28 +1838,31 @@ void checkCycleSlips (TEpoch *epoch, TOptions *options, int mode) {
  * TOptions  *options              I  N/A  TOptions structure
  *****************************************************************************/
 void smoothEpoch (TEpoch *epoch, TOptions *options) {
-	int			i, j, k;
+	int			i, j, k,l;
 	int			smoothN;
 	double		smoothWith;
 	double		measurement;
+	int			DGNSSstruct=epoch->DGNSSstruct;
 	TSatellite	*sat;
 	
-	for ( i = 0; i < options->totalFilterMeasurements; i++ ) {
-		if ( options->smoothEpochs != 0 && options->smoothMeas[i] != NA ) {
-			for ( j = 0; j < epoch->numSatellites; j++ ) {
-				k = epoch->satCSIndex[epoch->sat[j].GNSS][epoch->sat[j].PRN];
-				sat = &epoch->sat[j];
-				getMeasModelValue(epoch, sat->GNSS, sat->PRN, options->smoothMeas[i], &smoothWith, NULL);
-				getMeasModelValue(epoch, sat->GNSS, sat->PRN, options->measurement[i], &measurement, NULL);
-				if ( epoch->cycleslip.use4smooth[k] == 1 && epoch->cycleslip.arcLength[k] > options->minArcLength ) {
-					smoothN = epoch->cycleslip.arcLength[k] - options->minArcLength;
+	if ( options->smoothEpochs != 0 ) {
+		for (j=0;j<epoch->numSatellites;j++) {
+			sat = &epoch->sat[j];
+			if (options->includeSatellite[sat->GNSS][sat->PRN]==0) continue;	
+			l = epoch->satCSIndex[sat->GNSS][sat->PRN];
+			for(k=0;k<options->numfilterMeasWithSmoothing[DGNSSstruct][sat->GNSS][sat->PRN];k++) {
+				i=options->filterIndListWithSmoothing[DGNSSstruct][sat->GNSS][sat->PRN][k];
+				getMeasModelValue(epoch, sat->GNSS, sat->PRN, options->filterSmoothMeasList[DGNSSstruct][sat->GNSS][sat->PRN][i], options->filterSmoothMeasfreq[DGNSSstruct][sat->GNSS][sat->PRN][i],&smoothWith, NULL,0);
+				getMeasModelValue(epoch, sat->GNSS, sat->PRN, options->filterMeasList[DGNSSstruct][sat->GNSS][sat->PRN][i], options->filterMeasfreq[DGNSSstruct][sat->GNSS][sat->PRN][i], &measurement, NULL,0);
+				if ( epoch->cycleslip.use4smooth[l] == 1 && epoch->cycleslip.arcLength[l] > options->minArcLength ) {
+					smoothN = epoch->cycleslip.arcLength[l] - options->minArcLength;
 					if ( smoothN > options->smoothEpochs ) {
 						smoothN = options->smoothEpochs;
 					}
 					// Sanity check
 					if ( smoothN == 0 ) smoothN = 1;
 					
-					epoch->cycleslip.smoothedMeas[k][i] = (((double)(smoothN-1)) * epoch->cycleslip.smoothedMeas[k][i] + (measurement-smoothWith)) / ((double)(smoothN));
+					epoch->cycleslip.smoothedMeas[l][i] = (((double)(smoothN-1)) * epoch->cycleslip.smoothedMeas[l][i] + (measurement-smoothWith)) / ((double)(smoothN));
 				}
 			}
 		}
@@ -1524,7 +1899,10 @@ void sigmaInflation (TEpoch *epoch, TOptions *options) {
 			if ( epoch->cycleslip.use4smooth[i] == 1 && epoch->cycleslip.arcLength[i] >= options->smoothEpochs ) {
 				fsigN = fact1 * ( 1.0 + pow(fact2, nexpN) );
 			} else if ( epoch->cycleslip.use4smooth[i] == 1 && epoch->cycleslip.arcLength[i] < options->smoothEpochs ) {
-				fsigN = 1.0 / ( (double)( epoch->cycleslip.arcLength[i] ) );
+				if (epoch->cycleslip.arcLength[i]==0) fsigN = 1.0;
+				else {
+					fsigN = 1.0 / ( (double)( epoch->cycleslip.arcLength[i] ) );
+				}
 			}
 			epoch->dgnss.sigmaInflation[i] = fsigN / fsigS;
 		}

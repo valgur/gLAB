@@ -29,28 +29,40 @@ void gLAB_GUI::on_checkBoxEndTime_clicked(bool checked) {
 }
 
 // Function to show or hide the ANTEX input
-void gLAB_GUI::on_checkBoxAntex_clicked(bool checked) {
-    ui->checkBoxAntex->setChecked(checked);
-    ui->lineEditAntex->setHidden(!checked);
-    ui->pushButtonAntex->setHidden(!checked);
+void gLAB_GUI::on_checkBoxSatAntex_clicked(bool checked) {
+    ui->checkBoxSatAntex->setChecked(checked);
+    ui->lineEditSatAntex->setHidden(!checked);
+    ui->pushButtonSatAntex->setHidden(!checked);
+    if (!checked){
+        this->on_checkBoxRecAntex_clicked(false);
+        ui->checkBoxRecAntex->setHidden(true);
+    } else {
+        ui->checkBoxRecAntex->setHidden(false);
+    }
 }
-
+// Function to show or hide the ANTEX input
+void gLAB_GUI::on_checkBoxRecAntex_clicked(bool checked) {
+    ui->checkBoxRecAntex->setChecked(checked);
+    ui->lineEditRecAntex->setHidden(!checked);
+    ui->pushButtonRecAntex->setHidden(!checked);
+}
+// Function to select SBAS input file for SBAS 1F or SBAS DFMC
+void gLAB_GUI::on_comboBoxSbasInput_currentIndexChanged(int index){
+    ui->comboBoxSbasInput->setCurrentIndex(index);
+    if (index==0) {//SBAS 1F
+        this->on_groupBoxSbas_clicked(true);
+    }
+    else if (index==1) {//SBAS DFMC
+        this->on_groupBoxSbas_clicked(true);
+        ui->labelCurrentTemplate->setText("SBAS DFMC");
+        ui->actionSBAS_DFMC->setChecked(true);
+        this->setSBASDFMCDefault();
+    }
+}
 // Function to show or hide Reference file input for Calculate
 void gLAB_GUI::on_checkBoxReferencePositionFileCalculate_clicked(bool checked) {
     ui->checkBoxReferencePositionFileCalculate->setChecked(checked);
     ui->frameTextEditRefFileCalculate->setHidden(!checked);
-
-    if (checked==true) {
-        //Show percentile in summary
-        ui->labelSummaryPercentile->setHidden(false);
-        ui->lineEditPercentileValue->setHidden(false);
-        ui->labelSummaryPercentileUnit->setHidden(false);
-    } else if (ui->groupBoxSbas->isChecked()==false) {
-        //Hide percentile in summary if SBAS is not enabled
-        ui->labelSummaryPercentile->setHidden(true);
-        ui->lineEditPercentileValue->setHidden(true);
-        ui->labelSummaryPercentileUnit->setHidden(true);
-    }
 }
 
 // Function to set the correct stacked window in Reference station input
@@ -79,31 +91,31 @@ void gLAB_GUI::on_comboBoxDcbSource_currentIndexChanged(int index) {
     ui->stackedWidgetDcbSource->setCurrentIndex(index);
     switch ( index ) {
         case 0 : {
-            ui->comboBoxP1P2correction->setCurrentIndex(0);             
+            ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(1);
             break;
         }
         case 1 : {
-            ui->comboBoxP1P2correction->setCurrentIndex(0);
+            ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(1);
             ui->comboBoxDcbSourcePPP->setCurrentIndex(0);
             break;
         }
         case 2 : {
-            ui->comboBoxP1P2correction->setCurrentIndex(1);
+            ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(2);
             ui->comboBoxDcbSourcePPP->setCurrentIndex(1);
             break;
         }
         case 3 : {
-            ui->comboBoxP1P2correction->setCurrentIndex(2);
+            ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(3);
             ui->comboBoxDcbSourcePPP->setCurrentIndex(2);
             break;
         }
         case 4 : {
-            ui->comboBoxP1P2correction->setCurrentIndex(2);
+            ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(3);
             ui->comboBoxDcbSourcePPP->setCurrentIndex(3);
             break;
         }
     }
-    if (index<=1 && ui->checkBoxP1P2correction->isChecked()==true && ui->comboBoxP1P2correction->currentIndex()==0) {
+    if (index<=1 && ui->comboBoxDCBsfP1P2GPS->currentIndex()==1) {
         ui->checkBoxDiscardUnhealthy->setHidden(false);
     }
 }
@@ -114,27 +126,27 @@ void gLAB_GUI::on_comboBoxDcbSourcePPP_currentIndexChanged(int index) {
     ui->stackedWidgetDcbSource->setCurrentIndex(index+1);
     switch ( index ) {
         case 0 : {
-            ui->comboBoxP1P2correction->setCurrentIndex(0);
+            ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(1);
             ui->comboBoxDcbSource->setCurrentIndex(1);
             break;
         }
         case 1 : {
-            ui->comboBoxP1P2correction->setCurrentIndex(1);
+            ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(2);
             ui->comboBoxDcbSource->setCurrentIndex(2);
             break;
         }
         case 2 : {
-            ui->comboBoxP1P2correction->setCurrentIndex(2);
+            ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(3);
             ui->comboBoxDcbSource->setCurrentIndex(3);
             break;
         }
         case 3 : {
-            ui->comboBoxP1P2correction->setCurrentIndex(2);
+            ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(3);
             ui->comboBoxDcbSource->setCurrentIndex(4);
             break;
         }
     }
-    if (index==0 && ui->checkBoxP1P2correction->isChecked()==true && ui->comboBoxP1P2correction->currentIndex()==0) {
+    if (index==0 && ui->comboBoxDCBsfP1P2GPS->currentIndex()==1) {
         ui->checkBoxDiscardUnhealthy->setHidden(false);
     }
 }
@@ -154,11 +166,14 @@ void gLAB_GUI::on_groupBoxIonoSource_clicked(bool checked) {
 
 void gLAB_GUI::on_groupBoxSbas_clicked(bool checked) {
     if ( checked == true ) {
-        this->on_groupBoxReferenceStation_clicked(false);
-        if ( ui->labelCurrentTemplate->text() != "SBAS" ) {
+        if ( ui->labelCurrentTemplate->text() != "SBAS 1F" && ui->labelCurrentTemplate->text() != "SBAS DFMC" ) {
             QMessageBox messageBox;
-            messageBox.warning(0, "Warning","SBAS template in the upper bar will setup the default configuration options.\n");
+            messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+            messageBox.warning(nullptr, "Warning","SBAS template in the upper bar will setup the default configuration options.\n");
         }
+        ui->labelCurrentTemplate->setText("SBAS 1F");
+        ui->actionSBAS_1F->setChecked(true);
+        this->on_groupBoxReferenceStation_clicked(false);
         ui->stackedWidgetOtherMessages->setCurrentIndex(1);
         ui->stackedWidgetOtherMessages->setHidden(false);
         ui->frameOutputSatVel->setContentsMargins(0,11,0,9);
@@ -166,14 +181,15 @@ void gLAB_GUI::on_groupBoxSbas_clicked(bool checked) {
         ui->radioButtonOrbitPrecise1file->setHidden(true);
         ui->radioButtonOrbitPrecise2files->setHidden(true);
         on_radioButtonOrbitBrdc_clicked();
+        //Hide "Preferred age time:" option
+        ui->frameNavFreshTime->setHidden(true);
         //Hide input path for SBAS iono
         ui->stackedWidgetIonoSourceSbas->setCurrentIndex(0);
         //Disable P1-C1 correction
         this->on_groupBoxP1C1correction_clicked(false);
-        this->on_checkBoxP1C1correction_clicked(false);
+        this->on_comboBoxDCBsfP1C1GPS_currentIndexChanged(0);
         ui->groupBoxP1C1correction->setDisabled(true);
         ui->groupBoxP1C1correction->setHidden(true);
-        ui->checkBoxP1C1correction->setDisabled(true);
         //Set SBAS iono model
         this->on_comboBoxIonoCorrection_currentIndexChanged(4);
         //Show Step Detector option in Filter
@@ -181,19 +197,17 @@ void gLAB_GUI::on_groupBoxSbas_clicked(bool checked) {
         //Set Single-frequency navigation and disable dual-frequency
         this->on_radioButtonSingleFreq_clicked();
         ui->radioButtonDualFreq->setHidden(true);
-        //Set Smoothwith page to SBAS
-        ui->stackedWidgetSmoothWith->setCurrentIndex(2);
+        //Hide graphic combination
+        ui->radioButtonSelectionGraphic->setHidden(true);
         //Hide Backward filtering
         ui->checkBoxBackwardFiltering->setHidden(true);
         ui->checkBoxBackwardFiltering->setChecked(false);
-        //Disable pseudorange +carrier phase in the filter
-        this->on_radioButtonSelectionPseudorange_clicked();
         ui->radioButtonSelectionPseudorangeCarrierPhase->setHidden(true);
         //Disable satellite phase center correction
         this->on_checkBoxSatMassCentre_clicked(false);
         ui->checkBoxSatMassCentre->setEnabled(false);
         //Set stacked widget in filter for SBAS measurements and weights
-        ui->stackedWidgetMeasConfigAndNoise->setCurrentIndex(2);
+        ui->stackedWidgetMeasurementGNSS->setCurrentIndex(0);
         //Show Stanford-ESA plot
         ui->groupBoxStanfordESA->setHidden(false);
         //Show options in Summary only for SBAS
@@ -201,11 +215,12 @@ void gLAB_GUI::on_groupBoxSbas_clicked(bool checked) {
         ui->labelSummarySlidingWindow->setHidden(false);
         ui->lineEditSlidingWindowSBAS->setHidden(false);
         ui->frameSummaryWindowSamples->setHidden(false);
-
-        //Manually set size of GroupBox groupBoxAPrioriPosition in Linux, so it does not reescale when changing a priori receiver options
-        #ifdef Q_OS_LINUX
-            ui->groupBoxAPrioriPosition->setMinimumWidth(275);
-        #endif
+        ui->groupBoxSbas->setChecked(true);
+        ui->frameSbas->setHidden(false);
+        ui->groupBoxUserDefinedSbasSigmaMultipath->setHidden(false);
+        ui->groupBoxSbasOptions->setHidden(false);
+        ui->groupBoxSbasAdvancedOptions->setHidden(false);
+        this->setSBAS1FDefault();
     } else {
         ui->stackedWidgetOtherMessages->setCurrentIndex(0);
         ui->stackedWidgetOtherMessages->setHidden(true);
@@ -213,35 +228,30 @@ void gLAB_GUI::on_groupBoxSbas_clicked(bool checked) {
         //Show precise orbit file input
         ui->radioButtonOrbitPrecise1file->setHidden(false);
         ui->radioButtonOrbitPrecise2files->setHidden(false);
+        //Show "Preferred age time:" option
+        ui->frameNavFreshTime->setHidden(false);
         //Hide input path for SBAS iono
         ui->stackedWidgetIonoSourceSbas->setCurrentIndex(1);
         //Enable P1-C1 correction
         ui->groupBoxP1C1correction->setDisabled(false);
         ui->groupBoxP1C1correction->setHidden(false);
-        ui->checkBoxP1C1correction->setDisabled(false);
-        this->on_checkBoxP1C1correction_clicked(true);
+        this->on_comboBoxDCBsfP1C1GPS_currentIndexChanged(0);
         //Unset SBAS iono model if it is set
         if (ui->comboBoxIonoCorrection->currentIndex()==4) {
              this->on_comboBoxIonoCorrection_currentIndexChanged(0);
         }
         //Hide Step Detector option in Filter
         ui->checkBoxStepDetector->setHidden(true);
-        //Set Smoothwith page to non SBAS
-        ui->stackedWidgetSmoothWith->setCurrentIndex(0);
         //Enable Dual frequency processing
         ui->radioButtonDualFreq->setHidden(false);
+        //Show graphic combination
+        ui->radioButtonSelectionGraphic->setHidden(false);
         //Show Backward filtering
         ui->checkBoxBackwardFiltering->setHidden(false);
         //Enable pseudorange +carrier phase in the filter
         ui->radioButtonSelectionPseudorangeCarrierPhase->setHidden(false);
         //Enable satellite phase center correction
         ui->checkBoxSatMassCentre->setEnabled(true);
-        //Set stacked widget in filter to SPP or PPP
-        if (ui->labelCurrentTemplate->text() == "PPP") {
-            ui->stackedWidgetMeasConfigAndNoise->setCurrentIndex(1);
-        } else {
-            ui->stackedWidgetMeasConfigAndNoise->setCurrentIndex(0);
-        }
         //Hide Stanford-ESA plot
         this->on_groupBoxStanfordESA_clicked(false);
         ui->groupBoxStanfordESA->setHidden(true);
@@ -250,22 +260,32 @@ void gLAB_GUI::on_groupBoxSbas_clicked(bool checked) {
         ui->labelSummarySlidingWindow->setHidden(true);
         ui->lineEditSlidingWindowSBAS->setHidden(true);
         ui->frameSummaryWindowSamples->setHidden(true);
-
+        ui->groupBoxSbas->setChecked(false);
+        ui->frameSbas->setHidden(true);
+        ui->groupBoxUserDefinedSbasSigmaMultipath->setHidden(true);
+        ui->groupBoxSbasOptions->setHidden(true);
+        ui->groupBoxSbasAdvancedOptions->setHidden(true);
+        if ( ui->labelCurrentTemplate->text() == "SBAS 1F" || ui->labelCurrentTemplate->text() == "SBAS DFMC") {
+            QMessageBox messageBox;
+            messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+            messageBox.warning(nullptr, "Warning","SPP template in the upper bar will setup the default configuration options.\n");
+            ui->labelCurrentTemplate->setText("SPP");
+            ui->actionSPP->setChecked(true);
+            this->setSPPDefault();
+        }
     }
-    ui->groupBoxSbas->setChecked(checked);
-    ui->frameSbas->setHidden(!checked);
-    ui->groupBoxUserDefinedSbasSigmaMultipath->setHidden(!checked);
-    ui->groupBoxSbasOptions->setHidden(!checked);
-    ui->groupBoxSbasAdvancedOptions->setHidden(!checked);
 }
 
 void gLAB_GUI::on_groupBoxReferenceStation_clicked(bool checked) {
     if ( checked == true ) {
-        this->on_groupBoxSbas_clicked(false);
         if ( ui->labelCurrentTemplate->text() != "DGNSS" ) {
             QMessageBox messageBox;
-            messageBox.warning(0, "Warning","DGNSS template in the upper bar will setup the default configuration options.\n");
+            messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+            messageBox.warning(nullptr, "Warning","DGNSS template in the upper bar will setup the default configuration options.\n");
         }
+        ui->labelCurrentTemplate->setText("DGNSS");
+        ui->actionDGNSS->setChecked(true);
+        this->on_groupBoxSbas_clicked(false);
         ui->stackedWidgetOtherMessages->setCurrentIndex(2);
         ui->stackedWidgetOtherMessages->setHidden(false);
         ui->frameOutputSatVel->setContentsMargins(0,11,0,9);
@@ -289,34 +309,33 @@ void gLAB_GUI::on_groupBoxReferenceStation_clicked(bool checked) {
         //Set Single-frequency navigation and disable dual-frequency
         this->on_radioButtonSingleFreq_clicked();
         ui->radioButtonDualFreq->setHidden(true);
-        //Set Smoothwith page to SPP
-        ui->stackedWidgetSmoothWith->setCurrentIndex(0);
         //Hide Backward filtering
         ui->checkBoxBackwardFiltering->setHidden(true);
         ui->checkBoxBackwardFiltering->setChecked(false);
-        //Disable pseudorange +carrier phase in the filter
-        this->on_radioButtonSelectionPseudorange_clicked();
         ui->radioButtonSelectionPseudorangeCarrierPhase->setHidden(true);
         //Disable satellite phase center correction
         this->on_checkBoxSatMassCentre_clicked(false);
         ui->checkBoxSatMassCentre->setEnabled(false);
-        //Set stacked widget in filter for DGNSS measurements and weights
-        ui->stackedWidgetMeasConfigAndNoise->setCurrentIndex(3);
         //Hide Stanford-ESA plot
         this->on_groupBoxStanfordESA_clicked(false);
         ui->groupBoxStanfordESA->setHidden(true);
-        //Manually set size of GroupBox groupBoxAPrioriPosition in Linux, so it does not reescale when changing a priori receiver options
-        #ifdef Q_OS_LINUX
-            ui->groupBoxAPrioriPosition->setMinimumWidth(285);
-        #endif
+        //Hide positioning modes not available in DGNSS
+        ui->frameAPrioriPositionFrom->setHidden(true);
+        //RTCM button is always hidden
+        ui->radioButtonRtcm->setHidden(false);
+        ui->groupBoxReferenceStation->setChecked(true);
+        ui->frameReferenceStation->setHidden(false);
+        ui->groupBoxDgnssOptions->setHidden(false);
+        ui->stackedWidgetIonoSourceSbas->setCurrentIndex(1);
+        this->setDGNSSDefault();
     } else {
         ui->stackedWidgetOtherMessages->setCurrentIndex(0);
         ui->stackedWidgetOtherMessages->setHidden(true);
         ui->frameOutputSatVel->setContentsMargins(0,0,0,9);
-        this->on_radioButtonRtcmBaseline_clicked(); //This is to hide all reference positions in DGNSS so they don't occupy space
+        this->on_radioButtonRtcmBaseline_clicked();
         if(ui->radioButtonRtcm->isChecked()==true){
             this->on_radioButtonRinex_clicked();
-        }               
+        }
         ui->checkBoxKMLRefStations->setHidden(true);
         ui->checkBoxSP3OutFileWriteSPPSolutions->setHidden(true);
         ui->frameOutReffileWriteSPPsolution->setHidden(true);
@@ -331,24 +350,23 @@ void gLAB_GUI::on_groupBoxReferenceStation_clicked(bool checked) {
         ui->radioButtonSelectionPseudorangeCarrierPhase->setHidden(false);
         //Enable satellite phase center correction
         ui->checkBoxSatMassCentre->setEnabled(true);
-        //Set stacked widget in filter to SPP or PPP
-        if (ui->labelCurrentTemplate->text() == "PPP") {
-            ui->stackedWidgetMeasConfigAndNoise->setCurrentIndex(1);
-        } else {
-            ui->stackedWidgetMeasConfigAndNoise->setCurrentIndex(0);
+        //Hide positioning modes not available in DGNSS
+        ui->frameAPrioriPositionFrom->setHidden(false);
+        //RTCM button is always hidden
+        ui->radioButtonRtcm->setHidden(true);
+        ui->groupBoxReferenceStation->setChecked(false);
+        ui->frameReferenceStation->setHidden(true);
+        ui->groupBoxDgnssOptions->setHidden(true);
+        ui->stackedWidgetIonoSourceSbas->setCurrentIndex(1);
+        if ( ui->labelCurrentTemplate->text() == "DGNSS" ) {
+            QMessageBox messageBox;
+            messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+            messageBox.warning(nullptr, "Warning","SPP template in the upper bar will setup the default configuration options.\n");
+            ui->labelCurrentTemplate->setText("SPP");
+            ui->actionSPP->setChecked(true);
+            this->setSPPDefault();
         }
     }
-    //Hide positioning modes not available in DGNSS
-    ui->frameAPrioriPositionFrom->setHidden(checked);
-
-    //RTCM button is always hidden
-    ui->radioButtonRtcm->setHidden(true);
-
-    ui->groupBoxReferenceStation->setChecked(checked);
-    ui->frameReferenceStation->setHidden(!checked);
-    ui->groupBoxDgnssOptions->setHidden(!checked);
-
-    ui->stackedWidgetIonoSourceSbas->setCurrentIndex(1);
 }
 
 void gLAB_GUI::on_groupBoxAuxFiles_clicked(bool checked) {
@@ -359,29 +377,24 @@ void gLAB_GUI::on_groupBoxAuxFiles_clicked(bool checked) {
 void gLAB_GUI::on_groupBoxP1C1correction_clicked(bool checked) {
     ui->groupBoxP1C1correction->setChecked(checked);
     ui->frameInputP1C1correction->setHidden(!checked);
-    if ( checked == true ) {
+    if ( ui->lineEditDcbFile->text().length()>0 && checked==true ) {
         // Set in Modelling to Strict
-        ui->comboBoxP1C1correction->setCurrentIndex(1);
-    } else {
-        // Set in Modelling to Flexible
-        ui->comboBoxP1C1correction->setCurrentIndex(0);
+        ui->comboBoxDCBsfP1C1GPS->setCurrentIndex(1);
     }
 }
 
 void gLAB_GUI::on_groupBoxP1P2correction_clicked(bool checked) {
     ui->groupBoxP1P2correction->setChecked(checked);
     ui->frameInputP1P2correction->setHidden(!checked);
-    if(checked==true) {
-        ui->checkBoxP1P2correction->setChecked(checked);
-        ui->frameModellingP1P2correction->setHidden(!checked);
+    if( checked==true && openP1P2>0 ) {
+        ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(1);
     } else if (ui->radioButtonOrbitBrdc->isChecked()==false) {
-        ui->checkBoxP1P2correction->setChecked(checked);
-        ui->frameModellingP1P2correction->setHidden(!checked);
+        ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(0);
     }
-    if (checked==true && ui->comboBoxP1P2correction->currentIndex()==0) {
+    if (checked==true && ui->comboBoxDCBsfP1P2GPS->currentIndex()==1) {
         ui->checkBoxDiscardUnhealthy->setHidden(false);
     } else if (checked==false && ui->radioButtonOrbitBrdc->isChecked()==false) {
-        ui->checkBoxDiscardUnhealthy->setHidden(true);
+        //ui->checkBoxDiscardUnhealthy->setHidden(true);
     }
 }
 
@@ -410,15 +423,30 @@ void gLAB_GUI::on_groupBoxUserDefinedSbasSigmaMultipath_clicked(bool checked) {
 
 ////////////////////// Push buttons /////////////////////
 void gLAB_GUI::on_pushButtonRinexObs_clicked() {
+
+    QString PlatformSlashType;
+#ifdef Q_OS_WIN32
+    PlatformSlashType= "\\";
+#else
+    PlatformSlashType= "/";
+#endif
+
     QFileDialog dialog(this);
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setViewMode(QFileDialog::Detail);
     dialog.setNameFilter(tr("RINEX Files (*.??o *o.rnx);;All Files (*)"));
+    QString RinexInput;
     QStringList fileName;
     if ( dialog.exec() ) {
         fileName = dialog.selectedFiles();
         if ( !fileName.isEmpty() ) {
             ui->lineEditRinexObs->setText(QDir::toNativeSeparators(fileName[0]));
+            //set output path
+            QString OutputPath;
+            RinexInput=QDir::toNativeSeparators(fileName[0]);
+            int SepOther=RinexInput.lastIndexOf(PlatformSlashType);
+            OutputPath=RinexInput.mid(0,SepOther+1)+"gLAB.out";
+            ui->lineEditOutputDestination->setText(OutputPath);
             //This code is to change the output filename path with the RINEX observation file path
             /*#ifdef Q_OS_WIN32
                 ui->lineEditOutputDestination->setText(QDir::toNativeSeparators(fileName[0]).section("\\",0,-2)+"\\gLAB.out");
@@ -429,17 +457,146 @@ void gLAB_GUI::on_pushButtonRinexObs_clicked() {
         }
     }
 }
-
-void gLAB_GUI::on_pushButtonRinexNav_clicked() {
+void gLAB_GUI::on_pushButtonAddRinexNav_clicked(){
+    if (ui->frameInputRinexNavFile2->isHidden()==true) {
+        ui->frameInputRinexNavFile2->setHidden(false);
+        ui->lineEditRinexNav2->setText("");
+        ui->pushButtonDelRinexNav->setEnabled(true);
+        //ui->pushButtonDelRinexNav->setStyleSheet(ButtonEnabledStyle);
+    } else if (ui->frameInputRinexNavFile3->isHidden()==true) {
+        ui->frameInputRinexNavFile3->setHidden(false);
+        ui->lineEditRinexNav3->setText("");
+    } else if (ui->frameInputRinexNavFile4->isHidden()==true) {
+        ui->frameInputRinexNavFile4->setHidden(false);
+        ui->lineEditRinexNav4->setText("");
+    } else if (ui->frameInputRinexNavFile5->isHidden()==true) {
+        ui->frameInputRinexNavFile5->setHidden(false);
+        ui->lineEditRinexNav5->setText("");
+    } else if (ui->frameInputRinexNavFile6->isHidden()==true) {
+        ui->frameInputRinexNavFile6->setHidden(false);
+        ui->lineEditRinexNav6->setText("");
+    } else if (ui->frameInputRinexNavFile7->isHidden()==true) {
+        ui->frameInputRinexNavFile7->setHidden(false);
+        ui->lineEditRinexNav7->setText("");
+        ui->pushButtonAddRinexNav->setEnabled(false);
+        //ui->pushButtonAddRinexNav->setStyleSheet(ButtonDisabledStyle);
+    }
+    return ;
+}
+void gLAB_GUI::on_pushButtonDelRinexNav_clicked(){
+    if (ui->frameInputRinexNavFile7->isHidden()==false) {
+        ui->frameInputRinexNavFile7->setHidden(true);
+        ui->lineEditRinexNav7->setText("");
+        ui->pushButtonAddRinexNav->setEnabled(true);
+        //ui->pushButtonAddRinexNav->setStyleSheet(ButtonEnabledStyle);
+    } else if (ui->frameInputRinexNavFile6->isHidden()==false) {
+        ui->frameInputRinexNavFile6->setHidden(true);
+        ui->lineEditRinexNav6->setText("");
+    } else if (ui->frameInputRinexNavFile5->isHidden()==false) {
+        ui->frameInputRinexNavFile5->setHidden(true);
+        ui->lineEditRinexNav5->setText("");
+    } else if (ui->frameInputRinexNavFile4->isHidden()==false) {
+        ui->frameInputRinexNavFile4->setHidden(true);
+        ui->lineEditRinexNav4->setText("");
+    } else if (ui->frameInputRinexNavFile3->isHidden()==false) {
+        ui->frameInputRinexNavFile3->setHidden(true);
+        ui->lineEditRinexNav3->setText("");
+    } else if (ui->frameInputRinexNavFile2->isHidden()==false) {
+        ui->frameInputRinexNavFile2->setHidden(true);
+        ui->lineEditRinexNav2->setText("");
+        ui->pushButtonDelRinexNav->setEnabled(false);
+        //ui->pushButtonDelRinexNav->setStyleSheet(ButtonDisabledStyle);
+    }
+    return ;
+}
+void gLAB_GUI::on_pushButtonRinexNav1_clicked() {
     QFileDialog dialog(this);
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setViewMode(QFileDialog::Detail);
-    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??p *n.rnx);;All Files (*)"));
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
     QStringList fileName;
     if ( dialog.exec() ) {
         fileName = dialog.selectedFiles();
         if ( !fileName.isEmpty() ) {
-            ui->lineEditRinexNav->setText(QDir::toNativeSeparators(fileName[0]));
+            ui->lineEditRinexNav1->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+void gLAB_GUI::on_pushButtonRinexNav2_clicked() {
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNav2->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+void gLAB_GUI::on_pushButtonRinexNav3_clicked() {
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNav3->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+void gLAB_GUI::on_pushButtonRinexNav4_clicked() {
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNav4->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+void gLAB_GUI::on_pushButtonRinexNav5_clicked() {
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNav5->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+void gLAB_GUI::on_pushButtonRinexNav6_clicked() {
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNav6->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+void gLAB_GUI::on_pushButtonRinexNav7_clicked() {
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNav7->setText(QDir::toNativeSeparators(fileName[0]));
         }
     }
 }
@@ -454,6 +611,48 @@ void gLAB_GUI::on_pushButtonPrecise1File_clicked() {
         fileName = dialog.selectedFiles();
         if ( !fileName.isEmpty() ) {
             ui->lineEditPrecise1File->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+
+void gLAB_GUI::on_checkBoxRinexNavFileGLO1_clicked(bool checked){
+    ui->checkBoxRinexNavFileGLO1->setChecked(checked);
+    ui->lineEditRinexNavFileGLO1->setHidden(!checked);
+    ui->pushButtonRinexNavFileGLO1->setHidden(!checked);
+}
+void gLAB_GUI::on_pushButtonRinexNavFileGLO1_clicked(){
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNavFileGLO1->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+
+void gLAB_GUI::on_checkBoxRinexNavFileHealth1_clicked(bool checked){
+    ui->checkBoxRinexNavFileHealth1->setChecked(checked);
+    ui->lineEditRinexNavFileHealth1->setHidden(!checked);
+    ui->pushButtonRinexNavFileHealth1->setHidden(!checked);
+    this->on_checkBoxDiscardUnhealthy_clicked(checked);
+    if (!checked) {
+        this->on_checkBoxDiscardMarginal_clicked(false);
+    }
+}
+void gLAB_GUI::on_pushButtonRinexNavFileHealth1_clicked(){
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNavFileHealth1->setText(QDir::toNativeSeparators(fileName[0]));
         }
     }
 }
@@ -486,7 +685,51 @@ void gLAB_GUI::on_pushButtonPreciseClk_clicked() {
     }
 }
 
-void gLAB_GUI::on_pushButtonAntex_clicked() {
+void gLAB_GUI::on_checkBoxRinexNavFileGLO2_clicked(bool checked){
+    ui->checkBoxRinexNavFileGLO2->setChecked(checked);
+    ui->lineEditRinexNavFileGLO2->setHidden(!checked);
+    ui->pushButtonRinexNavFileGLO2->setHidden(!checked);
+}
+
+void gLAB_GUI::on_pushButtonRinexNavFileGLO2_clicked(){
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNavFileGLO2->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+
+void gLAB_GUI::on_checkBoxRinexNavFileHealth2_clicked(bool checked){
+    ui->checkBoxRinexNavFileHealth2->setChecked(checked);
+    ui->lineEditRinexNavFileHealth2->setHidden(!checked);
+    ui->pushButtonRinexNavFileHealth2->setHidden(!checked);
+    this->on_checkBoxDiscardUnhealthy_clicked(checked);
+    if (!checked) {
+        this->on_checkBoxDiscardMarginal_clicked(false);
+    }
+}
+
+void gLAB_GUI::on_pushButtonRinexNavFileHealth2_clicked(){
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("Broadcast Files (*.??n *.??g *.??l *.??p *.??h *n.rnx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRinexNavFileHealth2->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+
+void gLAB_GUI::on_pushButtonSatAntex_clicked() {
     QFileDialog dialog(this);
     dialog.setFileMode(QFileDialog::ExistingFile);
     dialog.setViewMode(QFileDialog::Detail);
@@ -495,7 +738,20 @@ void gLAB_GUI::on_pushButtonAntex_clicked() {
     if ( dialog.exec() ) {
         fileName = dialog.selectedFiles();
         if ( !fileName.isEmpty() ) {
-            ui->lineEditAntex->setText(QDir::toNativeSeparators(fileName[0]));
+            ui->lineEditSatAntex->setText(QDir::toNativeSeparators(fileName[0]));
+        }
+    }
+}
+void gLAB_GUI::on_pushButtonRecAntex_clicked() {
+    QFileDialog dialog(this);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(tr("ANTEX Files (*.atx);;All Files (*)"));
+    QStringList fileName;
+    if ( dialog.exec() ) {
+        fileName = dialog.selectedFiles();
+        if ( !fileName.isEmpty() ) {
+            ui->lineEditRecAntex->setText(QDir::toNativeSeparators(fileName[0]));
         }
     }
 }
@@ -654,6 +910,13 @@ void gLAB_GUI::on_pushButtonRefStaRtcm3_clicked() {
     }
 }
 
+void gLAB_GUI::on_lineEditDcbFile_textChanged(){
+    if ( ui->lineEditDcbFile->text().isEmpty() ) {
+        ui->comboBoxDCBsfP1C1GPS->setCurrentIndex(0);
+    } else {
+        ui->comboBoxDCBsfP1C1GPS->setCurrentIndex(1);
+    }
+}
 void gLAB_GUI::on_pushButtonDcbFile_clicked() {
     QFileDialog dialog(this);
     dialog.setFileMode(QFileDialog::ExistingFile);
@@ -775,10 +1038,7 @@ void gLAB_GUI::on_radioButtonSinex_clicked() {
     ui->stackedWidgetAprioriRecPos->setHidden(false);
     ui->radioButtonSinex->setChecked(true);
 
-    //Show percentile in summary
-    ui->labelSummaryPercentile->setHidden(false);
-    ui->lineEditPercentileValue->setHidden(false);
-    ui->labelSummaryPercentileUnit->setHidden(false);
+    ui->groupBoxSummaryConvergencePosition->setHidden(false);
 }
 
 void gLAB_GUI::on_radioButtonCalculate_clicked() {
@@ -789,17 +1049,7 @@ void gLAB_GUI::on_radioButtonCalculate_clicked() {
         ui->frameCalculateCoord->setHidden(false);
     } else { ui->frameCalculateCoord->setHidden(true); }
 
-    if (ui->checkBoxReferencePositionFileCalculate->isChecked()==true) {
-        //Show percentile in summary
-        ui->labelSummaryPercentile->setHidden(false);
-        ui->lineEditPercentileValue->setHidden(false);
-        ui->labelSummaryPercentileUnit->setHidden(false);
-    } else if (ui->groupBoxSbas->isChecked()==false) {
-        //Hide percentile in summary if SBAS is not enabled
-        ui->labelSummaryPercentile->setHidden(true);
-        ui->lineEditPercentileValue->setHidden(true);
-        ui->labelSummaryPercentileUnit->setHidden(true);
-    }
+    ui->groupBoxSummaryConvergencePosition->setHidden(true);
 }
 
 void gLAB_GUI::on_radioButtonRinex_clicked() {
@@ -807,10 +1057,7 @@ void gLAB_GUI::on_radioButtonRinex_clicked() {
     ui->frameCalculateCoord->setHidden(true);
     ui->stackedWidgetAprioriRecPos->setHidden(true);
 
-    //Show percentile in summary
-    ui->labelSummaryPercentile->setHidden(false);
-    ui->lineEditPercentileValue->setHidden(false);
-    ui->labelSummaryPercentileUnit->setHidden(false);
+    ui->groupBoxSummaryConvergencePosition->setHidden(false);
 }
 
 void gLAB_GUI::on_radioButtonSpecify_clicked() {
@@ -824,10 +1071,7 @@ void gLAB_GUI::on_radioButtonSpecify_clicked() {
         this->on_radioButtonSpecifyUserDefined_clicked();
     }
 
-    //Show percentile in summary
-    ui->labelSummaryPercentile->setHidden(false);
-    ui->lineEditPercentileValue->setHidden(false);
-    ui->labelSummaryPercentileUnit->setHidden(false);
+    ui->groupBoxSummaryConvergencePosition->setHidden(false);
 }
 
 void gLAB_GUI::on_radioButtonSpecifyUserCartesian_clicked() {
@@ -858,6 +1102,8 @@ void gLAB_GUI::on_radioButtonRtcm_clicked() {
     ui->frameCalculateCoord->setHidden(true);
     ui->stackedWidgetAprioriRecPos->setCurrentIndex(3);
     ui->stackedWidgetAprioriRecPos->setHidden(false);
+
+    ui->groupBoxSummaryConvergencePosition->setHidden(false);
 }
 
 void gLAB_GUI::on_radioButtonCalculateRinex_clicked() {
@@ -893,11 +1139,6 @@ void gLAB_GUI::on_radioButtonRtcmBaseline_clicked() {
     ui->frameAprioriRecPosRtcmUserSpecify->setHidden(true);
     ui->frameRTCMRoverSpecifyOptions->setHidden(true);
     ui->frameReferenceFileSpecifyRtcm->setHidden(true);
-
-    //Hide percentile in summary
-    ui->labelSummaryPercentile->setHidden(true);
-    ui->lineEditPercentileValue->setHidden(true);
-    ui->labelSummaryPercentileUnit->setHidden(true);
 }
 
 void gLAB_GUI::on_radioButtonRtcmRinexRover_clicked() {
@@ -906,11 +1147,6 @@ void gLAB_GUI::on_radioButtonRtcmRinexRover_clicked() {
     ui->frameAprioriRecPosRtcmUserSpecify->setHidden(true);
     ui->frameRTCMRoverSpecifyOptions->setHidden(true);
     ui->frameReferenceFileSpecifyRtcm->setHidden(true);
-
-    //Show percentile in summary
-    ui->labelSummaryPercentile->setHidden(false);
-    ui->lineEditPercentileValue->setHidden(false);
-    ui->labelSummaryPercentileUnit->setHidden(false);
 }
 
 void gLAB_GUI::on_radioButtonRtcmSpecify_clicked() {
@@ -923,11 +1159,6 @@ void gLAB_GUI::on_radioButtonRtcmSpecify_clicked() {
     } else {
         this->on_radioButtonRtcmReferenceFile_clicked();
     }
-
-    //Show percentile in summary
-    ui->labelSummaryPercentile->setHidden(false);
-    ui->lineEditPercentileValue->setHidden(false);
-    ui->labelSummaryPercentileUnit->setHidden(false);
 }
 
 void gLAB_GUI::on_radioButtonRtcmUserBaseline_clicked() {
@@ -936,11 +1167,6 @@ void gLAB_GUI::on_radioButtonRtcmUserBaseline_clicked() {
     ui->frameAprioriRecPosRtcmUserSpecify->setHidden(false);
     ui->frameRTCMRoverSpecifyOptions->setHidden(true);
     ui->frameReferenceFileSpecifyRtcm->setHidden(true);
-
-    //Hide percentile in summary
-    ui->labelSummaryPercentile->setHidden(true);
-    ui->lineEditPercentileValue->setHidden(true);
-    ui->labelSummaryPercentileUnit->setHidden(true);
 }
 
 void gLAB_GUI::on_radioButtonRtcmUserRinexRover_clicked() {
@@ -949,11 +1175,6 @@ void gLAB_GUI::on_radioButtonRtcmUserRinexRover_clicked() {
     ui->frameAprioriRecPosRtcmUserSpecify->setHidden(false);
     ui->frameRTCMRoverSpecifyOptions->setHidden(true);
     ui->frameReferenceFileSpecifyRtcm->setHidden(true);
-
-    //Show percentile in summary
-    ui->labelSummaryPercentile->setHidden(false);
-    ui->lineEditPercentileValue->setHidden(false);
-    ui->labelSummaryPercentileUnit->setHidden(false);
 }
 
 void gLAB_GUI::on_radioButtonRtcmUserSpecify_clicked() {
@@ -966,11 +1187,6 @@ void gLAB_GUI::on_radioButtonRtcmUserSpecify_clicked() {
     } else {
         this->on_radioButtonRtcmReferenceFile_clicked();
     }
-
-    //Show percentile in summary
-    ui->labelSummaryPercentile->setHidden(false);
-    ui->lineEditPercentileValue->setHidden(false);
-    ui->labelSummaryPercentileUnit->setHidden(false);
 }
 
 void gLAB_GUI::on_radioButtonRtcmUserDefined_clicked() {
@@ -1022,7 +1238,7 @@ void gLAB_GUI::on_radioButtonIonoSourceIonex_clicked() {
     ui->radioButtonIonoSourceIonex->setChecked(true);
     ui->radioButtonIonoSourceSbas->setChecked(false);
     ui->comboBoxIonoCorrection->setCurrentIndex(3);
-    ui->comboBoxP1P2correction->setCurrentIndex(2);
+    if (ui->comboBoxDCBsfP1P2GPS->currentIndex()<3) ui->comboBoxDCBsfP1P2GPS->setCurrentIndex(3);
 }
 
 void gLAB_GUI::on_radioButtonIonoSourceSbas_clicked() {
@@ -1034,11 +1250,15 @@ void gLAB_GUI::on_radioButtonIonoSourceSbas_clicked() {
 }
 
 void gLAB_GUI::on_radioButtonOrbitBrdc_clicked() {
-    mode=0;
+    if (ui->groupBoxSbas->isChecked()==false && ui->groupBoxReferenceStation->isChecked()==false) {
+        mode=0;
+    }
+
     ui->stackedWidgetOrbitAndClock->setCurrentIndex(0);
     ui->radioButtonOrbitBrdc->setChecked(true);
     ui->radioButtonOrbitPrecise1file->setChecked(false);
     ui->radioButtonOrbitPrecise2files->setChecked(false);
+    ui->frameAddDelRinexNav->setHidden(false);
     ui->groupBoxPreciseProductsDataInterpolation->setHidden(true);
     ui->stackedWidgetcomboBoxIonoSourceBrdc->setCurrentIndex(0);
     ui->stackedWidgetComboBoxDcbSource->setCurrentIndex(0);
@@ -1054,21 +1274,28 @@ void gLAB_GUI::on_radioButtonOrbitBrdc_clicked() {
     }
     ui->checkBoxDiscardUnhealthy->setHidden(false);
 
-    ui->gridLayout_76->removeWidget(ui->groupBoxPreciseProductsDataInterpolation);
-    ui->gridLayout_76->removeWidget(ui->groupBoxReceiverAntennaPhaseCentreCorrection);
+    ui->frameInputRinexNavFile1->setHidden(false);
+    //ui->lineEditRinexNav1->setText("");
+    if (ui->frameInputRinexNavFile2->isHidden()) {
+        ui->pushButtonAddRinexNav->setEnabled(true);
+        ui->pushButtonDelRinexNav->setEnabled(false);
+    }
+
+    ui->groupBoxNavMessageTypes->setHidden(false);
+    if (ui->groupBoxSbas->isChecked()==false && ui->groupBoxReferenceStation->isChecked()==false) {
+        this->on_pushButtonNavMessageTypesSetDefault_clicked();
+    }
 }
+
 
 void gLAB_GUI::on_radioButtonOrbitPrecise1file_clicked() {
     mode=1;
-
-    ui->gridLayout_76->addWidget(ui->groupBoxPreciseProductsDataInterpolation,0,0,1,1,Qt::AlignTop);
-    ui->gridLayout_76->addWidget(ui->groupBoxReceiverAntennaPhaseCentreCorrection,1,0,1,1,Qt::AlignTop);
-
 
     ui->stackedWidgetOrbitAndClock->setCurrentIndex(1);
     ui->radioButtonOrbitPrecise1file->setChecked(true);
     ui->radioButtonOrbitBrdc->setChecked(false);
     ui->radioButtonOrbitPrecise2files->setChecked(false);
+    ui->frameAddDelRinexNav->setHidden(true);
     ui->groupBoxPreciseProductsDataInterpolation->setHidden(false);
     ui->stackedWidgetcomboBoxIonoSourceBrdc->setCurrentIndex(1);
     ui->stackedWidgetIonoSourceBrdc->setCurrentIndex(1);
@@ -1076,11 +1303,11 @@ void gLAB_GUI::on_radioButtonOrbitPrecise1file_clicked() {
     if(ui->comboBoxDcbSourcePPP->currentIndex()==0) {
         ui->stackedWidgetDcbSource->setCurrentIndex(1);
     }
-    if (ui->groupBoxP1P2correction->isChecked()==false || (ui->groupBoxP1P2correction->isChecked()==true && ui->comboBoxDcbSourcePPP->currentIndex()==0)) {
+    /*if (ui->groupBoxP1P2correction->isChecked()==false || (ui->groupBoxP1P2correction->isChecked()==true && ui->comboBoxDcbSourcePPP->currentIndex()==0)) {
         ui->checkBoxDiscardUnhealthy->setHidden(true);
-    }
+    }*/
 
-
+    ui->groupBoxNavMessageTypes->setHidden(true);
 }
 
 void gLAB_GUI::on_radioButtonOrbitPrecise2files_clicked() {
@@ -1089,6 +1316,7 @@ void gLAB_GUI::on_radioButtonOrbitPrecise2files_clicked() {
     ui->radioButtonOrbitPrecise2files->setChecked(true);
     ui->radioButtonOrbitBrdc->setChecked(false);
     ui->radioButtonOrbitPrecise1file->setChecked(false);
+    ui->frameAddDelRinexNav->setHidden(true);
     ui->groupBoxPreciseProductsDataInterpolation->setHidden(false);
     ui->stackedWidgetcomboBoxIonoSourceBrdc->setCurrentIndex(1);
     ui->stackedWidgetIonoSourceBrdc->setCurrentIndex(1);
@@ -1096,9 +1324,11 @@ void gLAB_GUI::on_radioButtonOrbitPrecise2files_clicked() {
     if(ui->comboBoxDcbSourcePPP->currentIndex()==0) {
         ui->stackedWidgetDcbSource->setCurrentIndex(1);
     }
-    if (ui->groupBoxP1P2correction->isChecked()==false || (ui->groupBoxP1P2correction->isChecked()==true && ui->comboBoxDcbSourcePPP->currentIndex()==0)) {
+    /*if (ui->groupBoxP1P2correction->isChecked()==false || (ui->groupBoxP1P2correction->isChecked()==true && ui->comboBoxDcbSourcePPP->currentIndex()==0)) {
         ui->checkBoxDiscardUnhealthy->setHidden(true);
-    }
+    }*/
+
+    ui->groupBoxNavMessageTypes->setHidden(true);
 }
 
 void gLAB_GUI::on_radioButtonGPSReceiverTypeFile_clicked() {
@@ -1124,6 +1354,7 @@ void gLAB_GUI::labelInputRinexObsFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open RINEX Observation File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1148,30 +1379,31 @@ void gLAB_GUI::labelInputRinexObsFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditRinexObs->text() == "") {
-            messageBox.warning(0, "Error","RINEX Observation file is empty\n");
+            messageBox.warning(nullptr, "Error","RINEX Observation file is empty\n");
         } else if  (this->fileExists(ui->lineEditRinexObs->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditRinexObs->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexObs->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditRinexObs->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexObs->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
     }
 }
 
-void gLAB_GUI::checkBoxInputANTEXFileMenu(const QPoint& pos) { // this is a slot
+void gLAB_GUI::checkBoxInputSatANTEXFileMenu(const QPoint& pos) { // this is a slot
 
     // for most widgets
-    QPoint globalPos = ui->checkBoxAntex->mapToGlobal(pos);
+    QPoint globalPos = ui->checkBoxSatAntex->mapToGlobal(pos);
     // for QAbstractScrollArea and derived classes you would use:
     // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open ANTEX File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1184,43 +1416,44 @@ void gLAB_GUI::checkBoxInputANTEXFileMenu(const QPoint& pos) { // this is a slot
         // Based on the OS open the text editor
         #ifdef Q_OS_LINUX
             program = QString("gedit");
-            arguments << ui->lineEditAntex->text();
+            arguments << ui->lineEditSatAntex->text();
         #elif defined(Q_OS_WIN32)
             QString programFilesPath(getenv("PROGRAMFILES"));
             program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
-            arguments << ui->lineEditAntex->text();
+            arguments << ui->lineEditSatAntex->text();
         #elif defined(Q_OS_MAC)
             program = QString("open");
-            arguments << "-t" << ui->lineEditAntex->text();
+            arguments << "-t" << ui->lineEditSatAntex->text();
         #endif
 
         // Execute the program
-        if (ui->lineEditAntex->text() == "") {
-            messageBox.warning(0, "Error","ANTEX file is empty\n");
-        } else if (this->fileExists(ui->lineEditAntex->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditAntex->text() + "' does not exist.\n");
+        if (ui->lineEditSatAntex->text() == "") {
+            messageBox.warning(nullptr, "Error","ANTEX file is empty\n");
+        } else if (this->fileExists(ui->lineEditSatAntex->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditSatAntex->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditAntex->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditSatAntex->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
     }
 }
 
-void gLAB_GUI::labelInputRinexNavFileMenu(const QPoint& pos) { // this is a slot
+void gLAB_GUI::checkBoxInputRecANTEXFileMenu(const QPoint& pos) { // this is a slot
 
     // for most widgets
-    QPoint globalPos = ui->labelInputRinexNavFile->mapToGlobal(pos);
+    QPoint globalPos = ui->checkBoxRecAntex->mapToGlobal(pos);
     // for QAbstractScrollArea and derived classes you would use:
     // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
 
     QMenu myMenu;
     QMessageBox messageBox;
-    myMenu.addAction("Open RINEX Navigation File");
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open Receiver ANTEX File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
     if (selectedItem)
@@ -1232,27 +1465,364 @@ void gLAB_GUI::labelInputRinexNavFileMenu(const QPoint& pos) { // this is a slot
         // Based on the OS open the text editor
         #ifdef Q_OS_LINUX
             program = QString("gedit");
-            arguments << ui->lineEditRinexNav->text();
+            arguments << ui->lineEditRecAntex->text();
         #elif defined(Q_OS_WIN32)
             QString programFilesPath(getenv("PROGRAMFILES"));
             program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
-            arguments << ui->lineEditRinexNav->text();
+            arguments << ui->lineEditRecAntex->text();
         #elif defined(Q_OS_MAC)
             program = QString("open");
-            arguments << "-t" << ui->lineEditRinexNav->text();
+            arguments << "-t" << ui->lineEditRecAntex->text();
         #endif
 
         // Execute the program
-        if (ui->lineEditRinexNav->text() == "") {
-            messageBox.warning(0, "Error","RINEX Navigation file is empty\n");
-        } else if (this->fileExists(ui->lineEditRinexNav->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditRinexNav->text() + "' does not exist.\n");
+        if (ui->lineEditRecAntex->text() == "") {
+            messageBox.warning(nullptr, "Error","Receiver ANTEX file is empty\n");
+        } else if (this->fileExists(ui->lineEditRecAntex->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRecAntex->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditRinexNav->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRecAntex->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+
+void gLAB_GUI::labelInputRinexNavFile1Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->labelInputRinexNavFile1->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open RINEX Navigation File 1");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNav1->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNav1->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNav1->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNav1->text() == "") {
+            messageBox.warning(nullptr, "Error","RINEX Navigation file 1 is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNav1->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav1->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav1->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+void gLAB_GUI::labelInputRinexNavFile2Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->labelInputRinexNavFile2->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open RINEX Navigation File 2");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNav2->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNav2->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNav2->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNav2->text() == "") {
+            messageBox.warning(nullptr, "Error","RINEX Navigation file 2 is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNav2->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav2->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav2->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+void gLAB_GUI::labelInputRinexNavFile3Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->labelInputRinexNavFile3->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open RINEX Navigation File 3");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNav3->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNav3->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNav3->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNav3->text() == "") {
+            messageBox.warning(nullptr, "Error","RINEX Navigation file 3 is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNav3->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav3->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav3->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+void gLAB_GUI::labelInputRinexNavFile4Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->labelInputRinexNavFile4->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open RINEX Navigation File 4");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNav4->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNav4->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNav4->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNav4->text() == "") {
+            messageBox.warning(nullptr, "Error","RINEX Navigation file 4 is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNav4->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav4->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav4->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+void gLAB_GUI::labelInputRinexNavFile5Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->labelInputRinexNavFile5->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open RINEX Navigation File 5");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNav5->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNav5->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNav5->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNav5->text() == "") {
+            messageBox.warning(nullptr, "Error","RINEX Navigation file 5 is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNav5->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav5->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav5->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+void gLAB_GUI::labelInputRinexNavFile6Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->labelInputRinexNavFile6->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open RINEX Navigation File 6");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNav6->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNav6->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNav6->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNav6->text() == "") {
+            messageBox.warning(nullptr, "Error","RINEX Navigation file 6 is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNav6->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav6->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav6->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+void gLAB_GUI::labelInputRinexNavFile7Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->labelInputRinexNavFile7->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open RINEX Navigation File 7");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNav7->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNav7->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNav7->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNav7->text() == "") {
+            messageBox.warning(nullptr, "Error","RINEX Navigation file 7 is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNav7->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav7->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNav7->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1268,6 +1838,7 @@ void gLAB_GUI::labelInputSP3OrbitsClocksFileMenu(const QPoint& pos) { // this is
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SP3 File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1292,15 +1863,15 @@ void gLAB_GUI::labelInputSP3OrbitsClocksFileMenu(const QPoint& pos) { // this is
 
         // Execute the program
         if (ui->lineEditPrecise1File->text() == "") {
-            messageBox.warning(0, "Error","SP3 file is empty\n");
+            messageBox.warning(nullptr, "Error","SP3 file is empty\n");
         } else if (this->fileExists(ui->lineEditPrecise1File->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPrecise1File->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPrecise1File->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPrecise1File->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPrecise1File->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1316,6 +1887,7 @@ void gLAB_GUI::labelInputSP3OrbitsFileMenu(const QPoint& pos) { // this is a slo
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SP3 File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1340,15 +1912,15 @@ void gLAB_GUI::labelInputSP3OrbitsFileMenu(const QPoint& pos) { // this is a slo
 
         // Execute the program
         if (ui->lineEditPrecise2Files->text() == "") {
-            messageBox.warning(0, "Error","SP3 file is empty\n");
+            messageBox.warning(nullptr, "Error","SP3 file is empty\n");
         } else if (this->fileExists(ui->lineEditPrecise2Files->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPrecise2Files->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPrecise2Files->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPrecise2Files->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPrecise2Files->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1364,6 +1936,7 @@ void gLAB_GUI::labelInputClocksFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Clock File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1388,15 +1961,211 @@ void gLAB_GUI::labelInputClocksFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditPreciseClk->text() == "") {
-            messageBox.warning(0, "Error","Clock file is empty\n");
+            messageBox.warning(nullptr, "Error","Clock file is empty\n");
         } else if (this->fileExists(ui->lineEditPreciseClk->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditPreciseClk->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPreciseClk->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditPreciseClk->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditPreciseClk->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+
+void gLAB_GUI::checkBoxRinexNavFileGLO1Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->checkBoxRinexNavFileGLO1->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open GLONASS RINEX Navigation File");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNavFileGLO1->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNavFileGLO1->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNavFileGLO1->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNavFileGLO1->text() == "") {
+            messageBox.warning(nullptr, "Error","GLONASS RINEX Navigation File is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNavFileGLO1->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNavFileGLO1->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNavFileGLO1->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+
+void gLAB_GUI::checkBoxRinexNavFileHealth1Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->checkBoxRinexNavFileHealth1->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open RINEX Navigation File for Health Flags");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNavFileHealth1->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNavFileHealth1->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNavFileHealth1->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNavFileHealth1->text() == "") {
+            messageBox.warning(nullptr, "Error","RINEX Navigation File for Health Flags is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNavFileHealth1->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNavFileHealth1->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNavFileHealth1->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+
+void gLAB_GUI::checkBoxRinexNavFileGLO2Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->checkBoxRinexNavFileGLO2->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open GLONASS RINEX Navigation File");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNavFileGLO2->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNavFileGLO2->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNavFileGLO2->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNavFileGLO2->text() == "") {
+            messageBox.warning(nullptr, "Error","GLONASS RINEX Navigation File is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNavFileGLO2->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNavFileGLO2->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNavFileGLO2->text() + "' could not be opened with default text editor.\n");
+                }
+            }
+        }
+    }
+}
+
+void gLAB_GUI::checkBoxRinexNavFileHealth2Menu(const QPoint& pos) { // this is a slot
+
+    // for most widgets
+    QPoint globalPos = ui->checkBoxRinexNavFileHealth1->mapToGlobal(pos);
+    // for QAbstractScrollArea and derived classes you would use:
+    // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
+
+    QMenu myMenu;
+    QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
+    myMenu.addAction("Open RINEX Navigation File for Health Flags");
+
+    QAction* selectedItem = myMenu.exec(globalPos);
+    if (selectedItem)
+    {
+        QProcess *processShow = new QProcess(this);
+        QString program;
+        QStringList arguments;
+
+        // Based on the OS open the text editor
+        #ifdef Q_OS_LINUX
+            program = QString("gedit");
+            arguments << ui->lineEditRinexNavFileHealth2->text();
+        #elif defined(Q_OS_WIN32)
+            QString programFilesPath(getenv("PROGRAMFILES"));
+            program = programFilesPath + QString("\\Windows NT\\Accessories\\wordpad.exe");
+            arguments << ui->lineEditRinexNavFileHealth2->text();
+        #elif defined(Q_OS_MAC)
+            program = QString("open");
+            arguments << "-t" << ui->lineEditRinexNavFileHealth2->text();
+        #endif
+
+        // Execute the program
+        if (ui->lineEditRinexNavFileHealth2->text() == "") {
+            messageBox.warning(nullptr, "Error","RINEX Navigation File for Health Flags is empty\n");
+        } else if (this->fileExists(ui->lineEditRinexNavFileHealth2->text())==false) {
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNavFileHealth2->text() + "' does not exist.\n");
+        } else {
+            processShow->start(program, arguments);
+            sleep(100);
+            if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
+                if (processShow->exitCode()!=0) {
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditRinexNavFileHealth2->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1412,6 +2181,7 @@ void gLAB_GUI::labelInputSINEXFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SINEX File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1436,15 +2206,15 @@ void gLAB_GUI::labelInputSINEXFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditSinex->text() == "") {
-            messageBox.warning(0, "Error","SINEX file is empty\n");
+            messageBox.warning(nullptr, "Error","SINEX file is empty\n");
         } else if (this->fileExists(ui->lineEditSinex->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditSinex->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditSinex->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditSinex->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditSinex->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1454,12 +2224,13 @@ void gLAB_GUI::labelInputSINEXFileMenu(const QPoint& pos) { // this is a slot
 void gLAB_GUI::labelInputSBASFileMenu(const QPoint& pos) { // this is a slot
 
     // for most widgets
-    QPoint globalPos = ui->labelInputSBASFile->mapToGlobal(pos);
+    QPoint globalPos = ui->comboBoxSbasInput->mapToGlobal(pos);
     // for QAbstractScrollArea and derived classes you would use:
     // QPoint globalPos = myWidget->viewport()->mapToGlobal(pos);
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SBAS File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1484,15 +2255,15 @@ void gLAB_GUI::labelInputSBASFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditSbas->text() == "") {
-            messageBox.warning(0, "Error","SBAS file is empty\n");
+            messageBox.warning(nullptr, "Error","SBAS file is empty\n");
         } else if (this->fileExists(ui->lineEditSbas->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditSbas->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditSbas->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditSbas->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditSbas->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1508,6 +2279,7 @@ void gLAB_GUI::comboBoxRefStationFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     QString file;
     switch (ui->comboBoxRefStation->currentIndex()) {
     case 0:
@@ -1535,6 +2307,7 @@ void gLAB_GUI::comboBoxRefStationFileMenu(const QPoint& pos) { // this is a slot
     if (selectedItem)
     {
         QMessageBox messageBox;
+        messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
         QMessageBox::StandardButton reply;
 
         //If file is a binary file
@@ -1571,15 +2344,15 @@ void gLAB_GUI::comboBoxRefStationFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (file == "") {
-            messageBox.warning(0, "Error","DGNSS file is empty\n");
+            messageBox.warning(nullptr, "Error","DGNSS file is empty\n");
         } else if (this->fileExists(file)==false) {
-            messageBox.critical(0, "Errors found", "File '" + file + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + file + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + file + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + file + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1595,6 +2368,7 @@ void gLAB_GUI::labelInputRinexNavIonoFileMenu(const QPoint& pos) { // this is a 
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open RINEX Navigation File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1619,15 +2393,15 @@ void gLAB_GUI::labelInputRinexNavIonoFileMenu(const QPoint& pos) { // this is a 
 
         // Execute the program
         if (ui->lineEditIonoSourceRinexNav->text() == "") {
-            messageBox.warning(0, "Error","RINEX Navigation file is empty\n");
+            messageBox.warning(nullptr, "Error","RINEX Navigation file is empty\n");
         } else if (this->fileExists(ui->lineEditIonoSourceRinexNav->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditIonoSourceRinexNav->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditIonoSourceRinexNav->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditIonoSourceRinexNav->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditIonoSourceRinexNav->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1643,6 +2417,7 @@ void gLAB_GUI::labelInputIonexIonoFileMenu(const QPoint& pos) { // this is a slo
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open IONEX File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1667,15 +2442,15 @@ void gLAB_GUI::labelInputIonexIonoFileMenu(const QPoint& pos) { // this is a slo
 
         // Execute the program
         if (ui->lineEditIonoSourceIonex->text() == "") {
-            messageBox.warning(0, "Error","IONEX file is empty\n");
+            messageBox.warning(nullptr, "Error","IONEX file is empty\n");
         } else if (this->fileExists(ui->lineEditIonoSourceIonex->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditIonoSourceIonex->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditIonoSourceIonex->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditIonoSourceIonex->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditIonoSourceIonex->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1691,6 +2466,7 @@ void gLAB_GUI::labelInputSbasIonoFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open SBAS File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1715,15 +2491,15 @@ void gLAB_GUI::labelInputSbasIonoFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditIonoSourceSbasSpecify->text() == "") {
-            messageBox.warning(0, "Error","SBAS file is empty\n");
+            messageBox.warning(nullptr, "Error","SBAS file is empty\n");
         } else if (this->fileExists(ui->lineEditIonoSourceSbasSpecify->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditIonoSourceSbasSpecify->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditIonoSourceSbasSpecify->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditIonoSourceSbasSpecify->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditIonoSourceSbasSpecify->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1739,6 +2515,7 @@ void gLAB_GUI::labelInputDCBP1C1FileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open P1-C1 DCB File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1763,15 +2540,15 @@ void gLAB_GUI::labelInputDCBP1C1FileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditDcbFile->text() == "") {
-            messageBox.warning(0, "Error","P1-C1 DCB file is empty\n");
+            messageBox.warning(nullptr, "Error","P1-C1 DCB file is empty\n");
         } else if (this->fileExists(ui->lineEditDcbFile->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditDcbFile->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditDcbFile->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditDcbFile->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditDcbFile->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1787,6 +2564,7 @@ void gLAB_GUI::labelInputGPSRecFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open GPS Receiver Types File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1811,15 +2589,15 @@ void gLAB_GUI::labelInputGPSRecFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditGPSRecType->text() == "") {
-            messageBox.warning(0, "Error","GPS Receiver Types file is empty\n");
+            messageBox.warning(nullptr, "Error","GPS Receiver Types file is empty\n");
         } else if (this->fileExists(ui->lineEditGPSRecType->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditGPSRecType->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditGPSRecType->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditGPSRecType->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditGPSRecType->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1835,6 +2613,7 @@ void gLAB_GUI::labelInputRinexNavDCBFileMenu(const QPoint& pos) { // this is a s
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open RINEX Navigation File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1859,15 +2638,15 @@ void gLAB_GUI::labelInputRinexNavDCBFileMenu(const QPoint& pos) { // this is a s
 
         // Execute the program
         if (ui->lineEditDcbSourceRinexNav->text() == "") {
-            messageBox.warning(0, "Error","RINEX Navigation file is empty\n");
+            messageBox.warning(nullptr, "Error","RINEX Navigation file is empty\n");
         } else if (this->fileExists(ui->lineEditDcbSourceRinexNav->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditDcbSourceRinexNav->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditDcbSourceRinexNav->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditDcbSourceRinexNav->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditDcbSourceRinexNav->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1883,6 +2662,7 @@ void gLAB_GUI::labelInputDCBP1P2FileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open P1-P2 DCB File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1907,15 +2687,15 @@ void gLAB_GUI::labelInputDCBP1P2FileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditDcbSourceDcb->text() == "") {
-            messageBox.warning(0, "Error","P1-P2 DCB file is empty\n");
+            messageBox.warning(nullptr, "Error","P1-P2 DCB file is empty\n");
         } else if (this->fileExists(ui->lineEditDcbSourceDcb->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditDcbSourceDcb->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditDcbSourceDcb->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditDcbSourceDcb->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditDcbSourceDcb->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1931,6 +2711,7 @@ void gLAB_GUI::labelInputIonexDCBFileMenu(const QPoint& pos) { // this is a slot
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open IONEX File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -1955,15 +2736,15 @@ void gLAB_GUI::labelInputIonexDCBFileMenu(const QPoint& pos) { // this is a slot
 
         // Execute the program
         if (ui->lineEditDcbSourceIonex->text() == "") {
-            messageBox.warning(0, "Error","IONEX file is empty\n");
+            messageBox.warning(nullptr, "Error","IONEX file is empty\n");
         } else if (this->fileExists(ui->lineEditDcbSourceIonex->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditDcbSourceIonex->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditDcbSourceIonex->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditDcbSourceIonex->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditDcbSourceIonex->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -1979,6 +2760,7 @@ void gLAB_GUI::labelInputUserAddedErrorFileMenu(const QPoint& pos) { // this is 
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open User Added Error Text File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -2003,15 +2785,15 @@ void gLAB_GUI::labelInputUserAddedErrorFileMenu(const QPoint& pos) { // this is 
 
         // Execute the program
         if (ui->lineEditUserAddedError->text() == "") {
-            messageBox.warning(0, "Error","User Added Error Text file is empty\n");
+            messageBox.warning(nullptr, "Error","User Added Error Text file is empty\n");
         } else if (this->fileExists(ui->lineEditUserAddedError->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditUserAddedError->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditUserAddedError->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditUserAddedError->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditUserAddedError->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -2027,6 +2809,7 @@ void gLAB_GUI::labelInputSigmaMultipathFileMenu(const QPoint& pos) { // this is 
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Sigma Multipath Text File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -2051,15 +2834,15 @@ void gLAB_GUI::labelInputSigmaMultipathFileMenu(const QPoint& pos) { // this is 
 
         // Execute the program
         if (ui->lineEditSigmaMultipath->text() == "") {
-            messageBox.warning(0, "Error","Sigma Multipath Text file is empty\n");
+            messageBox.warning(nullptr, "Error","Sigma Multipath Text file is empty\n");
         } else if (this->fileExists(ui->lineEditSigmaMultipath->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditSigmaMultipath->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditSigmaMultipath->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditSigmaMultipath->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditSigmaMultipath->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -2075,6 +2858,7 @@ void gLAB_GUI::labelReferenceFileRtcmFileMenu(const QPoint& pos) { // this is a 
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Reference Position File for Rover");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -2099,15 +2883,15 @@ void gLAB_GUI::labelReferenceFileRtcmFileMenu(const QPoint& pos) { // this is a 
 
         // Execute the program
         if (ui->lineEditReferenceFileRtcm->text() == "") {
-            messageBox.warning(0, "Error","Reference Position File for Rover is empty\n");
+            messageBox.warning(nullptr, "Error","Reference Position File for Rover is empty\n");
         } else if (this->fileExists(ui->lineEditReferenceFileRtcm->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditReferenceFileRtcm->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditReferenceFileRtcm->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditReferenceFileRtcm->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditReferenceFileRtcm->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -2123,6 +2907,7 @@ void gLAB_GUI::labelReferenceFileSpecifyFileMenu(const QPoint& pos) { // this is
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Reference Position File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -2147,15 +2932,15 @@ void gLAB_GUI::labelReferenceFileSpecifyFileMenu(const QPoint& pos) { // this is
 
         // Execute the program
         if (ui->lineEditReferenceFileSpecify->text() == "") {
-            messageBox.warning(0, "Error","Reference Position file is empty\n");
+            messageBox.warning(nullptr, "Error","Reference Position file is empty\n");
         } else if (this->fileExists(ui->lineEditReferenceFileSpecify->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditReferenceFileSpecify->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditReferenceFileSpecify->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditReferenceFileSpecify->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditReferenceFileSpecify->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -2171,6 +2956,7 @@ void gLAB_GUI::checkBoxReferencePositionFileCalculateFileMenu(const QPoint& pos)
 
     QMenu myMenu;
     QMessageBox messageBox;
+    messageBox.setStyleSheet("QMessageBox { messagebox-text-interaction-flags: 5; background-color: rgb(239, 235, 231); }");
     myMenu.addAction("Open Reference Position File");
 
     QAction* selectedItem = myMenu.exec(globalPos);
@@ -2195,15 +2981,15 @@ void gLAB_GUI::checkBoxReferencePositionFileCalculateFileMenu(const QPoint& pos)
 
         // Execute the program
         if (ui->lineEditReferencePositionFileCalculate->text() == "") {
-            messageBox.warning(0, "Error","Reference Position file is empty\n");
+            messageBox.warning(nullptr, "Error","Reference Position file is empty\n");
         } else if (this->fileExists(ui->lineEditReferencePositionFileCalculate->text())==false) {
-            messageBox.critical(0, "Errors found", "File '" + ui->lineEditReferencePositionFileCalculate->text() + "' does not exist.\n");
+            messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditReferencePositionFileCalculate->text() + "' does not exist.\n");
         } else {
             processShow->start(program, arguments);
             sleep(100);
             if (processShow->state()==QProcess::NotRunning||processShow->atEnd()==true) {
                 if (processShow->exitCode()!=0) {
-                    messageBox.critical(0, "Errors found", "File '" + ui->lineEditReferencePositionFileCalculate->text() + "' could not be opened with default text editor.\n");
+                    messageBox.critical(nullptr, "Errors found", "File '" + ui->lineEditReferencePositionFileCalculate->text() + "' could not be opened with default text editor.\n");
                 }
             }
         }
@@ -2215,13 +3001,14 @@ void gLAB_GUI::checkBoxReferencePositionFileCalculateFileMenu(const QPoint& pos)
 // Function to get the INPUT options and errors
 void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QString *saveString,QStringList *runString) {
     QString RtcmNavMode;
-    // Header of the Input section    
+    QStringList NavPath;
+    // Header of the Input section
     *errorString = "";
     *warningString="";
     *saveString = "###################################################\n";
     *saveString += "#     INPUT section\n";
     *saveString += "###################################################\n\n";
-    // Rover (User)       
+    // Rover (User)
     QString rinexObs = ui->lineEditRinexObs->text();
     if ( rinexObs == "" ) {
         *errorString += "INPUT: RINEX Observation file is a required input.\n";
@@ -2233,35 +3020,83 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
         *saveString += "-input:obs " + ui->lineEditRinexObs->text() + "\n";
         *runString << "-input:obs" << ui->lineEditRinexObs->text();
     }
-    if ( ui->checkBoxAntex->isChecked() == true ) {
-        QString antex = ui->lineEditAntex->text();
-        if ( antex == "" ) {
-            *errorString += "INPUT: ANTEX file is a required input if 'ANTEX File' is specified.\n";
-        } else if (this->fileExists(ui->lineEditAntex->text())==false) {
-            *errorString += "INPUT: ANTEX file does not exist.\n";
-        } else if (this->checknonASCIIcharacters(ui->lineEditAntex->text())==1) {
-            *errorString += "INPUT: ANTEX  file has non ASCII characters\n";
+    if ( ui->checkBoxSatAntex->isChecked() == true ) {
+        if ( ui->lineEditSatAntex->text() == "" ) {
+            *errorString += "INPUT: Satellite ANTEX file is a required input if 'ANTEX File' is specified.\n";
+        } else if (this->fileExists(ui->lineEditSatAntex->text())==false) {
+            *errorString += "INPUT: Satellite ANTEX file does not exist.\n";
+        } else if (this->checknonASCIIcharacters(ui->lineEditSatAntex->text())==1) {
+            *errorString += "INPUT: Satellite ANTEX  file has non ASCII characters\n";
         } else {
-            *saveString += "-input:ant " + ui->lineEditAntex->text() + "\n";
-            *runString << "-input:ant" << ui->lineEditAntex->text();
+            if (ui->checkBoxAntennaPhase->isChecked()==false && (ui->labelCurrentTemplate->text()=="SPP"||ui->labelCurrentTemplate->text()=="SBAS 1F"||ui->labelCurrentTemplate->text()=="SBAS DFMC"||ui->labelCurrentTemplate->text()=="DGNSS")){
+                *saveString += "-input:antsatblock " + ui->lineEditSatAntex->text() + "\n";
+                *runString << "-input:antsatblock" << ui->lineEditSatAntex->text();
+            } else {
+                *saveString += "-input:ant " + ui->lineEditSatAntex->text() + "\n";
+                *runString << "-input:ant" << ui->lineEditSatAntex->text();
+            }
+        }
+    }
+    if ( ui->checkBoxRecAntex->isChecked() == true ) {
+        if ( ui->lineEditRecAntex->text() == "" ) {
+            *errorString += "INPUT: Receiver ANTEX file is a required input if 'ANTEX File' is specified.\n";
+        } else if (this->fileExists(ui->lineEditRecAntex->text())==false) {
+            *errorString += "INPUT: Receiver ANTEX file does not exist.\n";
+        } else if (this->checknonASCIIcharacters(ui->lineEditRecAntex->text())==1) {
+            *errorString += "INPUT: Receiver ANTEX  file has non ASCII characters\n";
+        } else {
+            *saveString += "-input:antrec " + ui->lineEditRecAntex->text() + "\n";
+            *runString << "-input:antrec" << ui->lineEditRecAntex->text();
         }
     }
     if ( ui->radioButtonOrbitBrdc->isChecked() == true ) {
-        QString rinexNav = ui->lineEditRinexNav->text();
-        if ( rinexNav == "" ) {
-            *errorString += "INPUT: RINEX Broadcast navigation file is a required input if 'Broadcast' orbit and clock source is specified.\n";
-        } else if (this->fileExists(ui->lineEditRinexNav->text())==false) {
-            *errorString += "INPUT: RINEX Broadcast navigation file does not exist.\n";
-        } else if (this->checknonASCIIcharacters(ui->lineEditRinexNav->text())==1) {
-            *errorString += "INPUT: RINEX Broadcast navigation file has non ASCII characters\n";
-        } else {
-            *saveString += "-input:nav " + ui->lineEditRinexNav->text() + "\n";
-            *runString << "-input:nav" << ui->lineEditRinexNav->text();
+        int noFileCount=0,okFileCount=0,nRepNavFile=0;
+        QString repErrorBuff="",missBuff="";
+        int NavRepetitionIndex[7]={7,6,5,4,3,2,1};
+        NavPath.clear();
+        NavPath.push_back(ui->lineEditRinexNav1->text());
+        NavPath.push_back(ui->lineEditRinexNav2->text());
+        NavPath.push_back(ui->lineEditRinexNav3->text());
+        NavPath.push_back(ui->lineEditRinexNav4->text());
+        NavPath.push_back(ui->lineEditRinexNav5->text());
+        NavPath.push_back(ui->lineEditRinexNav6->text());
+        NavPath.push_back(ui->lineEditRinexNav7->text());
+        for (int i=0;i<7;i++){
+            QString nNAV=QString::number(i+1);
+            if ( NavPath[i] == "" ) {
+                missBuff += "INPUT: RINEX Broadcast navigation file " + nNAV + " is missing.\n";
+                noFileCount++;
+            } else if (this->fileExists(NavPath[i])==false) {
+                *errorString += "INPUT: RINEX Broadcast navigation file " + nNAV + " does not exist.\n";
+            } else if (this->checknonASCIIcharacters(NavPath[i])==1) {
+                *errorString += "INPUT: RINEX Broadcast navigation file " + nNAV + " has non ASCII characters\n";
+            } else {
+                for (int iNav=1;iNav<NavRepetitionIndex[i];iNav++){
+                    if ( NavPath[i]!="" && NavPath[i]==NavPath[i+iNav] ){
+                        QString nRepNav=QString::number(i+iNav+1);
+                        nRepNavFile++;
+                        repErrorBuff += (nRepNavFile==1? " file ":", file ") + nNAV + " is the same as file" + nRepNav;
+                    }
+                }
+                if (okFileCount==0) {
+                    *saveString += "-input:nav " + NavPath[i] + "\n";
+                    *runString << "-input:nav" << NavPath[i];
+                } else {
+                    *saveString += "-input:nav " + NavPath[i] + "\n";
+                    *runString << NavPath[i];
+                }
+                okFileCount++;
+            }
+        }
+        if (noFileCount>=7) {
+            *errorString += "INPUT: RINEX broadcast navigation file (none provided).\n";
+        }
+        if (nRepNavFile>0){
+            *errorString += "INPUT: RINEX Broadcast navigation files are Repeated:" + repErrorBuff + "\n";
         }
     }
     if ( ui->radioButtonOrbitPrecise1file->isChecked() == true ) {
-        QString sp3File = ui->lineEditPrecise1File->text();
-        if ( sp3File == "" ) {
+        if ( ui->lineEditPrecise1File->text() == "" ) {
             *errorString += "INPUT: SP3 file is a required input if 'Precise (1 file)' orbit and clock source is specified.\n";
         } else if (this->fileExists(ui->lineEditPrecise1File->text())==false) {
             *errorString += "INPUT: SP3 file does not exist.\n";
@@ -2271,10 +3106,33 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
             *saveString += "-input:sp3 " + ui->lineEditPrecise1File->text() + "\n";
             *runString << "-input:sp3" << ui->lineEditPrecise1File->text();
         }
+        if ( ui->checkBoxRinexNavFileGLO1->isHidden()==false && ui->checkBoxRinexNavFileGLO1->isChecked() ){
+            if ( ui->lineEditRinexNavFileGLO1->text() == "" ) {
+                *errorString += "INPUT: GLONASS RINEX navigation file is a required input in 'Precise (1 file)' if GLONASS is selected.\n";
+            } else if (this->fileExists(ui->lineEditRinexNavFileGLO1->text())==false) {
+                *errorString += "INPUT: GLONASS RINEX navigation file does not exist.\n";
+            } else if (this->checknonASCIIcharacters(ui->lineEditRinexNavFileGLO1->text())==1) {
+                *errorString += "INPUT: GLONASS RINEX navigation file has non ASCII characters\n";
+            } else {
+                *saveString += "-input:navglo " + ui->lineEditRinexNavFileGLO1->text() + "\n";
+                *runString << "-input:navglo" << ui->lineEditRinexNavFileGLO1->text();
+            }
+        }
+        if ( ui->checkBoxRinexNavFileHealth1->isHidden()==false && ui->checkBoxRinexNavFileHealth1->isChecked() ){
+            if ( ui->lineEditRinexNavFileHealth1->text() == "" ) {
+                *errorString += "INPUT: RINEX navigation File for Health flags is a required input in 'Precise (1 file)'.\n";
+            } else if (this->fileExists(ui->lineEditRinexNavFileHealth1->text())==false) {
+                *errorString += "INPUT: RINEX navigation File for Health flags does not exist.\n";
+            } else if (this->checknonASCIIcharacters(ui->lineEditRinexNavFileHealth1->text())==1) {
+                *errorString += "INPUT: RINEX navigation File for Health flags has non ASCII characters\n";
+            } else {
+                *saveString += "-input:navhealth " + ui->lineEditRinexNavFileHealth1->text() + "\n";
+                *runString << "-input:navhealth" << ui->lineEditRinexNavFileHealth1->text();
+            }
+        }
     }
     if ( ui->radioButtonOrbitPrecise2files->isChecked() == true ) {
-        QString orbFile = ui->lineEditPrecise2Files->text();
-        if ( orbFile == "" ) {
+        if ( ui->lineEditPrecise2Files->text() == "" ) {
             *errorString += "INPUT: SP3 orbit file is a required input if 'Precise (2 files)' orbit and clock source is specified.\n";
         } else if (this->fileExists(ui->lineEditPrecise2Files->text())==false) {
             *errorString += "INPUT: SP3 orbit file does not exist.\n";
@@ -2285,7 +3143,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
             *runString << "-input:orb" << ui->lineEditPrecise2Files->text();
         }
         QString clkFile = ui->lineEditPreciseClk->text();
-        if ( clkFile == "" ) {
+        if ( ui->lineEditPreciseClk->text() == "" ) {
             *errorString += "INPUT: RINEX clocks file is a required input if 'Precise (2 files)' orbit and clock source is specified.\n";
         } else if (this->fileExists(ui->lineEditPreciseClk->text())==false) {
             *errorString += "INPUT: RINEX clocks file does not exist.\n";
@@ -2295,11 +3153,34 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
             *saveString += "-input:clk " + ui->lineEditPreciseClk->text() + "\n";
             *runString << "-input:clk" << ui->lineEditPreciseClk->text();
         }
+        if ( ui->checkBoxRinexNavFileGLO2->isHidden()==false && ui->checkBoxRinexNavFileGLO2->isChecked() ){
+            if ( ui->lineEditRinexNavFileGLO2->text() == "" ) {
+                *errorString += "INPUT: GLONASS RINEX navigation file is a required input in 'Precise (1 file)' if GLONASS is selected.\n";
+            } else if (this->fileExists(ui->lineEditRinexNavFileGLO2->text())==false) {
+                *errorString += "INPUT: GLONASS RINEX navigation file does not exist.\n";
+            } else if (this->checknonASCIIcharacters(ui->lineEditRinexNavFileGLO2->text())==1) {
+                *errorString += "INPUT: GLONASS RINEX navigation file has non ASCII characters\n";
+            } else {
+                *saveString += "-input:navglo " + ui->lineEditRinexNavFileGLO2->text() + "\n";
+                *runString << "-input:navglo" << ui->lineEditRinexNavFileGLO2->text();
+            }
+        }
+        if ( ui->checkBoxRinexNavFileHealth2->isHidden()==false && ui->checkBoxRinexNavFileHealth2->isChecked() ){
+            if ( ui->lineEditRinexNavFileHealth2->text() == "" ) {
+                *errorString += "INPUT: RINEX navigation File for Health flags is a required input in 'Precise (1 file)'.\n";
+            } else if (this->fileExists(ui->lineEditRinexNavFileHealth2->text())==false) {
+                *errorString += "INPUT: RINEX navigation File for Health flags does not exist.\n";
+            } else if (this->checknonASCIIcharacters(ui->lineEditRinexNavFileHealth2->text())==1) {
+                *errorString += "INPUT: RINEX navigation File for Health flags has non ASCII characters\n";
+            } else {
+                *saveString += "-input:navhealth " + ui->lineEditRinexNavFileHealth2->text() + "\n";
+                *runString << "-input:navhealth" << ui->lineEditRinexNavFileHealth2->text();
+            }
+        }
     }
     // A Priori Receiver Position From
     if ( ui->radioButtonSinex->isChecked() == true ) {
-        QString snxFile = ui->lineEditSinex->text();
-        if ( snxFile == "" ) {
+        if ( ui->lineEditSinex->text() == "" ) {
             *errorString += "INPUT: SINEX file is a required input if 'SINEX' as 'A Priori Receiver Position From:' is specified.\n";
         } else if (this->fileExists(ui->lineEditSinex->text())==false) {
             *errorString += "INPUT: SINEX file does not exist.\n";
@@ -2353,31 +3234,20 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
     if ( ui->groupBoxIonoSource->isChecked() == true ) {
         if ( ui->radioButtonIonoSourceBrdc->isChecked() == true ) {
             if ( ( ui->comboBoxIonoSourceBrdc->currentIndex() == 1 && ui->stackedWidgetcomboBoxIonoSourceBrdc->currentIndex()==0) || ui->stackedWidgetcomboBoxIonoSourceBrdc->currentIndex()==1 ) {
-                QString klbFile = ui->lineEditIonoSourceRinexNav->text();
-                if ( klbFile == "" ) {
+                if ( ui->lineEditIonoSourceRinexNav->text() == "" ) {
                     *errorString += "INPUT: RINEX Broadcast navigation file is a required input if 'Broadcast (specify)' Ionosphere Source is specified.\n";
                 } else if (this->fileExists(ui->lineEditIonoSourceRinexNav->text())==false) {
                     *errorString += "INPUT: RINEX Broadcast navigation file for Ionosphere Source does not exist.\n";
                 } else if (this->checknonASCIIcharacters(ui->lineEditIonoSourceRinexNav->text())==1) {
-                    *errorString += "INPUT: RINEX Broadcast navigation filefor Ionosphere Source has non ASCII characters\n";
-                } else if (ui->comboBoxIonoCorrection->currentIndex()==0) {
-                    //Klobuchar Iono
+                    *errorString += "INPUT: RINEX Broadcast navigation file for Ionosphere Source has non ASCII characters\n";
+                } else {
                     *saveString += "-input:klb " + ui->lineEditIonoSourceRinexNav->text() + "\n";
                     *runString << "-input:klb" << ui->lineEditIonoSourceRinexNav->text();
-                } else if (ui->comboBoxIonoCorrection->currentIndex()==1) {
-                    //NeQuick Iono
-                    *saveString += "-input:neq " + ui->lineEditIonoSourceRinexNav->text() + "\n";
-                    *runString << "-input:neq" << ui->lineEditIonoSourceRinexNav->text();
-                } else  {
-                    //BeiDou Iono
-                    *saveString += "-input:bds " + ui->lineEditIonoSourceRinexNav->text() + "\n";
-                    *runString << "-input:bds" << ui->lineEditIonoSourceRinexNav->text();
                 }
             }
         }
         if ( ui->radioButtonIonoSourceIonex->isChecked() == true ) {
-            QString inxFile = ui->lineEditIonoSourceIonex->text();
-            if ( inxFile == "" ) {
+            if ( ui->lineEditIonoSourceIonex->text() == "" ) {
                 *errorString += "INPUT: IONEX file is a required input if 'IONEX' Ionosphere Source is specified.\n";
             } else if (this->fileExists(ui->lineEditIonoSourceIonex->text())==false) {
                 *errorString += "INPUT: IONEX file does not exist.\n";
@@ -2390,8 +3260,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
         }
         if ( ui->radioButtonIonoSourceSbas->isChecked() == true ) {
             if ( ui->stackedWidgetIonoSourceSbas->currentIndex() == 1 ) {
-                QString sbasionoFile = ui->lineEditIonoSourceSbasSpecify->text();
-                if ( sbasionoFile == "" ) {
+                if ( ui->lineEditIonoSourceSbasSpecify->text() == "" ) {
                     *errorString += "INPUT: SBAS file is a required input if 'SBAS' Ionosphere Source is specified.\n";
                 } else if (this->fileExists(ui->lineEditIonoSourceSbasSpecify->text())==false) {
                     *errorString += "INPUT: SBAS file for Ionosphere Source does not exist.\n";
@@ -2406,16 +3275,20 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
     }
     // SBAS
     if ( ui->groupBoxSbas->isChecked() == true ) {
-        QString sbasFile = ui->lineEditSbas->text();
-        if ( sbasFile == "" ) {
+        if ( ui->lineEditSbas->text() == "" ) {
             *errorString += "INPUT: SBAS file is a required input if 'SBAS' is specified.\n";
         } else if (this->fileExists(ui->lineEditSbas->text())==false) {
             *errorString += "INPUT: SBAS file does not exist.\n";
         } else if (this->checknonASCIIcharacters(ui->lineEditSbas->text())==1) {
             *errorString += "INPUT: SBAS file has non ASCII characters\n";
         } else {
-            *saveString += "-input:sbas " + ui->lineEditSbas->text() + "\n";
-            *runString << "-input:sbas" << ui->lineEditSbas->text();
+            if (ui->comboBoxSbasInput->currentIndex()==0){
+                *saveString += "-input:sbas1f " + ui->lineEditSbas->text() + "\n";
+                *runString << "-input:sbas1f" << ui->lineEditSbas->text();
+            } else {
+                *saveString += "-input:sbasdfmc " + ui->lineEditSbas->text() + "\n";
+                *runString << "-input:sbasdfmc" << ui->lineEditSbas->text();
+            }
         }
     }
     // DGNSS
@@ -2424,8 +3297,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
         QTime hour;
         switch ( ui->comboBoxRefStation->currentIndex() ) {
             case 0 : {
-                QString dgnssFile = ui->lineEditRefStaRinex->text();
-                if ( dgnssFile == "" ) {
+                if ( ui->lineEditRefStaRinex->text() == "" ) {
                     *errorString += "INPUT: RINEX Observation file is a required input if 'RINEX Observation File:' in Reference Station (DGPS) is specified.\n";
                 } else if (this->fileExists(ui->lineEditRefStaRinex->text())==false) {
                     *errorString += "INPUT: RINEX Observation file for DGNSS does not exist.\n";
@@ -2438,8 +3310,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
                 break;
             }
             case 1 : {
-                QString rtcmFile = ui->lineEditRefStaRtcmAuto->text();
-                if ( rtcmFile == "" ) {
+                if ( ui->lineEditRefStaRtcmAuto->text() == "" ) {
                     *errorString += "INPUT: RTCM file is a required input if 'RTCM Auto:' in Reference Station (DGPS) is specified.\n";
                 } else if (this->fileExists(ui->lineEditRefStaRtcmAuto->text())==false) {
                     *errorString += "INPUT: RTCM file does not exist.\n";
@@ -2461,8 +3332,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
                 break;
             }
             case 2 : {
-                QString rtcm2File = ui->lineEditRefStaRtcm2->text();
-                if ( rtcm2File == "" ) {
+                if ( ui->lineEditRefStaRtcm2->text() == "" ) {
                     *errorString += "INPUT: RTCM v2.x file is a required input if 'RTCM v2.x:' in Reference Station (DGPS) is specified.\n";
                 } else if (this->fileExists(ui->lineEditRefStaRtcm2->text())==false) {
                     *errorString += "INPUT: RTCM v2.x file does not exist.\n";
@@ -2484,8 +3354,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
                 break;
             }
             case 3 : {
-                QString rtcm3File = ui->lineEditRefStaRtcm3->text();
-                if ( rtcm3File == "" ) {
+                if ( ui->lineEditRefStaRtcm3->text() == "" ) {
                     *errorString += "INPUT: RTCM v3.x file is a required input if 'RTCM v3.x:' in Reference Station (DGPS) is specified.\n";
                 } else if (this->fileExists(ui->lineEditRefStaRtcm3->text())==false) {
                     *errorString += "INPUT: RTCM v3.x file does not exist.\n";
@@ -2509,9 +3378,8 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
     if ( ui->groupBoxAuxFiles->isChecked() == true ) {
         // P1-C1 Correction
         if ( ui->groupBoxP1C1correction->isChecked() == true ) {
-            QString dcbFile = ui->lineEditDcbFile->text();
-            if ( dcbFile == "" ) {
-                if ( ui->checkBoxP1C1correction->isChecked()==true && ui->comboBoxP1C1correction->currentIndex() == 1 ) {
+            if ( ui->lineEditDcbFile->text() == "" ) {
+                if ( ui->comboBoxDCBsfP1C1GPS->currentIndex() == 1 ) {
                     //Show error if P1-C1 is enabled and set to "strict". Otherwise P1-C1 DCBs will not be applied
                     *errorString += "INPUT: DCB file is a required input if 'P1-C1 Correction' is set to 'strict' in the MODELLING tab.\n";
                 }
@@ -2526,9 +3394,8 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
 
             if (ui->radioButtonGPSReceiverTypeFile->isChecked()==true ) {
                 //P1-C1 set to strict or we have selected a GPS Receiver type file
-                QString recFile = ui->lineEditGPSRecType->text();
-                if ( recFile == "" ) {
-                    if ( ui->checkBoxP1C1correction->isChecked()==true && ui->comboBoxP1C1correction->currentIndex() == 1) {
+                if ( ui->lineEditGPSRecType->text() == "" ) {
+                    if ( ui->comboBoxDCBsfP1C1GPS->currentIndex() == 1) {
                         *errorString += "INPUT: GPS Receiver Types file is a required input if 'GPS Receiver Type from File' is selected and 'P1-C1 correction' in the MODELLING tab is set to 'strict'.\n";
                     }
                 } else if (this->fileExists(ui->lineEditGPSRecType->text())==false) {
@@ -2544,18 +3411,16 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
 
         // P1-P2 Correction
         if ( ui->groupBoxP1P2correction->isChecked() == true && (ui->stackedWidgetComboBoxDcbSource->currentIndex()==0 && ui->comboBoxDcbSource->currentIndex()==0 ) ) {
-            QString dcbFile = ui->lineEditRinexNav->text();
-            if ( dcbFile == "" ) {
+            if ( ui->lineEditRinexNav1->text() == "" ) {
                 *errorString += "INPUT: RINEX Broadcast navigation file used as (P1 - P2) DCB source not found.\n";
             //Check if file does not exist will be already done in the navigation file check (as this uses the same file)
             } else {
-                *saveString += "-input:dcb " + ui->lineEditRinexNav->text() + "\n";
-                *runString << "-input:dcb" << ui->lineEditRinexNav->text();
+                *saveString += "-input:dcb " + ui->lineEditRinexNav1->text() + "\n";
+                *runString << "-input:dcb" << ui->lineEditRinexNav1->text();
             }
         }
         if ( ui->groupBoxP1P2correction->isChecked() == true && ( (ui->stackedWidgetComboBoxDcbSource->currentIndex()==0 && ui->comboBoxDcbSource->currentIndex()==1 ) || (ui->stackedWidgetComboBoxDcbSource->currentIndex()==1 && ui->comboBoxDcbSourcePPP->currentIndex()==0 ) ) ) {
-            QString dcbFile = ui->lineEditDcbSourceRinexNav->text();
-            if ( dcbFile == "" ) {
+            if ( ui->lineEditDcbSourceRinexNav->text() == "" ) {
                 *errorString += "INPUT: RINEX Broadcast navigation file is a required input if P1 - P2 Correction [In the Modelling Section] is set and 'Broadcast (specify)' DCB source is specified [In the Input Section].\n";
             } else if (this->fileExists(ui->lineEditDcbSourceRinexNav->text())==false) {
                 *errorString += "INPUT: RINEX Broadcast navigation file for (P1 - P2) DCB source does not exist.\n";
@@ -2567,8 +3432,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
             }
         }
          if ( ui->groupBoxP1P2correction->isChecked() == true && ( (ui->stackedWidgetComboBoxDcbSource->currentIndex()==0 && ui->comboBoxDcbSource->currentIndex()==2 ) || (ui->stackedWidgetComboBoxDcbSource->currentIndex()==1 && ui->comboBoxDcbSourcePPP->currentIndex()==1 ) )  ) {
-             QString dcbFile = ui->lineEditDcbSourceDcb->text();
-             if ( dcbFile == "" ) {
+             if ( ui->lineEditDcbSourceDcb->text() == "" ) {
                  *errorString += "INPUT: (P1 - P2) DCB file is a required input if P1 - P2 Correction [In the Modelling Section] is set and 'DCB File' is empty [In the Input Section - Auxiliary Files - P1 - P2 Correction].\n";
              } else if (this->fileExists(ui->lineEditDcbSourceDcb->text())==false) {
                  *errorString += "INPUT: (P1 - P2) DCB file does not exist.\n";
@@ -2580,8 +3444,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
              }
          }
          if ( ui->groupBoxP1P2correction->isChecked() == true && ( (ui->stackedWidgetComboBoxDcbSource->currentIndex()==0 && ui->comboBoxDcbSource->currentIndex()==3 ) || (ui->stackedWidgetComboBoxDcbSource->currentIndex()==1 && ui->comboBoxDcbSourcePPP->currentIndex()==2 ) )  ) {
-             QString dcbFile = ui->lineEditIonoSourceIonex->text();
-             if ( dcbFile == "" ) {
+             if ( ui->lineEditIonoSourceIonex->text() == "" ) {
                  *errorString += "INPUT: IONEX file used as (P1 - P2) DCB source not found.\n";
              //Check if file does not exist will be already done in the IONEX file check (as this uses the same file)
              } else {
@@ -2590,8 +3453,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
              }
          }
          if ( ui->groupBoxP1P2correction->isChecked() == true && ( (ui->stackedWidgetComboBoxDcbSource->currentIndex()==0 && ui->comboBoxDcbSource->currentIndex()==4 ) || (ui->stackedWidgetComboBoxDcbSource->currentIndex()==1 && ui->comboBoxDcbSourcePPP->currentIndex()==3 ) )  ) {
-             QString dcbFile = ui->lineEditDcbSourceIonex->text();
-             if ( dcbFile == "" ) {
+             if ( ui->lineEditDcbSourceIonex->text() == "" ) {
                  *errorString += "INPUT: (P1 - P2) IONEX file is a required input if P1 - P2 Correction [In the Modelling Section] is set and 'IONEX (specify)' is specified [In the Input Section].\n";
              } else if (this->fileExists(ui->lineEditDcbSourceIonex->text())==false) {
                  *errorString += "INPUT: IONEX (P1 - P2) DCB file does not exist.\n";
@@ -2605,8 +3467,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
 
          // User Defined SBAS Sigma Multipath
          if ( ui->groupBoxSbas->isChecked() == true && ui->groupBoxUserDefinedSbasSigmaMultipath->isChecked() == true ) {
-             QString sigmpathFile = ui->lineEditSigmaMultipath->text();
-             if ( sigmpathFile == "" ) {
+             if ( ui->lineEditSigmaMultipath->text() == "" ) {
                  *errorString += "INPUT: User Defined Sigma Multipath file for SBAS is a required input if 'User Defined SBAS Sigma Multipath' is set.\n";
              } else if (this->fileExists(ui->lineEditSigmaMultipath->text())==false) {
                  *errorString += "INPUT: User Defined Sigma Multipath file does not exist.\n";
@@ -2620,8 +3481,7 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
 
          // User Added Error
          if ( ui->groupBoxUserAddedError->isChecked() == true ) {
-             QString usererrorFile = ui->lineEditUserAddedError->text();
-             if ( usererrorFile == "" ) {
+             if ( ui->lineEditUserAddedError->text() == "" ) {
                  *errorString += "INPUT: User Added Error file is a required input if 'User Added Error' is set.\n";
              } else if (this->fileExists(ui->lineEditUserAddedError->text())==false) {
                  *errorString += "INPUT: User Added Error file does not exist.\n";
@@ -2635,6 +3495,6 @@ void gLAB_GUI::getInputOptions(QString *errorString, QString *warningString, QSt
                  *saveString += "-pre:usererrorafter";
                  *runString << "-pre:usererrorafter";
              }
-         }         
+         }
     }
 }

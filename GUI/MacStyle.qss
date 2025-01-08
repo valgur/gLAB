@@ -1,0 +1,28 @@
+QPushButton {
+    border-radius: 2px; padding: 3px; width: 70px;
+}
+QPushButton:enabled{
+    background-color:rgb(235,235,245); color:black;
+    border: 1px solid rgb(124,124,124);
+}
+QPushButton:disabled{
+    background-color:rgb(203,203,203); color:rgb(156,156,156);
+    border: 1px solid rgb(185,185,185);
+}
+QPushButton:checked {
+    background-color:rgb(173,216,230); color:black;
+    border: 1px solid rgb(124,124,124);
+}
+QLineEdit:enabled{
+    background-color:white; color:black;
+}
+QLineEdit:disabled{
+    background-color:rgb(236,236,236); color:rgb(176,176,176);
+}
+QGroupBox {
+    margin-top: 0px; padding-top: 7px;
+}
+QToolTip {
+    border: 1px solid black;
+    background-color: rgb(255,255,220);
+}

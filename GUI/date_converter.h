@@ -17,8 +17,10 @@
 #define GNSS_DATE_CONVERTER_H
 
 #include <QDialog>
+#include <QFile>
+#include <QMessageBox>
 #include <QCloseEvent>
-#include <QDebug>
+//#include <QDebug>
 
 
 extern int DateConverterWindow;
@@ -42,7 +44,7 @@ public:
     ~GNSS_Date_Converter();
 
 private slots:
-    void on_pushButtonDateConverterOk_clicked();
+    void on_pushButtonDateConverterClose_clicked();
     void closeEvent (QCloseEvent *event);
 
     double modulo (double a, double mod);

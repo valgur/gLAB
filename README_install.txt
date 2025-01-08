@@ -1,39 +1,42 @@
 Complete the following steps to compile the software 
 
 
-a) PREVIOUS: 
+PREVIOUS: 
 
-   The following packages are required: Python, gcc 
+a) For x86_64, all programs are precompiled, no package installation necessary.
 
-   These packages can be installed in UBUNTU as follows:
+   For ARMv7, ARMv8 or for compiling the core and running the plotting tool directly with python:
 
-   - Installing Python (this is necessary for gLAB GUI and for graph.py):
+   - Install "make" and "gcc" to compile the core
+
+     sudo apt-get install make gcc
+
+   - Install Python 3 packages to run the plotting tool with python:
+
+     sudo apt-get install python3-matplotlib python3-tk python3-numpy
+
+   - For SBAS maps and WIR maps, the following packages are also needed:
+
+     sudo apt-get install python3-mpltoolkits.basemap python-mpltoolkits.basemap-data
+
+
+     NOTE: for Python 2 (not supported anymore), the packages are the following
 
      sudo apt-get install python python-matplotlib python-tk python-mpltoolkits.basemap python-mpltoolkits.basemap-data python-numpy
-
-   - Additional packages for Python3 (in case user wants to execute graph.py in Python3):
-
-     sudo apt-get install python3-matplotlib python3-tk python3-mpltoolkits.basemap python-mpltoolkits.basemap-data python3-numpy
-
-   - Installing C compiler (gcc)
-
-     sudo apt-get install gcc
-
-   - (Optional) For running 32-bit gLAB's GUI in a 64 bit Linux, the following packages are necessary:
-
-     sudo dpkg --add-architecture i386
-     sudo apt-get install libc6:i386 libncurses5:i386 libstdc++6:i386 libgl1-mesa-glx:i386 libgl1-mesa-dri:i386 libxi6:i386 libfontconfig:i386 libxrender1:i386
-
-
-b) Compile the program by executing:
+b) For ARMv7 and ARMv8 (for x86_64 already compiled): compile the program by executing:
      
-      make
+      make -j2
+      make -f Makefile_multithread -j2
 
 c) Executing gLAB
 
    - Graphic user Interface
 
-     ./gLAB_GUI
+     ./gLAB_GUI (x86_64)
+
+     ./gLAB_GUI_ARMv7 (ARMv7)
+
+     ./gLAB_GUI_ARM64 (ARMv8 or aarch64)
 
 
    - Command line mode
@@ -43,4 +46,7 @@ c) Executing gLAB
 
    - Plotting module
 
-     ./graph.py
+     ./graph/graph (x86_64)
+
+     ./graph.py (ARMv7 and ARMv8)
+
